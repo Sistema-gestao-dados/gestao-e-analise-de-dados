@@ -1,0 +1,4 @@
+[install]
+# Proteção de 24h contra supply-chain: pula versões de pacote publicadas há
+# menos de um dia.
+minimumReleaseAge = 86400
