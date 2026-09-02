@@ -21,21 +21,45 @@
 // na coluna de tipo de viagem, o grupo inteiro é classificado como "TU";
 // caso contrário, "DIR".
 //
-// As demais colunas que já existem no cadastro de Viagens (Tipo Op.,
-// Movimento, Categoria) ficam em branco por enquanto — ainda não têm um
-// equivalente definido neste layout.
+// "Movimento" e "Categoria" vêm da mesma coluna de tipo de viagem:
+//   Viagem      -> Movimento: Comercial   | Categoria: Viagem
+//   Deslocamen  -> Movimento: Deslocamento| Categoria: Deslocamento
+//   Intra-jorn  -> Movimento: Intra       | Categoria: Deslocamento
+// (Categoria só tem 2 valores possíveis no cadastro — Intra-jornada entra
+// como Deslocamento porque não é viagem comercial. Se preferir diferente,
+// é só avisar.)
+//
+// "Tipo Op." (Dias Úteis/Sábado/Domingo) não existe neste layout — é
+// escolhido pelo usuário na tela antes de importar e aplicado a todas as
+// linhas do arquivo.
+//
+// "Versão" é o texto entre parênteses no NOME do arquivo, ex.:
+// "EASYBUS_ESCALA (MB22 757MU 120826V32) 10-08-2026 13-52-29.txt"
+// -> versão = "MB22 757MU 120826V32"
 
 import { fmtHora, tempoViagem } from "./txt-import";
 import type { ViagemParsed, ParseResult } from "./txt-import";
 
 function extrairVersaoDoNomeArquivo(nome: string): string | null {
-  const m = nome.match(/_V(\d+)_/i);
-  return m ? `V${m[1]}` : null;
+  const m = nome.match(/\(([^)]+)\)/);
+  return m ? m[1].trim() : null;
+}
+
+function mapMovimento(tipoViagemRaw: string): { movimento: string | null; categoria: string | null } {
+  const v = tipoViagemRaw.toLowerCase();
+  if (v.startsWith("viagem")) return { movimento: "Comercial", categoria: "Viagem" };
+  if (v.startsWith("desloc")) return { movimento: "Deslocamento", categoria: "Deslocamento" };
+  if (v.startsWith("intra")) return { movimento: "Intra", categoria: "Deslocamento" };
+  return { movimento: null, categoria: null };
 }
 
 type Bruto = ViagemParsed & { _grupo: string; _intraJorn: boolean };
 
-export function parseTxtEasyBus(content: string, arquivoNome = ""): ParseResult {
+export function parseTxtEasyBus(
+  content: string,
+  arquivoNome = "",
+  tipoOperacao: string | null = null,
+): ParseResult {
   const lines = content.split(/\r?\n/);
   const errors: { line: number; reason: string }[] = [];
   const versao_programacao = extrairVersaoDoNomeArquivo(arquivoNome);
@@ -63,18 +87,19 @@ export function parseTxtEasyBus(content: string, arquivoNome = ""): ParseResult 
       const sentido = sentidoRaw || null;
       const grupo = `${linha}|${servico ?? ""}|${turno ?? ""}`;
       const intraJorn = tipoViagemRaw.toLowerCase().startsWith("intra");
+      const { movimento, categoria } = mapMovimento(tipoViagemRaw);
 
       brutos.push({
         linha,
-        tipo_operacao: null,
+        tipo_operacao: tipoOperacao,
         versao_programacao,
         tipo_servico: null, // preenchido no passo 2, por grupo linha+serviço+turno
         servico,
         turno,
         origem,
         destino,
-        tipo_movimento: null,
-        categoria_movimento: null,
+        tipo_movimento: movimento,
+        categoria_movimento: categoria,
         sentido,
         partida,
         chegada,
