@@ -28,7 +28,7 @@ const TIPO_MOV: Record<string, string> = { "5": "Soltura", "10": "Comercial", "3
 const CATEGORIA: Record<string, string> = { "0": "Deslocamento", "1": "Viagem" };
 const SENTIDO: Record<string, string> = { I: "Ida", V: "Volta" };
 
-function fmtHora(raw: string | undefined | null): string | null {
+export function fmtHora(raw: string | undefined | null): string | null {
   if (!raw) return null;
   const s = String(raw).trim().replace(/\D/g, "");
   if (s.length < 3) return null;
@@ -40,7 +40,7 @@ function fmtHora(raw: string | undefined | null): string | null {
   return `${h}:${m}`;
 }
 
-function tempoViagem(partida: string | null, chegada: string | null): string | null {
+export function tempoViagem(partida: string | null, chegada: string | null): string | null {
   if (!partida || !chegada) return null;
   const [ph, pm] = partida.split(":").map(Number);
   const [ch, cm] = chegada.split(":").map(Number);

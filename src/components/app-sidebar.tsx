@@ -43,6 +43,7 @@ const groups: { label: string; items: Item[] }[] = [
       { title: "Versões Ativas", url: "/versoes-ativas", icon: ListChecks, perm: "viagens" },
       { title: "Importação CSV", url: "/importacao", icon: Upload, perm: "importacao" },
       { title: "Importação TXT GPS", url: "/importacao-txt", icon: FileUp, perm: "importacao_txt" },
+      { title: "Importação TXT EasyBus", url: "/importacao-txt-easybus", icon: FileUp, perm: "importacao_txt_easybus" },
       { title: "Histórico", url: "/historico", icon: History, perm: "historico" },
     ],
   },

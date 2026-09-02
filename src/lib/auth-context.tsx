@@ -119,6 +119,7 @@ export const MODULES: { key: string; label: string }[] = [
   { key: "viagens", label: "Viagens" },
   { key: "importacao", label: "Importação CSV" },
   { key: "importacao_txt", label: "Importação TXT GPS" },
+  { key: "importacao_txt_easybus", label: "Importação TXT EasyBus" },
   { key: "historico", label: "Histórico" },
   { key: "bi_cittati_conversor", label: "Conversor BI Cittati → TXT" },
   { key: "relatorio_viagens_conversor", label: "Conversor Relat. Viagens → TXT" },
