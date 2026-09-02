@@ -209,6 +209,7 @@ const totals = useMemo(() => {
   // Alerta: TU sem os dois turnos completos (erro de cadastro)
   const tuIncompletos = useMemo(() => detectTUIncompletos(units, filtered), [units, filtered]);
   const [showTU, setShowTU] = usePersistentState(`resumo.${mode}.showTU`, false);
+  const [showKm, setShowKm] = usePersistentState(`resumo.${mode}.showKm`, false);
 
   // Validação obrigatória da regra de Frota: soma por linha == veículos distintos
   const frotaValidacao = useMemo(() => validarConsistenciaFrota(units, viagensParaOrigem), [units, viagensParaOrigem]);
@@ -612,13 +613,39 @@ const totals = useMemo(() => {
       )}
 
       {applied && kmSemCadastro.length > 0 && (
-        <div className="w-full rounded-md border border-warning/40 bg-warning/10 px-3 py-2 flex items-start gap-2">
+        <button
+          type="button"
+          onClick={() => setShowKm(true)}
+          className="w-full text-left rounded-md border border-warning/40 bg-warning/10 px-3 py-2 flex items-start gap-2 hover:bg-warning/20 transition"
+        >
           <AlertTriangle className="h-4 w-4 text-warning shrink-0 mt-0.5" />
           <span className="text-xs">
-            <strong>{kmSemCadastro.reduce((s, t) => s + t.viagens, 0)}</strong> viagem(ns) em <strong>{kmSemCadastro.length}</strong> trecho(s) sem KM cadastrado foram contabilizadas com 0 km. Cadastre os trechos em Cadastro de KM para completar o total.
+            <strong>{kmSemCadastro.reduce((s, t) => s + t.viagens, 0)}</strong> viagem(ns) em <strong>{kmSemCadastro.length}</strong> trecho(s) sem KM cadastrado foram contabilizadas com 0 km — clique para ver. Cadastre os trechos em Cadastro de KM para completar o total.
           </span>
-        </div>
+        </button>
       )}
+
+      <Dialog open={showKm} onOpenChange={setShowKm}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Trechos sem KM cadastrado ({kmSemCadastro.length})</DialogTitle></DialogHeader>
+          <div className="max-h-[60vh] overflow-auto text-sm">
+            <Table>
+              <TableHeader><TableRow><TableHead>Linha</TableHead><TableHead>Origem</TableHead><TableHead>Destino</TableHead><TableHead className="text-right">Viagens</TableHead></TableRow></TableHeader>
+              <TableBody>
+                {kmSemCadastro.map((t, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="font-medium">{t.linha}</TableCell>
+                    <TableCell>{t.origem}</TableCell>
+                    <TableCell>{t.destino}</TableCell>
+                    <TableCell className="text-right">{t.viagens}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </DialogContent>
+      </Dialog>
+
 
       <Dialog open={showTU} onOpenChange={setShowTU}>
         <DialogContent>

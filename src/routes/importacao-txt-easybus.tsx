@@ -3,11 +3,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Upload, FileUp, CheckCircle2, AlertCircle, Loader2, ArrowRight } from "lucide-react";
 import { useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { parseTxtEasyBus } from "@/lib/txt-import-easybus";
 import { logAudit } from "@/lib/audit";
@@ -21,13 +22,15 @@ export const Route = createFileRoute("/importacao-txt-easybus")({
   component: ImportTxtEasyBusPage,
 });
 
-const DIAS_TIPO = ["Dias Úteis", "Sábado", "Domingo"] as const;
+const DIAS_TIPO_BASE = ["Dias Úteis", "Sábado", "Domingo"];
+const NOVO_SENTINEL = "__novo__";
 
 type FileReport = {
   name: string;
   rows: number;
   inserted: number;
   errors: { line: number; reason: string }[];
+
   status: "done" | "error";
 };
 
@@ -38,13 +41,43 @@ function ImportTxtEasyBusPage() {
   const [busy, setBusy] = useState(false);
   const [reports, setReports] = useState<FileReport[]>([]);
   const [diaTipo, setDiaTipo] = useState<string>("");
+  const [novoDiaTipo, setNovoDiaTipo] = useState<string>("");
+  const [criandoNovo, setCriandoNovo] = useState(false);
   const [marcarAtivo, setMarcarAtivo] = usePersistentState("importacaoEasyBus.marcarAtivo", true);
   const [novosDias, setNovosDias] = useState<DiaTipoNovo[]>([]);
   const [showWizard, setShowWizard] = useState(false);
 
+  // Dias tipo já cadastrados (base + qualquer um criado antes via este fluxo
+  // ou pela tela de Cadastro de Grupos).
+  const { data: diasCadastrados = DIAS_TIPO_BASE } = useQuery({
+    queryKey: ["dias-tipo-cadastrados"],
+    queryFn: async () => {
+      const { data } = await (supabase as any).from("parametro_multilinha").select("tipo_dia");
+      const existentes = new Set<string>(DIAS_TIPO_BASE);
+      for (const r of (data ?? []) as any[]) if (r.tipo_dia) existentes.add(r.tipo_dia);
+      const extras = Array.from(existentes).filter((d) => !DIAS_TIPO_BASE.includes(d)).sort();
+      return [...DIAS_TIPO_BASE, ...extras];
+    },
+  });
+
+  function onSelectDiaTipo(v: string) {
+    if (v === NOVO_SENTINEL) {
+      setCriandoNovo(true);
+      setDiaTipo("");
+      return;
+    }
+    setCriandoNovo(false);
+    setNovoDiaTipo("");
+    setDiaTipo(v);
+  }
+
+  const diaTipoEfetivo = criandoNovo ? novoDiaTipo.trim() : diaTipo;
+
   async function handleFiles(files: FileList) {
-    if (!diaTipo) {
-      toast.error("Escolha o dia tipo (Dias Úteis / Sábado / Domingo) antes de importar.");
+    if (!diaTipoEfetivo) {
+      toast.error(criandoNovo
+        ? "Digite o nome do novo dia tipo (ex.: Feriado 7 de Setembro)."
+        : "Escolha o dia tipo (Dias Úteis / Sábado / Domingo / outro cadastrado) antes de importar.");
       if (ref.current) ref.current.value = "";
       return;
     }
@@ -55,7 +88,7 @@ function ImportTxtEasyBusPage() {
     for (const file of Array.from(files)) {
       try {
         const text = await file.text();
-        const { rows, errors } = parseTxtEasyBus(text, file.name, diaTipo);
+        const { rows, errors } = parseTxtEasyBus(text, file.name, diaTipoEfetivo);
         const payload = rows.map((r) => ({ ...r, arquivo: file.name }));
         parsedAll.push(...rows.map((r) => ({ linha: r.linha, tipo_operacao: r.tipo_operacao })));
         for (const r of rows) if (r.versao_programacao) versoesImportadas.add(r.versao_programacao);
@@ -128,6 +161,7 @@ function ImportTxtEasyBusPage() {
     qc.invalidateQueries({ queryKey: ["importacoes"] });
     qc.invalidateQueries({ queryKey: ["projetos-ativos"] });
     qc.invalidateQueries({ queryKey: ["multi"] });
+    qc.invalidateQueries({ queryKey: ["dias-tipo-cadastrados"] });
     setBusy(false);
     if (ref.current) ref.current.value = "";
   }
@@ -162,17 +196,29 @@ function ImportTxtEasyBusPage() {
             <label className="text-xs font-medium text-muted-foreground">
               Dia tipo deste arquivo <span className="text-destructive">*</span>
             </label>
-            <Select value={diaTipo} onValueChange={setDiaTipo}>
+            <Select value={criandoNovo ? NOVO_SENTINEL : diaTipo} onValueChange={onSelectDiaTipo}>
               <SelectTrigger className="h-9">
-                <SelectValue placeholder="Escolha Dias Úteis / Sábado / Domingo" />
+                <SelectValue placeholder="Escolha um dia tipo cadastrado" />
               </SelectTrigger>
               <SelectContent>
-                {DIAS_TIPO.map((d) => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+                {diasCadastrados.map((d) => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+                <SelectItem value={NOVO_SENTINEL} className="text-primary">+ Criar novo dia tipo...</SelectItem>
               </SelectContent>
             </Select>
+            {criandoNovo && (
+              <Input
+                autoFocus
+                placeholder="Ex.: Feriado 7 de Setembro"
+                value={novoDiaTipo}
+                onChange={(e) => setNovoDiaTipo(e.target.value)}
+                className="h-9"
+              />
+            )}
             <p className="text-[11px] text-muted-foreground">
-              O layout do EasyBus não informa o dia tipo — escolha aqui e ele é aplicado a todas as
-              viagens deste arquivo.
+              O layout do EasyBus não informa o dia tipo — escolha aqui (ou crie um novo, ex.: um feriado
+              específico) e ele é aplicado a todas as viagens deste arquivo. Um dia tipo novo abre, ao
+              final da importação, a tela para você dizer de qual dia tipo ele deve herdar os grupos de
+              linha já cadastrados.
             </p>
           </div>
 
@@ -185,7 +231,7 @@ function ImportTxtEasyBusPage() {
             onChange={(e) => e.target.files?.length && handleFiles(e.target.files)}
           />
           <div className="flex items-center gap-2 flex-wrap">
-            <Button onClick={() => ref.current?.click()} disabled={busy || !diaTipo} className="w-full sm:w-auto">
+            <Button onClick={() => ref.current?.click()} disabled={busy || !diaTipoEfetivo} className="w-full sm:w-auto">
               {busy ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Processando...</> : <><Upload className="h-4 w-4 mr-2" />Selecionar TXT (múltiplos)</>}
             </Button>
             <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
@@ -202,7 +248,11 @@ function ImportTxtEasyBusPage() {
         </CardContent>
       </Card>
 
-      <DiaTipoMapper novos={novosDias} open={showWizard} onClose={() => { setShowWizard(false); setNovosDias([]); }} />
+      <DiaTipoMapper novos={novosDias} open={showWizard} onClose={() => {
+        setShowWizard(false);
+        setNovosDias([]);
+        qc.invalidateQueries({ queryKey: ["dias-tipo-cadastrados"] });
+      }} />
 
       {reports.length > 0 && (
         <div className="space-y-3">

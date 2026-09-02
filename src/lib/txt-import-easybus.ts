@@ -17,21 +17,30 @@
 // separar por espaços, que ficaria inconsistente nessas linhas.
 //
 // "Tipo Serv." (TU/DIR) não vem pronto no arquivo: é deduzido por grupo
-// linha+serviço+turno. Se QUALQUER viagem desse grupo tiver "Intra-jorn"
-// na coluna de tipo de viagem, o grupo inteiro é classificado como "TU";
-// caso contrário, "DIR".
+// linha+serviço+turno (o turno tal como veio no arquivo). Se QUALQUER
+// viagem desse grupo tiver "Intra-jorn" na coluna de tipo de viagem, o
+// grupo inteiro é classificado como "TU"; caso contrário, "DIR".
+//
+// Turno em grupos TU: o EasyBus só traz UM número de turno mesmo quando
+// há um intervalo de intra-jornada no meio (ex.: manhã / descanso / tarde).
+// Isso distorce o cálculo de jornada se tudo ficar como turno 1. Por isso,
+// dentro de um grupo TU, as viagens são ordenadas por horário de partida e
+// o número do turno é incrementado a cada "Intra-jorn" encontrado — ou
+// seja, tudo antes do intervalo fica turno 1, tudo depois vira turno 2
+// (e assim por diante, se houver mais de um intervalo).
+//
+// A própria viagem de "Intra-jorn" NÃO é gravada como viagem — ela não
+// representa um deslocamento real, só marca o intervalo de descanso do
+// motorista, então só serve para decidir a virada de turno acima.
 //
 // "Movimento" e "Categoria" vêm da mesma coluna de tipo de viagem:
 //   Viagem      -> Movimento: Comercial   | Categoria: Viagem
 //   Deslocamen  -> Movimento: Deslocamento| Categoria: Deslocamento
-//   Intra-jorn  -> Movimento: Intra       | Categoria: Deslocamento
-// (Categoria só tem 2 valores possíveis no cadastro — Intra-jornada entra
-// como Deslocamento porque não é viagem comercial. Se preferir diferente,
-// é só avisar.)
+// (Categoria só tem 2 valores possíveis no cadastro.)
 //
-// "Tipo Op." (Dias Úteis/Sábado/Domingo) não existe neste layout — é
-// escolhido pelo usuário na tela antes de importar e aplicado a todas as
-// linhas do arquivo.
+// "Tipo Op." (Dias Úteis/Sábado/Domingo, ou um dia tipo novo tipo feriado)
+// não existe neste layout — é escolhido pelo usuário na tela antes de
+// importar e aplicado a todas as linhas do arquivo.
 //
 // "Versão" é o texto entre parênteses no NOME do arquivo, ex.:
 // "EASYBUS_ESCALA (MB22 757MU 120826V32) 10-08-2026 13-52-29.txt"
@@ -49,8 +58,13 @@ function mapMovimento(tipoViagemRaw: string): { movimento: string | null; catego
   const v = tipoViagemRaw.toLowerCase();
   if (v.startsWith("viagem")) return { movimento: "Comercial", categoria: "Viagem" };
   if (v.startsWith("desloc")) return { movimento: "Deslocamento", categoria: "Deslocamento" };
-  if (v.startsWith("intra")) return { movimento: "Intra", categoria: "Deslocamento" };
   return { movimento: null, categoria: null };
+}
+
+function minutos(hhmm: string | null): number {
+  if (!hhmm) return 0;
+  const [h, m] = hhmm.split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
 }
 
 type Bruto = ViagemParsed & { _grupo: string; _intraJorn: boolean };
@@ -93,7 +107,7 @@ export function parseTxtEasyBus(
         linha,
         tipo_operacao: tipoOperacao,
         versao_programacao,
-        tipo_servico: null, // preenchido no passo 2, por grupo linha+serviço+turno
+        tipo_servico: null,
         servico,
         turno,
         origem,
@@ -112,15 +126,36 @@ export function parseTxtEasyBus(
     }
   }
 
-  // Passo 2: um grupo linha+serviço+turno é "TU" se QUALQUER viagem dele
-  // tiver "Intra-jorn" na coluna de tipo de viagem; senão é "DIR".
-  const gruposTU = new Set<string>();
-  for (const b of brutos) if (b._intraJorn) gruposTU.add(b._grupo);
+  // Agrupa por linha+serviço+turno (como veio no arquivo)
+  const porGrupo = new Map<string, Bruto[]>();
+  for (const b of brutos) {
+    const arr = porGrupo.get(b._grupo) ?? [];
+    arr.push(b);
+    porGrupo.set(b._grupo, arr);
+  }
 
-  const rows: ViagemParsed[] = brutos.map((b) => {
-    const { _grupo, _intraJorn, ...rest } = b;
-    return { ...rest, tipo_servico: gruposTU.has(_grupo) ? "TU" : "DIR" };
-  });
+  const rows: ViagemParsed[] = [];
+  for (const itens of porGrupo.values()) {
+    const isTU = itens.some((b) => b._intraJorn);
+
+    if (!isTU) {
+      for (const b of itens) {
+        const { _grupo, _intraJorn, ...rest } = b;
+        rows.push({ ...rest, tipo_servico: "DIR" });
+      }
+      continue;
+    }
+
+    // Grupo TU: ordena por horário e incrementa o turno a cada intervalo
+    // de intra-jornada. A viagem de intra-jornada em si não é gravada.
+    const ordenado = [...itens].sort((a, b) => minutos(a.partida) - minutos(b.partida));
+    let turnoAtual = Number(ordenado[0]?.turno) || 1;
+    for (const b of ordenado) {
+      if (b._intraJorn) { turnoAtual += 1; continue; }
+      const { _grupo, _intraJorn, ...rest } = b;
+      rows.push({ ...rest, tipo_servico: "TU", turno: String(turnoAtual) });
+    }
+  }
 
   return { rows, errors };
 }
