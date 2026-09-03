@@ -35,9 +35,13 @@ export function fmtHora(raw: string | undefined | null): string | null {
   const padded = s.padStart(4, "0").slice(0, 4);
   const h = padded.slice(0, 2);
   const m = padded.slice(2, 4);
-  const hi = Number(h), mi = Number(m);
-  if (isNaN(hi) || isNaN(mi) || hi > 23 || mi > 59) return null;
-  return `${h}:${m}`;
+  let hi = Number(h);
+  const mi = Number(m);
+  if (isNaN(hi) || isNaN(mi) || mi > 59 || hi > 47) return null;
+  // Notação comum em escalas de transporte: "24:XX" a "47:XX" representam
+  // horários depois da meia-noite (dia seguinte). Ex.: "24:24" = "00:24".
+  if (hi > 23) hi -= 24;
+  return `${String(hi).padStart(2, "0")}:${m}`;
 }
 
 export function tempoViagem(partida: string | null, chegada: string | null): string | null {
