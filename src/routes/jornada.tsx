@@ -103,6 +103,18 @@ function JornadaPage() {
     return all;
   }, [applied, filtered, linhas]);
 
+  const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
+  const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">("jornada.ordenarPor", "padrao");
+  const jornadasOrdenadas = useMemo(() => {
+    if (ordenarPor !== "unidade") return jornadas;
+    return [...jornadas].sort((a, b) => {
+      const ua = linhaMap.get(a.linha)?.unidade ?? "";
+      const ub = linhaMap.get(b.linha)?.unidade ?? "";
+      if (ua !== ub) return ua.localeCompare(ub, "pt-BR");
+      return a.linha.localeCompare(b.linha, "pt-BR");
+    });
+  }, [jornadas, ordenarPor, linhaMap]);
+
   const totais = useMemo(() => jornadaTotais(jornadas), [jornadas]);
 
   const listaModal = useMemo((): JornadaServico[] => {
@@ -132,7 +144,7 @@ function JornadaPage() {
 
   function exportXLSX() {
     const wb = XLSX.utils.book_new();
-    const rows = jornadas.map((j) => ({
+    const rows = jornadasOrdenadas.map((j) => ({
       Versao: j.versao,
       Linha: j.linha,
       Tipo: j.tipoServico,
@@ -181,7 +193,7 @@ function JornadaPage() {
       d.setTextColor(20);
     }
 
-    const bodyRows = jornadas.map((j) => [
+    const bodyRows = jornadasOrdenadas.map((j) => [
       j.linha, j.tipoServico, j.servico,
       j.turnos.map((t) => `T${t.turno} ${t.primeiraPartida}→${t.ultimaChegada}`).join(" · "),
       fmtDur(j.minutosTotal),
@@ -271,6 +283,13 @@ function JornadaPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Select value={ordenarPor} onValueChange={(v) => setOrdenarPor(v as any)}>
+            <SelectTrigger className="h-8 w-[170px] text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="padrao">Ordem padrão</SelectItem>
+              <SelectItem value="unidade">Ordenar por Unidade</SelectItem>
+            </SelectContent>
+          </Select>
           <Button variant="outline" size="sm" onClick={exportXLSX} disabled={!jornadas.length}>
             <FileSpreadsheet className="h-4 w-4 mr-1" /> Excel
           </Button>
@@ -298,7 +317,7 @@ function JornadaPage() {
             <tr><th>Linha</th><th>Tipo</th><th>Serviço</th><th>Turnos</th><th>Jornada</th><th>HE</th><th>Alerta</th></tr>
           </thead>
           <tbody>
-            {jornadas.map((j) => (
+            {jornadasOrdenadas.map((j) => (
               <tr key={`${j.vehicleKey}||${j.bucket}`}>
                 <td style={{ textAlign: "left", fontWeight: 600 }}>{j.linha}</td>
                 <td>{j.tipoServico}</td>

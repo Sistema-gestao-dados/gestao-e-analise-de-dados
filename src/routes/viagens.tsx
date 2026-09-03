@@ -3,6 +3,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
+import { fetchLinhas } from "@/lib/data";
 import { CrudTable, type ColumnDef } from "@/components/crud-table";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -29,7 +30,7 @@ const COLUMNS: ColumnDef[] = [
   { key: "turno", label: "Turno", width: "80px" },
   { key: "origem", label: "Origem" },
   { key: "destino", label: "Destino" },
-  { key: "tipo_movimento", label: "Movimento", type: "select", options: () => ["Soltura", "Comercial", "Recolha"] },
+  { key: "tipo_movimento", label: "Movimento", type: "select", options: () => ["Soltura", "Comercial", "Recolha", "Deslocamento", "Intra"] },
   { key: "categoria_movimento", label: "Categoria", type: "select", options: () => ["Deslocamento", "Viagem"] },
   { key: "sentido", label: "Sentido", type: "select", options: () => ["Ida", "Volta"], width: "90px" },
   { key: "partida", label: "Partida", width: "90px" },
@@ -65,6 +66,45 @@ function ViagensPage() {
   const [somenteAtivos, setSomenteAtivos] = usePersistentState("viagens.somenteAtivos", true);
   const ativosQ = useQuery({ queryKey: ["projetos-ativos"], queryFn: fetchProjetosAtivos });
   const ativos = ativosQ.data ?? [];
+  const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
+
+  // Valores distintos de Versão e Arquivo direto da tabela (não têm cadastro
+  // próprio, então precisam vir dos dados já importados).
+  const distintosQ = useQuery({
+    queryKey: ["viagens-distintos"],
+    queryFn: async () => {
+      const versoes = new Set<string>();
+      const arquivos = new Set<string>();
+      const pageSize = 1000;
+      let from = 0;
+      for (;;) {
+        const { data, error } = await (supabase as any)
+          .from("viagens")
+          .select("versao_programacao, arquivo")
+          .range(from, from + pageSize - 1);
+        if (error) throw error;
+        const chunk = (data ?? []) as { versao_programacao: string | null; arquivo: string | null }[];
+        for (const r of chunk) {
+          if (r.versao_programacao) versoes.add(r.versao_programacao);
+          if (r.arquivo) arquivos.add(r.arquivo);
+        }
+        if (chunk.length < pageSize) break;
+        from += pageSize;
+      }
+      return { versoes: Array.from(versoes).sort(), arquivos: Array.from(arquivos).sort() };
+    },
+  });
+
+  const filters = useMemo(() => [
+    { key: "linha", label: "Linha", options: () => (linhasQ.data ?? []).map((l) => l.linha).sort() },
+    { key: "tipo_operacao", label: "Tipo Op.", options: () => ["Dias Úteis", "Sábado", "Domingo"] },
+    { key: "tipo_servico", label: "Tipo Serv.", options: () => ["TU", "DIR"] },
+    { key: "versao_programacao", label: "Versão", options: () => distintosQ.data?.versoes ?? [] },
+    { key: "tipo_movimento", label: "Movimento", options: () => ["Soltura", "Comercial", "Recolha", "Deslocamento", "Intra"] },
+    { key: "categoria_movimento", label: "Categoria", options: () => ["Deslocamento", "Viagem"] },
+    { key: "sentido", label: "Sentido", options: () => ["Ida", "Volta"] },
+    { key: "arquivo", label: "Arquivo", options: () => distintosQ.data?.arquivos ?? [] },
+  ], [linhasQ.data, distintosQ.data]);
 
   // Chaves ativas: "linha||tipo_operacao" -> versao_programacao
   const ativosKey = useMemo(() => {
@@ -92,7 +132,7 @@ function ViagensPage() {
         pk="id"
         queryKey="viagens"
         columns={COLUMNS}
-        filters={[]}
+        filters={filters}
         clientFilter={clientFilter}
         initialPageSize={50}
         toolbarExtras={({ filteredRows }) => (

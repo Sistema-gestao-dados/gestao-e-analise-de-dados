@@ -307,6 +307,8 @@ export function ComparativoView() {
     proposta: basesAplicadas.proposta.filter((v) => viagemKmResult(v, kmMaps).fonte === "sem_cadastro").length,
   }), [basesAplicadas, kmMaps]);
 
+  const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">("comparativo.ordenarPor", "padrao");
+
   const merged = useMemo(() => {
     const map = new Map<string, { linha: string; order: number; a: AggRow | null; p: AggRow | null }>();
     for (const r of atualRows) {
@@ -318,6 +320,11 @@ export function ComparativoView() {
       else map.set(r.groupKey, { linha: r.groupLabel, order: r.groupOrder, a: null, p: r });
     }
     let arr = Array.from(map.values()).sort((a, b) => {
+      if (ordenarPor === "unidade") {
+        const ua = linhaMap.get(a.linha)?.unidade ?? "";
+        const ub = linhaMap.get(b.linha)?.unidade ?? "";
+        if (ua !== ub) return ua.localeCompare(ub, "pt-BR");
+      }
       if (a.order !== b.order) return a.order - b.order;
       return a.linha.localeCompare(b.linha);
     });
@@ -327,7 +334,7 @@ export function ComparativoView() {
       );
     }
     return arr;
-  }, [atualRows, propostaRows, onlyDiff]);
+  }, [atualRows, propostaRows, onlyDiff, ordenarPor, linhaMap]);
 
   const totals = useMemo(() => {
     const base = { a: {} as Record<string, number>, p: {} as Record<string, number> };
@@ -550,6 +557,13 @@ export function ComparativoView() {
           <Button variant="outline" size="sm" onClick={exportXLSX} disabled={!merged.length}>
             <FileSpreadsheet className="h-4 w-4 mr-1" /> Excel
           </Button>
+          <Select value={ordenarPor} onValueChange={(v) => setOrdenarPor(v as any)}>
+            <SelectTrigger className="h-8 w-[170px] text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="padrao">Ordem padrão</SelectItem>
+              <SelectItem value="unidade">Ordenar por Unidade</SelectItem>
+            </SelectContent>
+          </Select>
           <PdfPreviewDialog
             build={buildPDF}
             filename={`relatorio_comparativo_${new Date().toISOString().slice(0, 10)}.pdf`}

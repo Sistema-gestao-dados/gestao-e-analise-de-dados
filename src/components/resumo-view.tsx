@@ -190,6 +190,48 @@ export function ResumoView({ mode }: { mode: Mode }) {
     return aggregateByGroup(units, (u) => ({ key: u.versao, label: u.versao }));
   }, [applied, units, mode, S.groupBy, S.criterio, grupoMap, ordemMap, S.dia, filtered, viagensParaOrigem]);
 
+  // Unidade (cadastro de Linhas) predominante de cada linha de resumo (linha,
+  // grupo de linha ou versão), pra permitir ordenar o relatório por unidade.
+  const unidadePorGrupo = useMemo(() => {
+    const tally = new Map<string, Map<string, number>>();
+    for (const u of units) {
+      const linhaDom = dominantLinha(u, S.criterio);
+      const unidade = linhaMap.get(linhaDom)?.unidade;
+      if (!unidade) continue;
+      let key: string;
+      if (mode === "linha") {
+        key = linhaDom;
+      } else if (S.groupBy === "grupo") {
+        const td = S.dia !== "__all" ? S.dia : u.tipo_operacao;
+        key = grupoMap.get(`${linhaDom}|${td}`.toLowerCase()) ?? `(sem grupo) ${linhaDom}`;
+      } else {
+        key = u.versao;
+      }
+      const m = tally.get(key) ?? new Map<string, number>();
+      m.set(unidade, (m.get(unidade) ?? 0) + 1);
+      tally.set(key, m);
+    }
+    const out = new Map<string, string>();
+    for (const [key, m] of tally) {
+      let best: string | null = null, bestN = -1;
+      for (const [un, n] of m) if (n > bestN) { best = un; bestN = n; }
+      if (best) out.set(key, best);
+    }
+    return out;
+  }, [units, mode, S.groupBy, S.criterio, S.dia, grupoMap, linhaMap]);
+
+  const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">(`resumo.${mode}.ordenarPor`, "padrao");
+
+  const displayRows = useMemo(() => {
+    if (ordenarPor !== "unidade") return rows;
+    return [...rows].sort((a, b) => {
+      const ua = unidadePorGrupo.get(a.groupKey) ?? "";
+      const ub = unidadePorGrupo.get(b.groupKey) ?? "";
+      if (ua !== ub) return ua.localeCompare(ub, "pt-BR");
+      return a.groupLabel.localeCompare(b.groupLabel, "pt-BR");
+    });
+  }, [rows, ordenarPor, unidadePorGrupo]);
+
 
 const totals = useMemo(() => {
     const acc = rows.reduce(
@@ -266,7 +308,7 @@ const totals = useMemo(() => {
       [`Gerado em ${new Date().toLocaleString("pt-BR")} — ${rows.length} ${mode === "linha" ? "linha(s)" : "grupo(s)"}`],
       [],
       headers,
-      ...rows.map((r) => [
+      ...displayRows.map((r) => [
         r.groupLabel, r.dir1, r.dir2, r.aprov, r.tu, r.totalServico, r.frota, r.partidas,
         Number(r.km.toFixed(1)),
       ]),
@@ -331,7 +373,7 @@ const totals = useMemo(() => {
         d.setTextColor(20);
       }
 
-      const mainBody = rows.map((r) => [
+      const mainBody = displayRows.map((r) => [
         r.groupLabel, fmtInt(r.dir1), fmtInt(r.dir2), fmtInt(r.aprov), fmtInt(r.tu),
         fmtInt(r.totalServico), fmtInt(r.frota), fmtInt(r.partidas), fmtKm(r.km),
       ]);
@@ -451,6 +493,13 @@ const totals = useMemo(() => {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Select value={ordenarPor} onValueChange={(v) => setOrdenarPor(v as any)}>
+            <SelectTrigger className="h-8 w-[170px] text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="padrao">Ordem padrão</SelectItem>
+              <SelectItem value="unidade">Ordenar por Unidade</SelectItem>
+            </SelectContent>
+          </Select>
           {mode === "grupo" && (
             <Select value={groupBy} onValueChange={(v) => setGroupBy(v as any)}>
               <SelectTrigger className="h-8 w-[200px] text-xs"><SelectValue /></SelectTrigger>
@@ -490,7 +539,7 @@ const totals = useMemo(() => {
             <tr>{headers.map((h) => <th key={h}>{h}</th>)}</tr>
           </thead>
           <tbody>
-            {rows.map((r) => (
+            {displayRows.map((r) => (
               <tr key={r.groupKey}>
                 <td style={{ textAlign: "left", fontWeight: 600 }}>{r.groupLabel}</td>
                 <td>{fmtInt(r.dir1)}</td>
@@ -701,7 +750,7 @@ const totals = useMemo(() => {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rows.map((r) => (
+                  {displayRows.map((r) => (
                     <TableRow key={r.groupKey} className="h-8">
                       <TableCell className="px-2 py-1 font-medium">{r.groupLabel}</TableCell>
                       <TableCell className="px-2 py-1 text-right tabular-nums">{r.dir1}</TableCell>
