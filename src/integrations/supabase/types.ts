@@ -167,7 +167,7 @@ export type Database = {
           created_at: string
           empresa: string | null
           linha: string
-          ordem: number | null
+          ordem: string | null
           prest_t1: number
           prest_t2: number
           prest_t3: number
@@ -182,7 +182,7 @@ export type Database = {
           created_at?: string
           empresa?: string | null
           linha: string
-          ordem?: number | null
+          ordem?: string | null
           prest_t1?: number
           prest_t2?: number
           prest_t3?: number
@@ -197,7 +197,7 @@ export type Database = {
           created_at?: string
           empresa?: string | null
           linha?: string
-          ordem?: number | null
+          ordem?: string | null
           prest_t1?: number
           prest_t2?: number
           prest_t3?: number

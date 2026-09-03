@@ -61,10 +61,18 @@ export type ServiceUnit = {
 };
 
 
+// Sentinela pra "sem grupo definido" ficar sempre por último na ordenação
+// (já que "grupo" agora é texto livre, não dá pra usar Infinity como antes).
+const GRUPO_AUSENTE = "\uffff\uffff\uffff\uffff";
+
+function compareGrupo(a: string, b: string): number {
+  return a.localeCompare(b, "pt-BR", { numeric: true, sensitivity: "base" });
+}
+
 export type AggRow = {
   groupKey: string;
   groupLabel: string;
-  groupOrder: number; // para ordenação (menor primeiro; ausente = Infinity)
+  groupOrder: string; // para ordenação (ordem alfanumérica natural; ausente = por último)
   dir1: number;
   dir2: number;
   aprov: number;
@@ -191,7 +199,7 @@ export function dominantLinha(u: ServiceUnit, criterio: CriterioLinha = "predomi
 
 export function aggregateByGroup(
   units: Map<string, ServiceUnit>,
-  groupOf: (u: ServiceUnit) => { key: string; label: string; order?: number },
+  groupOf: (u: ServiceUnit) => { key: string; label: string; order?: string },
 ): AggRow[] {
   const rows = new Map<string, AggRow>();
   const vehiclesPerGroup = new Map<string, Set<string>>();
@@ -203,7 +211,7 @@ export function aggregateByGroup(
       r = {
         groupKey: g.key,
         groupLabel: g.label,
-        groupOrder: g.order ?? Number.POSITIVE_INFINITY,
+        groupOrder: g.order ?? GRUPO_AUSENTE,
         dir1: 0, dir2: 0, aprov: 0, tu: 0,
         totalServico: 0, frota: 0, partidas: 0, km: 0, heMin: 0,
       };
@@ -224,7 +232,7 @@ export function aggregateByGroup(
     r.frota = vehiclesPerGroup.get(k)!.size;
   }
   return Array.from(rows.values()).sort((a, b) => {
-    if (a.groupOrder !== b.groupOrder) return a.groupOrder - b.groupOrder;
+    if (a.groupOrder !== b.groupOrder) return compareGrupo(a.groupOrder, b.groupOrder);
     return a.groupLabel.localeCompare(b.groupLabel);
   });
 }
@@ -392,7 +400,7 @@ export function validarConsistenciaFrota(
 export function aggregateByLinha(
   units: Map<string, ServiceUnit>,
   allViagens: ViagemLite[],
-  ordemMap?: Map<string, number | null>,
+  ordemMap?: Map<string, string | null>,
   /**
    * Universo de viagens usado APENAS para determinar a linha de origem do
    * veículo (regra de frota). Deve ser o conjunto de viagens SEM o filtro de
@@ -425,7 +433,7 @@ export function aggregateByLinha(
     const ord = ordemMap?.get(linha);
     const created: AggRow = {
       groupKey: linha, groupLabel: linha,
-      groupOrder: ord == null ? Number.POSITIVE_INFINITY : ord,
+      groupOrder: ord == null ? GRUPO_AUSENTE : ord,
       dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0,
       frota: 0, partidas: 0, km: 0, heMin: 0,
     };
@@ -454,7 +462,7 @@ export function aggregateByLinha(
   for (const r of rows) {
     r.frota = vehPerLinha.get(r.groupKey)?.size ?? 0;
   }
-  return rows.sort((a, b) => a.groupOrder - b.groupOrder || a.groupLabel.localeCompare(b.groupLabel));
+  return rows.sort((a, b) => compareGrupo(a.groupOrder, b.groupOrder) || a.groupLabel.localeCompare(b.groupLabel));
 }
 
 /**

@@ -117,7 +117,6 @@ function LinhasPage() {
   const validate = (): string | null => {
     if (!form) return "Sem dados";
     if (!form.linha.trim()) return "Código da linha é obrigatório";
-    if (form.ordem && Number.isNaN(Number(form.ordem))) return "Grupo deve ser número";
     return null;
   };
 
@@ -129,7 +128,7 @@ function LinhasPage() {
     const payload = {
       empresa: form.empresa.trim() || null,
       unidade: form.unidade.trim() || null,
-      ordem: form.ordem.trim() ? Number(form.ordem) : null,
+      ordem: form.ordem.trim() || null,
       categoria: form.categoria.trim() || null,
       antec_t1: Number(form.antec_t1) || 0,
       prest_t1: Number(form.prest_t1) || 0,
@@ -319,7 +318,7 @@ function LinhasPage() {
                     <EditField icon={Building2} label="Empresa" value={form.empresa} onChange={(v) => setForm({ ...form, empresa: v })} />
                     <EditField icon={Layers} label="Unidade" value={form.unidade} onChange={(v) => setForm({ ...form, unidade: v })} />
                     <EditField icon={Tag} label="Categoria" value={form.categoria} onChange={(v) => setForm({ ...form, categoria: v })} />
-                    <EditField icon={Hash} label="Grupo" value={form.ordem} onChange={(v) => setForm({ ...form, ordem: v })} type="number" />
+                    <EditField icon={Hash} label="Grupo" value={form.ordem} onChange={(v) => setForm({ ...form, ordem: v })} />
                   </div>
 
                   <div className="pt-2 border-t border-border">

@@ -4,7 +4,7 @@ export type Linha = {
   linha: string;
   empresa: string | null;
   unidade: string | null;
-  ordem: number | null;
+  ordem: string | null;
   categoria: string | null;
   antec_t1?: number | null;
   prest_t1?: number | null;

@@ -314,7 +314,7 @@ export function ComparativoView() {
   const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">("comparativo.ordenarPor", "padrao");
 
   const merged = useMemo(() => {
-    const map = new Map<string, { linha: string; order: number; a: AggRow | null; p: AggRow | null }>();
+    const map = new Map<string, { linha: string; order: string; a: AggRow | null; p: AggRow | null }>();
     for (const r of atualRows) {
       map.set(r.groupKey, { linha: r.groupLabel, order: r.groupOrder, a: r, p: null });
     }
@@ -329,7 +329,7 @@ export function ComparativoView() {
         const ub = linhaMap.get(b.linha)?.unidade ?? "";
         if (ua !== ub) return ua.localeCompare(ub, "pt-BR");
       }
-      if (a.order !== b.order) return a.order - b.order;
+      if (a.order !== b.order) return a.order.localeCompare(b.order, "pt-BR", { numeric: true, sensitivity: "base" });
       return a.linha.localeCompare(b.linha);
     });
     if (onlyDiff) {

@@ -29,7 +29,7 @@ const SCHEMAS: Record<Tipo, { label: string; required: string[]; table: string; 
       linha: String(r.LINHA ?? "").trim(),
       empresa: r.EMPRESA?.trim() || null,
       unidade: r.UNIDADE?.trim() || null,
-      ordem: r.ORDEM ? Number(r.ORDEM) : null,
+      ordem: (r.GRUPO ?? r.ORDEM) ? String(r.GRUPO ?? r.ORDEM).trim() || null : null,
       categoria: r.CATEGORIA?.trim() || null,
     }),
     key: ["linha"],

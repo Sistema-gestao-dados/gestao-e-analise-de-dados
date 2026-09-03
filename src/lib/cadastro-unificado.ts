@@ -6,7 +6,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { Linha, ParametroKm, ParametroMulti } from "@/lib/data";
 
 const HEADERS_LINHAS = [
-  "linha", "empresa", "unidade", "ordem", "categoria",
+  "linha", "empresa", "unidade", "grupo", "categoria",
   "antec_t1", "prest_t1",
   "antec_t2", "prest_t2",
   "antec_t3", "prest_t3",
@@ -44,14 +44,14 @@ export function exportTemplateUnificado(data?: {
   const linhasRows = data?.linhas?.length
     ? data.linhas.map((l) => ({
         linha: l.linha, empresa: l.empresa ?? "", unidade: l.unidade ?? "",
-        ordem: l.ordem ?? "", categoria: l.categoria ?? "",
+        grupo: l.ordem ?? "", categoria: l.categoria ?? "",
         antec_t1: l.antec_t1 ?? 0, prest_t1: l.prest_t1 ?? 0,
         antec_t2: l.antec_t2 ?? 0, prest_t2: l.prest_t2 ?? 0,
         antec_t3: l.antec_t3 ?? 0, prest_t3: l.prest_t3 ?? 0,
       }))
     : [{
         linha: "408M", empresa: "Empresa Exemplo", unidade: "Unidade 1",
-        ordem: 1, categoria: "Alimentadora",
+        grupo: "1", categoria: "Alimentadora",
         antec_t1: 15, prest_t1: 10, antec_t2: 15, prest_t2: 10,
         antec_t3: 0, prest_t3: 0,
       }];
@@ -91,7 +91,7 @@ export function exportTemplateUnificado(data?: {
     ["linha", "Código único da linha (ex: 408M)", "Sim"],
     ["empresa", "Nome da empresa operadora", "Não"],
     ["unidade", "Unidade operacional", "Não"],
-    ["ordem", "Ordem numérica para relatórios", "Não"],
+    ["grupo", "Grupo/ordem para relatórios (texto livre, ex: 1, A, GRUPO-1)", "Não"],
     ["categoria", "Categoria (ex: Troncal, Alimentadora)", "Não"],
     ["antec_t1 / prest_t1", "Antecipação / prestação de contas turno 1 (min)", "Não (default 0)"],
     ["antec_t2 / prest_t2", "Antecipação / prestação de contas turno 2 (min)", "Não"],
@@ -149,7 +149,10 @@ async function importLinhasSheet(rows: Record<string, any>[]): Promise<ImportRep
       linha,
       empresa: String(r.empresa ?? "").trim() || null,
       unidade: String(r.unidade ?? "").trim() || null,
-      ordem: r.ordem !== "" && r.ordem != null ? Number(r.ordem) || null : null,
+      ordem: (() => {
+        const v = r.grupo !== "" && r.grupo != null ? r.grupo : r.ordem;
+        return v !== "" && v != null ? String(v).trim() || null : null;
+      })(),
       categoria: String(r.categoria ?? "").trim() || null,
       antec_t1: numOrZero(r.antec_t1), prest_t1: numOrZero(r.prest_t1),
       antec_t2: numOrZero(r.antec_t2), prest_t2: numOrZero(r.prest_t2),
