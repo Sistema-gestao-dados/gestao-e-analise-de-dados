@@ -234,6 +234,7 @@ function DashOperacional() {
   const [fDia, setFDia] = usePersistentState("dashboard.fDia", "__all");
   const [fEmpresa, setFEmpresa] = usePersistentState("dashboard.fEmpresa", "__all");
   const [fUnidade, setFUnidade] = usePersistentState("dashboard.fUnidade", "__all");
+  const [fGrupoOrdem, setFGrupoOrdem] = usePersistentState("dashboard.fGrupoOrdem", "__all");
   const [fLinha, setFLinha] = usePersistentState<string[]>("dashboard.fLinha", []);
   const linhaSet = useMemo(() => new Set(fLinha), [fLinha]);
   const [fCategoria, setFCategoria] = usePersistentState("dashboard.fCategoria", "__all");
@@ -255,6 +256,7 @@ function DashOperacional() {
       dia: set((v) => v.tipo_operacao),
       empresa: Array.from(new Set(linhas.map((l) => l.empresa).filter(Boolean) as string[])).sort(),
       unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
+      grupoOrdem: Array.from(new Set(linhas.map((l) => l.ordem).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
       linha: set((v) => v.linha),
       categoria: Array.from(new Set(linhas.map((l) => l.categoria).filter(Boolean) as string[])).sort(),
       grupo: Array.from(new Set(multi.map((m) => m.grupo_du).filter(Boolean))).sort(),
@@ -293,6 +295,7 @@ function DashOperacional() {
       const l = linhaMap.get(v.linha);
       if (fEmpresa !== "__all" && l?.empresa !== fEmpresa) return false;
       if (fUnidade !== "__all" && l?.unidade !== fUnidade) return false;
+      if (fGrupoOrdem !== "__all" && l?.ordem !== fGrupoOrdem) return false;
       if (fCategoria !== "__all" && l?.categoria !== fCategoria) return false;
       if (fGrupo !== "__all") {
         const g = grupoMap.get(`${v.linha}|${v.tipo_operacao ?? ""}`.toLowerCase());
@@ -306,7 +309,7 @@ function DashOperacional() {
       }
       return true;
     });
-  }, [viagens, fPeriodo, fDia, fLinha, fTipoServ, fSentido, fEmpresa, fUnidade, fCategoria, fGrupo, fFaixa, fOrigem, fDestino, fTipoMov, fCatMov, fTurno, linhaMap, grupoMap]);
+  }, [viagens, fPeriodo, fDia, fLinha, fTipoServ, fSentido, fEmpresa, fUnidade, fGrupoOrdem, fCategoria, fGrupo, fFaixa, fOrigem, fDestino, fTipoMov, fCatMov, fTurno, linhaMap, grupoMap]);
 
   // Base dos gráficos = respeita o filtro de Movimento (use o filtro acima para isolar Comercial / Soltura / Recolha).
   const comerciais = filtered;
@@ -585,6 +588,7 @@ function DashOperacional() {
               { label: "Dia Tipo", value: fDia, set: setFDia, options: [{ v: "__all", l: "Todos" }, ...opts.dia.map((x) => ({ v: x, l: x }))] },
               { label: "Empresa", value: fEmpresa, set: setFEmpresa, options: [{ v: "__all", l: "Todas" }, ...opts.empresa.map((x) => ({ v: x, l: x }))] },
               { label: "Unidade", value: fUnidade, set: setFUnidade, options: [{ v: "__all", l: "Todas" }, ...opts.unidade.map((x) => ({ v: x, l: x }))] },
+              { label: "Grupo", value: fGrupoOrdem, set: setFGrupoOrdem, options: [{ v: "__all", l: "Todos" }, ...opts.grupoOrdem.map((x) => ({ v: x, l: x }))] },
               { label: "Categoria", value: fCategoria, set: setFCategoria, options: [{ v: "__all", l: "Todas" }, ...opts.categoria.map((x) => ({ v: x, l: x }))] },
               { label: "Grupo de Linha", value: fGrupo, set: setFGrupo, options: [{ v: "__all", l: "Todos" }, ...opts.grupo.map((x) => ({ v: x, l: x }))] },
               { label: "Tipo Serv.", value: fTipoServ, set: setFTipoServ, options: [{ v: "__all", l: "Todos" }, ...opts.tipoServ.map((x) => ({ v: x, l: x }))] },

@@ -60,11 +60,12 @@ function JornadaPage() {
   const [fTipo, setFTipo] = usePersistentState("jornada.fTipo", "__all");
   const [fLinha, setFLinha] = usePersistentState<string[]>("jornada.fLinha", []);
   const [fUnidade, setFUnidade] = usePersistentState("jornada.fUnidade", "__all");
+  const [fGrupoOrdem, setFGrupoOrdem] = usePersistentState("jornada.fGrupoOrdem", "__all");
   const [modal, setModal] = useState<null | "7" | "9" | "he">(null);
   const [somenteAtivos, setSomenteAtivos] = usePersistentState("jornada.somenteAtivos", true);
-  type Snap = { dia: string; versao: string; tipo: string; linha: string[]; unidade: string };
+  type Snap = { dia: string; versao: string; tipo: string; linha: string[]; unidade: string; grupoOrdem: string };
   // Aplica filtros automaticamente ao abrir (usa cache se houver, sem recarregar)
-  const [applied, setApplied] = useState<Snap | null>({ dia: "__all", versao: "__all", tipo: "__all", linha: [], unidade: "__all" });
+  const [applied, setApplied] = useState<Snap | null>({ dia: "__all", versao: "__all", tipo: "__all", linha: [], unidade: "__all", grupoOrdem: "__all" });
 
   const viagensQ = useQuery({ queryKey: ["viagens-all"], queryFn: fetchAllViagens });
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
@@ -84,6 +85,7 @@ function JornadaPage() {
     versao: Array.from(new Set(viagens.map((v) => v.versao_programacao).filter(Boolean) as string[])).sort(),
     linha: Array.from(new Set(viagens.map((v) => v.linha).filter(Boolean))).sort(),
     unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
+    grupoOrdem: Array.from(new Set(linhas.map((l) => l.ordem).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
   }), [viagens, linhas]);
 
   const filtered = useMemo(() => {
@@ -94,6 +96,7 @@ function JornadaPage() {
       if (applied.versao !== "__all" && v.versao_programacao !== applied.versao) return false;
       if (set.size && !set.has(v.linha)) return false;
       if (applied.unidade !== "__all" && linhaMap.get(v.linha)?.unidade !== applied.unidade) return false;
+      if (applied.grupoOrdem !== "__all" && linhaMap.get(v.linha)?.ordem !== applied.grupoOrdem) return false;
       return true;
     });
   }, [viagens, applied, linhaMap]);
@@ -391,12 +394,22 @@ function JornadaPage() {
               </SelectContent>
             </Select>
           </div>
+          <div className="flex flex-col gap-1 min-w-[130px]">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Grupo</label>
+            <Select value={fGrupoOrdem} onValueChange={setFGrupoOrdem}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all">Todos</SelectItem>
+                {opts.grupoOrdem.map((d) => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
           <label className="flex items-end gap-2 text-xs cursor-pointer select-none pb-1">
             <Checkbox checked={somenteAtivos} onCheckedChange={(v) => setSomenteAtivos(!!v)} />
             Somente projetos ativos
           </label>
           <div className="ml-auto flex gap-2">
-            <Button size="sm" onClick={() => setApplied({ dia: fDia, versao: fVersao, tipo: fTipo, linha: fLinha, unidade: fUnidade })} disabled={viagensQ.isLoading || linhasQ.isLoading}>
+            <Button size="sm" onClick={() => setApplied({ dia: fDia, versao: fVersao, tipo: fTipo, linha: fLinha, unidade: fUnidade, grupoOrdem: fGrupoOrdem })} disabled={viagensQ.isLoading || linhasQ.isLoading}>
               Consultar
             </Button>
             {applied && <Button variant="outline" size="sm" onClick={() => setApplied(null)}>Limpar</Button>}

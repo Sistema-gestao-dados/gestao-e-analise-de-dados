@@ -58,6 +58,7 @@ type Filters = {
   categoria: string;
   empresa: string;
   unidade: string;
+  grupoOrdem: string;
   faixa: string;
   versao: string;
   origem: string;
@@ -65,7 +66,7 @@ type Filters = {
 };
 
 const EMPTY_FILTERS: Filters = {
-  dia: "__all", linha: [], grupo: "__all", categoria: "__all", empresa: "__all", unidade: "__all",
+  dia: "__all", linha: [], grupo: "__all", categoria: "__all", empresa: "__all", unidade: "__all", grupoOrdem: "__all",
   faixa: "__all", versao: "__all", origem: "__all", destino: "__all",
 };
 
@@ -82,6 +83,7 @@ function passesExceptLinha(
   const l = linhaMap.get(v.linha);
   if (f.empresa !== "__all" && l?.empresa !== f.empresa) return false;
   if (f.unidade !== "__all" && l?.unidade !== f.unidade) return false;
+  if (f.grupoOrdem !== "__all" && l?.ordem !== f.grupoOrdem) return false;
   if (f.categoria !== "__all" && l?.categoria !== f.categoria) return false;
   if (f.grupo !== "__all") {
     const g = grupoMap.get(`${v.linha}|${v.tipo_operacao ?? ""}`.toLowerCase());
@@ -165,6 +167,7 @@ function FilterBlock({
         <FilterSelect label="Tipo (Categoria)" value={filters.categoria} onChange={(v) => set("categoria", v)} options={opts.categoria} />
         <FilterSelect label="Empresa" value={filters.empresa} onChange={(v) => set("empresa", v)} options={opts.empresa} />
         <FilterSelect label="Unidade" value={filters.unidade} onChange={(v) => set("unidade", v)} options={opts.unidade} />
+        <FilterSelect label="Grupo" value={filters.grupoOrdem} onChange={(v) => set("grupoOrdem", v)} options={opts.grupoOrdem} />
         <FilterSelect label="Origem" value={filters.origem} onChange={(v) => set("origem", v)} options={opts.origem} />
         <FilterSelect label="Destino" value={filters.destino} onChange={(v) => set("destino", v)} options={opts.destino} />
         <FilterSelect label="Faixa horária" value={filters.faixa} onChange={(v) => set("faixa", v)} options={opts.faixa} />
@@ -185,6 +188,7 @@ function buildOpts(viagens: ViagemLite[], linhas: Linha[], multi: ParametroMulti
     faixa: Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0")),
     empresa: Array.from(new Set(linhas.map((l) => l.empresa).filter(Boolean) as string[])).sort(),
     unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
+    grupoOrdem: Array.from(new Set(linhas.map((l) => l.ordem).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
     categoria: Array.from(new Set(linhas.map((l) => l.categoria).filter(Boolean) as string[])).sort(),
     grupo: Array.from(new Set(multi.map((m) => m.grupo_du).filter(Boolean))).sort(),
   };
