@@ -194,7 +194,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
   // grupo de linha ou versão), pra permitir ordenar o relatório por unidade.
   const unidadePorGrupo = useMemo(() => {
     const tally = new Map<string, Map<string, number>>();
-    for (const u of units) {
+    for (const u of units.values()) {
       const linhaDom = dominantLinha(u, S.criterio);
       const unidade = linhaMap.get(linhaDom)?.unidade;
       if (!unidade) continue;
