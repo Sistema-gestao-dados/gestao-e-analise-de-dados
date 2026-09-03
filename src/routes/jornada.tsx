@@ -59,11 +59,12 @@ function JornadaPage() {
   const [fVersao, setFVersao] = usePersistentState("jornada.fVersao", "__all");
   const [fTipo, setFTipo] = usePersistentState("jornada.fTipo", "__all");
   const [fLinha, setFLinha] = usePersistentState<string[]>("jornada.fLinha", []);
+  const [fUnidade, setFUnidade] = usePersistentState("jornada.fUnidade", "__all");
   const [modal, setModal] = useState<null | "7" | "9" | "he">(null);
   const [somenteAtivos, setSomenteAtivos] = usePersistentState("jornada.somenteAtivos", true);
-  type Snap = { dia: string; versao: string; tipo: string; linha: string[] };
+  type Snap = { dia: string; versao: string; tipo: string; linha: string[]; unidade: string };
   // Aplica filtros automaticamente ao abrir (usa cache se houver, sem recarregar)
-  const [applied, setApplied] = useState<Snap | null>({ dia: "__all", versao: "__all", tipo: "__all", linha: [] });
+  const [applied, setApplied] = useState<Snap | null>({ dia: "__all", versao: "__all", tipo: "__all", linha: [], unidade: "__all" });
 
   const viagensQ = useQuery({ queryKey: ["viagens-all"], queryFn: fetchAllViagens });
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
@@ -76,12 +77,14 @@ function JornadaPage() {
     [viagensRaw, ativos, somenteAtivos],
   );
 
+  const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
 
   const opts = useMemo(() => ({
     dia: Array.from(new Set(viagens.map((v) => v.tipo_operacao).filter(Boolean) as string[])).sort(),
     versao: Array.from(new Set(viagens.map((v) => v.versao_programacao).filter(Boolean) as string[])).sort(),
     linha: Array.from(new Set(viagens.map((v) => v.linha).filter(Boolean))).sort(),
-  }), [viagens]);
+    unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
+  }), [viagens, linhas]);
 
   const filtered = useMemo(() => {
     if (!applied) return [];
@@ -90,9 +93,10 @@ function JornadaPage() {
       if (applied.dia !== "__all" && v.tipo_operacao !== applied.dia) return false;
       if (applied.versao !== "__all" && v.versao_programacao !== applied.versao) return false;
       if (set.size && !set.has(v.linha)) return false;
+      if (applied.unidade !== "__all" && linhaMap.get(v.linha)?.unidade !== applied.unidade) return false;
       return true;
     });
-  }, [viagens, applied]);
+  }, [viagens, applied, linhaMap]);
 
   const jornadas = useMemo(() => {
     if (!applied) return [];
@@ -103,7 +107,6 @@ function JornadaPage() {
     return all;
   }, [applied, filtered, linhas]);
 
-  const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
   const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">("jornada.ordenarPor", "padrao");
   const jornadasOrdenadas = useMemo(() => {
     if (ordenarPor !== "unidade") return jornadas;
@@ -378,12 +381,22 @@ function JornadaPage() {
             </Select>
           </div>
           <MultiSelect label="Linha" values={fLinha} onChange={setFLinha} options={opts.linha} placeholder="Todas" />
+          <div className="flex flex-col gap-1 min-w-[130px]">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Unidade</label>
+            <Select value={fUnidade} onValueChange={setFUnidade}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all">Todos</SelectItem>
+                {opts.unidade.map((d) => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
           <label className="flex items-end gap-2 text-xs cursor-pointer select-none pb-1">
             <Checkbox checked={somenteAtivos} onCheckedChange={(v) => setSomenteAtivos(!!v)} />
             Somente projetos ativos
           </label>
           <div className="ml-auto flex gap-2">
-            <Button size="sm" onClick={() => setApplied({ dia: fDia, versao: fVersao, tipo: fTipo, linha: fLinha })} disabled={viagensQ.isLoading || linhasQ.isLoading}>
+            <Button size="sm" onClick={() => setApplied({ dia: fDia, versao: fVersao, tipo: fTipo, linha: fLinha, unidade: fUnidade })} disabled={viagensQ.isLoading || linhasQ.isLoading}>
               Consultar
             </Button>
             {applied && <Button variant="outline" size="sm" onClick={() => setApplied(null)}>Limpar</Button>}

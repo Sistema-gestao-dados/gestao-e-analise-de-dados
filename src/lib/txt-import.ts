@@ -23,7 +23,7 @@ export type ViagemParsed = {
   tempo_viagem: string | null;
 };
 
-const TIPO_OP: Record<string, string> = { "1": "Dias Úteis", "2": "Sábado", "3": "Domingo" };
+const TIPO_OP: Record<string, string> = { "1": "dias úteis", "2": "Sábado", "3": "Domingo" };
 const TIPO_MOV: Record<string, string> = { "5": "Soltura", "10": "Comercial", "3": "Recolha" };
 const CATEGORIA: Record<string, string> = { "0": "Deslocamento", "1": "Viagem" };
 const SENTIDO: Record<string, string> = { I: "Ida", V: "Volta" };

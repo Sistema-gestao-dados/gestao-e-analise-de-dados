@@ -104,15 +104,16 @@ export function ResumoView({ mode }: { mode: Mode }) {
   const [fGrupo, setFGrupo] = usePersistentState(`resumo.${mode}.fGrupo`, "__all");
   const [fCategoria, setFCategoria] = usePersistentState(`resumo.${mode}.fCategoria`, "__all");
   const [fEmpresa, setFEmpresa] = usePersistentState(`resumo.${mode}.fEmpresa`, "__all");
+  const [fUnidade, setFUnidade] = usePersistentState(`resumo.${mode}.fUnidade`, "__all");
   const [fFaixa, setFFaixa] = usePersistentState(`resumo.${mode}.fFaixa`, "__all");
   const [fVersao, setFVersao] = usePersistentState(`resumo.${mode}.fVersao`, "__all");
   const [fOrigem, setFOrigem] = usePersistentState(`resumo.${mode}.fOrigem`, "__all");
   const [fDestino, setFDestino] = usePersistentState(`resumo.${mode}.fDestino`, "__all");
 
   // Snapshot dos filtros aplicados — só recalcula relatório ao clicar em Consultar.
-  type Snap = { dia: string; linha: string[]; grupo: string; categoria: string; empresa: string; faixa: string; versao: string; origem: string; destino: string; groupBy: "versao" | "grupo"; criterio: CriterioLinha };
+  type Snap = { dia: string; linha: string[]; grupo: string; categoria: string; empresa: string; unidade: string; faixa: string; versao: string; origem: string; destino: string; groupBy: "versao" | "grupo"; criterio: CriterioLinha };
   const [applied, setApplied] = useState<Snap | null>(null);
-  const S = applied ?? { dia: fDia, linha: fLinha, grupo: fGrupo, categoria: fCategoria, empresa: fEmpresa, faixa: fFaixa, versao: fVersao, origem: fOrigem, destino: fDestino, groupBy, criterio };
+  const S = applied ?? { dia: fDia, linha: fLinha, grupo: fGrupo, categoria: fCategoria, empresa: fEmpresa, unidade: fUnidade, faixa: fFaixa, versao: fVersao, origem: fOrigem, destino: fDestino, groupBy, criterio };
 
 
   const opts = useMemo(() => {
@@ -126,6 +127,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
       destino: set((v) => v.destino),
       faixa: Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0")),
       empresa: Array.from(new Set(linhas.map((l) => l.empresa).filter(Boolean) as string[])).sort(),
+      unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
       categoria: Array.from(new Set(linhas.map((l) => l.categoria).filter(Boolean) as string[])).sort(),
       grupo: Array.from(new Set(multi.map((m) => m.grupo_du).filter(Boolean))).sort(),
     };
@@ -144,6 +146,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
     if (S.destino !== "__all" && v.destino !== S.destino) return false;
     const l = linhaMap.get(v.linha);
     if (S.empresa !== "__all" && l?.empresa !== S.empresa) return false;
+    if (S.unidade !== "__all" && l?.unidade !== S.unidade) return false;
     if (S.categoria !== "__all" && l?.categoria !== S.categoria) return false;
     if (S.grupo !== "__all") {
       const g = grupoMap.get(`${v.linha}|${v.tipo_operacao ?? ""}`.toLowerCase());
@@ -155,7 +158,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
       if (String(Math.floor(m / 60)).padStart(2, "0") !== S.faixa) return false;
     }
     return true;
-  }, [S.dia, S.versao, S.origem, S.destino, S.empresa, S.categoria, S.grupo, S.faixa, linhaMap, grupoMap]);
+  }, [S.dia, S.versao, S.origem, S.destino, S.empresa, S.unidade, S.categoria, S.grupo, S.faixa, linhaMap, grupoMap]);
 
   const filtered = useMemo(() => {
     if (!applied) return [] as ViagemLite[];
@@ -603,9 +606,10 @@ const totals = useMemo(() => {
         <CardContent className="p-3 flex flex-wrap gap-2">
           <FilterSelect label="Dia tipo" value={fDia} onChange={setFDia} options={opts.dia} />
           <MultiSelect label="Linha" values={fLinha} onChange={setFLinha} options={opts.linha} placeholder="Todas" />
-          <FilterSelect label="Grupo" value={fGrupo} onChange={setFGrupo} options={opts.grupo} />
+          <FilterSelect label="Grupo de Linha" value={fGrupo} onChange={setFGrupo} options={opts.grupo} />
           <FilterSelect label="Tipo (Categoria)" value={fCategoria} onChange={setFCategoria} options={opts.categoria} />
           <FilterSelect label="Empresa" value={fEmpresa} onChange={setFEmpresa} options={opts.empresa} />
+          <FilterSelect label="Unidade" value={fUnidade} onChange={setFUnidade} options={opts.unidade} />
           <FilterSelect label="Projeto / Versão" value={fVersao} onChange={setFVersao} options={opts.versao} />
           <FilterSelect label="Origem" value={fOrigem} onChange={setFOrigem} options={opts.origem} />
           <FilterSelect label="Destino" value={fDestino} onChange={setFDestino} options={opts.destino} />
@@ -627,7 +631,7 @@ const totals = useMemo(() => {
           <div className="flex items-end gap-2 ml-auto">
             <Button
               size="sm"
-              onClick={() => setApplied({ dia: fDia, linha: fLinha, grupo: fGrupo, categoria: fCategoria, empresa: fEmpresa, faixa: fFaixa, versao: fVersao, origem: fOrigem, destino: fDestino, groupBy, criterio })}
+              onClick={() => setApplied({ dia: fDia, linha: fLinha, grupo: fGrupo, categoria: fCategoria, empresa: fEmpresa, unidade: fUnidade, faixa: fFaixa, versao: fVersao, origem: fOrigem, destino: fDestino, groupBy, criterio })}
               disabled={viagensQ.isLoading}
             >
               <Play className="h-4 w-4 mr-1" /> Consultar

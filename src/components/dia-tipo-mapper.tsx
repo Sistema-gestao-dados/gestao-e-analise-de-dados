@@ -1,6 +1,6 @@
 // Wizard que detecta novos "tipo_operacao" (dia tipo) em um TXT recém-parseado
 // e permite ao usuário mapear cada novo dia tipo para HERDAR o comportamento
-// de um dia tipo já existente (Dias Úteis, Sábado, Domingo).
+// de um dia tipo já existente (dias úteis, Sábado, Domingo).
 //
 // A herança é persistida em `parametro_multilinha` — para cada linha que
 // já possui mapeamento no dia tipo "pai", copiamos o mesmo `grupo_du` para
@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 
-const PARENTS = ["Dias Úteis", "Sábado", "Domingo"] as const;
+const PARENTS = ["dias úteis", "Sábado", "Domingo"] as const;
 
 export type DiaTipoNovo = { nome: string; linhas: string[] };
 
@@ -116,7 +116,7 @@ export async function detectarNovosDiasTipo(
   for (const [tipo, linhas] of grupo) {
     if (existentes.has(tipo)) continue;
     // ignora os básicos já conhecidos
-    if (tipo === "Dias Úteis" || tipo === "Sábado" || tipo === "Domingo") continue;
+    if (tipo === "dias úteis" || tipo === "Sábado" || tipo === "Domingo") continue;
     novos.push({ nome: tipo, linhas: Array.from(linhas).sort() });
   }
   return novos;

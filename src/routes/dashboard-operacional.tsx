@@ -233,6 +233,7 @@ function DashOperacional() {
   const [fPeriodo, setFPeriodo] = usePersistentState("dashboard.fPeriodo", "__all");
   const [fDia, setFDia] = usePersistentState("dashboard.fDia", "__all");
   const [fEmpresa, setFEmpresa] = usePersistentState("dashboard.fEmpresa", "__all");
+  const [fUnidade, setFUnidade] = usePersistentState("dashboard.fUnidade", "__all");
   const [fLinha, setFLinha] = usePersistentState<string[]>("dashboard.fLinha", []);
   const linhaSet = useMemo(() => new Set(fLinha), [fLinha]);
   const [fCategoria, setFCategoria] = usePersistentState("dashboard.fCategoria", "__all");
@@ -253,6 +254,7 @@ function DashOperacional() {
     return {
       dia: set((v) => v.tipo_operacao),
       empresa: Array.from(new Set(linhas.map((l) => l.empresa).filter(Boolean) as string[])).sort(),
+      unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
       linha: set((v) => v.linha),
       categoria: Array.from(new Set(linhas.map((l) => l.categoria).filter(Boolean) as string[])).sort(),
       grupo: Array.from(new Set(multi.map((m) => m.grupo_du).filter(Boolean))).sort(),
@@ -290,6 +292,7 @@ function DashOperacional() {
       if (fTurno !== "__all" && v.turno !== fTurno) return false;
       const l = linhaMap.get(v.linha);
       if (fEmpresa !== "__all" && l?.empresa !== fEmpresa) return false;
+      if (fUnidade !== "__all" && l?.unidade !== fUnidade) return false;
       if (fCategoria !== "__all" && l?.categoria !== fCategoria) return false;
       if (fGrupo !== "__all") {
         const g = grupoMap.get(`${v.linha}|${v.tipo_operacao ?? ""}`.toLowerCase());
@@ -303,7 +306,7 @@ function DashOperacional() {
       }
       return true;
     });
-  }, [viagens, fPeriodo, fDia, fLinha, fTipoServ, fSentido, fEmpresa, fCategoria, fGrupo, fFaixa, fOrigem, fDestino, fTipoMov, fCatMov, fTurno, linhaMap, grupoMap]);
+  }, [viagens, fPeriodo, fDia, fLinha, fTipoServ, fSentido, fEmpresa, fUnidade, fCategoria, fGrupo, fFaixa, fOrigem, fDestino, fTipoMov, fCatMov, fTurno, linhaMap, grupoMap]);
 
   // Base dos gráficos = respeita o filtro de Movimento (use o filtro acima para isolar Comercial / Soltura / Recolha).
   const comerciais = filtered;
@@ -375,7 +378,7 @@ function DashOperacional() {
 
   // Regra: apenas viagens comerciais
   const porDiaTipo = useMemo(() => {
-    const ordem = ["Dias Úteis", "Sábado", "Domingo"];
+    const ordem = ["dias úteis", "Sábado", "Domingo"];
     const m = new Map<string, number>();
     comerciais.forEach((v) => { if (v.tipo_operacao) m.set(v.tipo_operacao, (m.get(v.tipo_operacao) ?? 0) + 1); });
     return ordem.filter((d) => m.has(d)).map((dia) => ({ dia, qtd: m.get(dia)! }));
@@ -397,7 +400,7 @@ function DashOperacional() {
     [filtered, kmMaps],
   );
 
-  const ORDEM_DIA = ["Dias Úteis", "Sábado", "Domingo"];
+  const ORDEM_DIA = ["dias úteis", "Sábado", "Domingo"];
 
   // "Serviço = Motorista": 1 unidade de serviço (DIR T1/T2/APROV ou TU) = 1
   // motorista/turno. Mesma contagem usada no KPI "Serviços" e no Resumo por
@@ -454,7 +457,7 @@ function DashOperacional() {
     const s = new Set<string>();
     const js = buildJornadas(filtered as unknown as ViagemLite[], linhas);
     js.forEach((j) => { if (j.acimaDe9h) s.add(versaoParaDia.get(j.versao) || "Sem dia tipo"); });
-    const ord = ["Dias Úteis", "Sábado", "Domingo"];
+    const ord = ["dias úteis", "Sábado", "Domingo"];
     return Array.from(s).sort((a, b) => {
       const ia = ord.indexOf(a), ib = ord.indexOf(b);
       return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
@@ -496,7 +499,7 @@ function DashOperacional() {
       a.frota.add(u.vehicleKey);
       a.servicos += 1;
     }
-    const order = ["Dias Úteis", "Sábado", "Domingo"];
+    const order = ["dias úteis", "Sábado", "Domingo"];
     return Array.from(m, ([dia, a]) => ({ dia, viagens: a.viagens, km: a.km, frota: a.frota.size, servicos: a.servicos }))
       .sort((a, b) => {
         const ia = order.indexOf(a.dia), ib = order.indexOf(b.dia);
@@ -581,8 +584,9 @@ function DashOperacional() {
               { label: "Período", value: fPeriodo, set: setFPeriodo, options: periodos.map((p) => ({ v: p.v, l: p.l })) },
               { label: "Dia Tipo", value: fDia, set: setFDia, options: [{ v: "__all", l: "Todos" }, ...opts.dia.map((x) => ({ v: x, l: x }))] },
               { label: "Empresa", value: fEmpresa, set: setFEmpresa, options: [{ v: "__all", l: "Todas" }, ...opts.empresa.map((x) => ({ v: x, l: x }))] },
+              { label: "Unidade", value: fUnidade, set: setFUnidade, options: [{ v: "__all", l: "Todas" }, ...opts.unidade.map((x) => ({ v: x, l: x }))] },
               { label: "Categoria", value: fCategoria, set: setFCategoria, options: [{ v: "__all", l: "Todas" }, ...opts.categoria.map((x) => ({ v: x, l: x }))] },
-              { label: "Grupo", value: fGrupo, set: setFGrupo, options: [{ v: "__all", l: "Todos" }, ...opts.grupo.map((x) => ({ v: x, l: x }))] },
+              { label: "Grupo de Linha", value: fGrupo, set: setFGrupo, options: [{ v: "__all", l: "Todos" }, ...opts.grupo.map((x) => ({ v: x, l: x }))] },
               { label: "Tipo Serv.", value: fTipoServ, set: setFTipoServ, options: [{ v: "__all", l: "Todos" }, ...opts.tipoServ.map((x) => ({ v: x, l: x }))] },
               { label: "Sentido", value: fSentido, set: setFSentido, options: [{ v: "__all", l: "Todos" }, ...opts.sentido.map((x) => ({ v: x, l: x }))] },
               { label: "Faixa Hr.", value: fFaixa, set: setFFaixa, options: [{ v: "__all", l: "Todas" }, ...HOURS.map((h) => ({ v: h, l: `${h}h` }))] },
