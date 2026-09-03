@@ -5,7 +5,9 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Upload, FileUp, CheckCircle2, AlertCircle, Loader2, ArrowRight } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Upload, FileUp, CheckCircle2, AlertCircle, Loader2, ArrowRight, FolderOpen, Pencil, Trash2, Settings2 } from "lucide-react";
 import { useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -34,9 +36,91 @@ type FileReport = {
   status: "done" | "error";
 };
 
+function GerenciarDiasTipoDialog({
+  open, onClose, dias, onRenomear, onExcluir,
+}: {
+  open: boolean;
+  onClose: () => void;
+  dias: string[];
+  onRenomear: (antigo: string, novo: string) => Promise<void>;
+  onExcluir: (nome: string) => Promise<void>;
+}) {
+  const [editando, setEditando] = useState<string | null>(null);
+  const [valorEdit, setValorEdit] = useState("");
+  const [excluindo, setExcluindo] = useState<string | null>(null);
+  const [salvando, setSalvando] = useState(false);
+
+  return (
+    <>
+      <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Gerenciar dias tipo criados</DialogTitle></DialogHeader>
+          <p className="text-xs text-muted-foreground -mt-2">
+            Só os dias tipo que você criou (feriados etc.) aparecem aqui — Dias Úteis, Sábado e Domingo
+            são fixos do sistema e não podem ser editados nem excluídos.
+          </p>
+          <div className="max-h-[50vh] overflow-auto space-y-2">
+            {dias.length === 0 && <p className="text-sm text-muted-foreground py-4 text-center">Nenhum dia tipo customizado.</p>}
+            {dias.map((d) => (
+              <div key={d} className="flex items-center gap-2 rounded-md border border-border p-2">
+                {editando === d ? (
+                  <>
+                    <Input value={valorEdit} onChange={(e) => setValorEdit(e.target.value)} className="h-8 flex-1" autoFocus />
+                    <Button size="sm" className="h-8" disabled={salvando} onClick={async () => {
+                      setSalvando(true);
+                      await onRenomear(d, valorEdit);
+                      setSalvando(false);
+                      setEditando(null);
+                    }}>Salvar</Button>
+                    <Button size="sm" variant="ghost" className="h-8" onClick={() => setEditando(null)}>Cancelar</Button>
+                  </>
+                ) : (
+                  <>
+                    <span className="flex-1 text-sm">{d}</span>
+                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => { setEditando(d); setValorEdit(d); }}>
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => setExcluindo(d)}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog open={!!excluindo} onOpenChange={(v) => !v && setExcluindo(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Excluir "{excluindo}"?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Isso remove o mapeamento de grupos de linha cadastrado para esse dia tipo. Viagens já
+              importadas com esse dia tipo NÃO são apagadas — só ficam sem essa referência de cadastro.
+              Se precisar importar de novo com esse nome, o assistente de dia tipo novo vai perguntar de
+              novo de qual dia herdar.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={async () => {
+              if (excluindo) await onExcluir(excluindo);
+              setExcluindo(null);
+            }}>
+              Excluir
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
+  );
+}
+
 function ImportTxtEasyBusPage() {
   useAuditView("importacao_txt_easybus");
   const ref = useRef<HTMLInputElement>(null);
+  const folderRef = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [reports, setReports] = useState<FileReport[]>([]);
@@ -46,6 +130,7 @@ function ImportTxtEasyBusPage() {
   const [marcarAtivo, setMarcarAtivo] = usePersistentState("importacaoEasyBus.marcarAtivo", true);
   const [novosDias, setNovosDias] = useState<DiaTipoNovo[]>([]);
   const [showWizard, setShowWizard] = useState(false);
+  const [showGerenciar, setShowGerenciar] = useState(false);
 
   // Dias tipo já cadastrados (base + qualquer um criado antes via este fluxo
   // ou pela tela de Cadastro de Grupos).
@@ -73,19 +158,20 @@ function ImportTxtEasyBusPage() {
 
   const diaTipoEfetivo = criandoNovo ? novoDiaTipo.trim() : diaTipo;
 
-  async function handleFiles(files: FileList) {
+  async function handleFiles(files: File[]) {
     if (!diaTipoEfetivo) {
       toast.error(criandoNovo
         ? "Digite o nome do novo dia tipo (ex.: Feriado 7 de Setembro)."
         : "Escolha o dia tipo (Dias Úteis / Sábado / Domingo / outro cadastrado) antes de importar.");
       if (ref.current) ref.current.value = "";
+      if (folderRef.current) folderRef.current.value = "";
       return;
     }
     setBusy(true);
     const newReports: FileReport[] = [];
     const versoesImportadas = new Set<string>();
     const parsedAll: { linha: string; tipo_operacao: string | null }[] = [];
-    for (const file of Array.from(files)) {
+    for (const file of files) {
       try {
         const text = await file.text();
         const { rows, errors } = parseTxtEasyBus(text, file.name, diaTipoEfetivo);
@@ -164,6 +250,52 @@ function ImportTxtEasyBusPage() {
     qc.invalidateQueries({ queryKey: ["dias-tipo-cadastrados"] });
     setBusy(false);
     if (ref.current) ref.current.value = "";
+    if (folderRef.current) folderRef.current.value = "";
+  }
+
+  function onFolderChange(fileList: FileList) {
+    const todos = Array.from(fileList);
+    // Mantém só os arquivos que estão DIRETO na pasta escolhida — o
+    // webkitRelativePath de um arquivo em subpasta tem mais de 2 partes
+    // (ex.: "PASTA/SUBPASTA/arquivo.txt"), o que a gente descarta aqui.
+    const somenteRaiz = todos.filter((f) => {
+      const rel = (f as any).webkitRelativePath || f.name;
+      return rel.split("/").length === 2 && /\.txt$/i.test(f.name);
+    });
+    if (!somenteRaiz.length) {
+      toast.error("Nenhum .txt direto nessa pasta (só em subpastas, que são ignoradas de propósito).");
+      if (folderRef.current) folderRef.current.value = "";
+      return;
+    }
+    if (somenteRaiz.length < todos.length) {
+      toast.info(`${somenteRaiz.length} de ${todos.length} arquivo(s): subpastas foram ignoradas.`);
+    }
+    void handleFiles(somenteRaiz);
+  }
+
+  const diasCustomizados = diasCadastrados.filter((d) => !DIAS_TIPO_BASE.includes(d));
+
+  async function renomearDiaTipo(nomeAntigo: string, nomeNovo: string) {
+    const novo = nomeNovo.trim();
+    if (!novo || novo === nomeAntigo) return;
+    const { error: e1 } = await (supabase as any).from("parametro_multilinha").update({ tipo_dia: novo }).eq("tipo_dia", nomeAntigo);
+    if (e1) { toast.error(`Falha ao renomear: ${e1.message}`); return; }
+    const { error: e2 } = await (supabase as any).from("viagens").update({ tipo_operacao: novo }).eq("tipo_operacao", nomeAntigo);
+    if (e2) toast.error(`Grupos renomeados, mas falhou ao atualizar viagens já importadas: ${e2.message}`);
+    else toast.success(`"${nomeAntigo}" renomeado para "${novo}" (grupos e viagens já importadas).`);
+    if (diaTipo === nomeAntigo) setDiaTipo(novo);
+    qc.invalidateQueries({ queryKey: ["dias-tipo-cadastrados"] });
+    qc.invalidateQueries({ queryKey: ["viagens"] });
+    qc.invalidateQueries({ queryKey: ["multi"] });
+  }
+
+  async function excluirDiaTipo(nome: string) {
+    const { error } = await (supabase as any).from("parametro_multilinha").delete().eq("tipo_dia", nome);
+    if (error) { toast.error(`Falha ao excluir: ${error.message}`); return; }
+    toast.success(`"${nome}" removido do cadastro de grupos. Viagens já importadas com esse dia tipo continuam como estão.`);
+    if (diaTipo === nome) setDiaTipo("");
+    qc.invalidateQueries({ queryKey: ["dias-tipo-cadastrados"] });
+    qc.invalidateQueries({ queryKey: ["multi"] });
   }
 
   return (
@@ -193,9 +325,20 @@ function ImportTxtEasyBusPage() {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="max-w-xs space-y-1.5">
-            <label className="text-xs font-medium text-muted-foreground">
-              Dia tipo deste arquivo <span className="text-destructive">*</span>
-            </label>
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium text-muted-foreground">
+                Dia tipo deste arquivo <span className="text-destructive">*</span>
+              </label>
+              {diasCustomizados.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowGerenciar(true)}
+                  className="text-[11px] text-primary hover:underline flex items-center gap-1"
+                >
+                  <Settings2 className="h-3 w-3" /> Gerenciar
+                </button>
+              )}
+            </div>
             <Select value={criandoNovo ? NOVO_SENTINEL : diaTipo} onValueChange={onSelectDiaTipo}>
               <SelectTrigger className="h-9">
                 <SelectValue placeholder="Escolha um dia tipo cadastrado" />
@@ -228,11 +371,22 @@ function ImportTxtEasyBusPage() {
             accept=".txt"
             multiple
             className="hidden"
-            onChange={(e) => e.target.files?.length && handleFiles(e.target.files)}
+            onChange={(e) => e.target.files?.length && handleFiles(Array.from(e.target.files))}
+          />
+          <input
+            ref={folderRef}
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => e.target.files?.length && onFolderChange(e.target.files)}
+            {...({ webkitdirectory: "", directory: "" } as any)}
           />
           <div className="flex items-center gap-2 flex-wrap">
             <Button onClick={() => ref.current?.click()} disabled={busy || !diaTipoEfetivo} className="w-full sm:w-auto">
               {busy ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Processando...</> : <><Upload className="h-4 w-4 mr-2" />Selecionar TXT (múltiplos)</>}
+            </Button>
+            <Button variant="outline" onClick={() => folderRef.current?.click()} disabled={busy || !diaTipoEfetivo} className="w-full sm:w-auto">
+              <FolderOpen className="h-4 w-4 mr-2" />Selecionar pasta (sem subpastas)
             </Button>
             <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
               <Checkbox checked={marcarAtivo} onCheckedChange={(v) => setMarcarAtivo(!!v)} />
@@ -253,6 +407,14 @@ function ImportTxtEasyBusPage() {
         setNovosDias([]);
         qc.invalidateQueries({ queryKey: ["dias-tipo-cadastrados"] });
       }} />
+
+      <GerenciarDiasTipoDialog
+        open={showGerenciar}
+        onClose={() => setShowGerenciar(false)}
+        dias={diasCustomizados}
+        onRenomear={renomearDiaTipo}
+        onExcluir={excluirDiaTipo}
+      />
 
       {reports.length > 0 && (
         <div className="space-y-3">
