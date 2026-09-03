@@ -16,10 +16,14 @@
 // turno") — por isso o parser usa faixas de caractere fixas em vez de
 // separar por espaços, que ficaria inconsistente nessas linhas.
 //
-// "Tipo Serv." (TU/DIR) não vem pronto no arquivo: é deduzido por grupo
-// linha+serviço+turno (o turno tal como veio no arquivo). Se QUALQUER
-// viagem desse grupo tiver "Intra-jorn" na coluna de tipo de viagem, o
-// grupo inteiro é classificado como "TU"; caso contrário, "DIR".
+// "Tipo Serv." (TU/DIR) não vem pronto no arquivo: é deduzido por
+// versão+serviço+turno — NÃO por linha, porque o mesmo serviço pode trocar
+// de linha no meio do dia (ex.: serviço 11.1 começa na 489M, passa pela
+// 480M na intra-jornada, e volta pra 489M à tarde — é tudo o MESMO
+// serviço). Se QUALQUER viagem desse serviço/turno tiver "Intra-jorn" na
+// coluna de tipo de viagem, o serviço inteiro (em todas as linhas por
+// onde ele passar) é classificado como "TU"; caso contrário, "DIR".
+// Essa é a mesma regra usada no FLITS — muda só o formato do arquivo lido.
 //
 // Turno em grupos TU: o EasyBus só traz UM número de turno mesmo quando
 // há um intervalo de intra-jornada no meio (ex.: manhã / descanso / tarde).
@@ -50,8 +54,17 @@ import { fmtHora, tempoViagem } from "./txt-import";
 import type { ViagemParsed, ParseResult } from "./txt-import";
 
 function extrairVersaoDoNomeArquivo(nome: string): string | null {
-  const m = nome.match(/\(([^)]+)\)/);
-  return m ? m[1].trim() : null;
+  // Formato 1 (arquivo renomeado manualmente): "EASYBUS_ESCALA (U550M 01092026 V34) ...txt"
+  const comParenteses = nome.match(/\(([^)]+)\)/);
+  if (comParenteses) return comParenteses[1].trim();
+
+  // Formato 2 (nome original, como vem do EasyBus, sem parênteses):
+  // "EASYBUS_ESCALA__U550M_01092026_V34__28-08-2026_14-39-33.txt"
+  // -> pega o trecho entre o 2º e o 3º par de underscores duplos e troca "_" por " ".
+  const semParenteses = nome.match(/^EASYBUS_ESCALA__(.+?)__\d{2}-\d{2}-\d{4}/i);
+  if (semParenteses) return semParenteses[1].replace(/_/g, " ").trim();
+
+  return null;
 }
 
 function mapMovimento(tipoViagemRaw: string): { movimento: string | null; categoria: string | null } {
@@ -94,12 +107,14 @@ export function parseTxtEasyBus(
 
       if (!linha) { errors.push({ line: i + 1, reason: "Linha vazia (coluna 26)" }); continue; }
       if (!servicoTurno) { errors.push({ line: i + 1, reason: "Serviço/turno vazio (coluna 21)" }); continue; }
+      if (!partida) errors.push({ line: i + 1, reason: `Partida não reconhecida (bruto: "${raw.slice(50, 56)}")` });
+      if (!chegada) errors.push({ line: i + 1, reason: `Chegada não reconhecida (bruto: "${raw.slice(56, 62)}")` });
 
       const [servicoRaw, turnoRaw] = servicoTurno.split(".");
       const servico = servicoRaw?.trim() || null;
       const turno = turnoRaw?.trim() || null;
       const sentido = sentidoRaw || null;
-      const grupo = `${linha}|${servico ?? ""}|${turno ?? ""}`;
+      const grupo = `${versao_programacao ?? ""}|${servico ?? ""}|${turno ?? ""}`;
       const intraJorn = tipoViagemRaw.toLowerCase().startsWith("intra");
       const { movimento, categoria } = mapMovimento(tipoViagemRaw);
 
@@ -126,7 +141,7 @@ export function parseTxtEasyBus(
     }
   }
 
-  // Agrupa por linha+serviço+turno (como veio no arquivo)
+  // Agrupa por versão+serviço+turno (NÃO por linha — ver comentário acima)
   const porGrupo = new Map<string, Bruto[]>();
   for (const b of brutos) {
     const arr = porGrupo.get(b._grupo) ?? [];
