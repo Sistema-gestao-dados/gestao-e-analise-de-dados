@@ -196,18 +196,24 @@ export function ResumoView({ mode }: { mode: Mode }) {
     return aggregateByGroup(units, (u) => ({ key: u.versao, label: u.versao }));
   }, [applied, units, mode, S.groupBy, S.criterio, grupoMap, ordemMap, S.dia, filtered, viagensParaOrigem]);
 
-  // Unidade (cadastro de Linhas) predominante de cada linha de resumo (linha,
-  // grupo de linha ou versão), pra permitir ordenar o relatório por unidade.
+  // Unidade (cadastro de Linhas) de cada linha de resumo. Em modo "linha", a
+  // linha do relatório já É o código da linha — busca direto no cadastro.
+  // Em modo "grupo" (grupo de linha ou versão), a linha do relatório agrega
+  // várias linhas físicas, então usa a unidade predominante entre os
+  // serviços que caem nesse grupo.
   const unidadePorGrupo = useMemo(() => {
+    if (mode === "linha") {
+      const out = new Map<string, string>();
+      for (const l of linhas) if (l.unidade) out.set(l.linha, l.unidade);
+      return out;
+    }
     const tally = new Map<string, Map<string, number>>();
     for (const u of units.values()) {
       const linhaDom = dominantLinha(u, S.criterio);
       const unidade = linhaMap.get(linhaDom)?.unidade;
       if (!unidade) continue;
       let key: string;
-      if (mode === "linha") {
-        key = linhaDom;
-      } else if (S.groupBy === "grupo") {
+      if (S.groupBy === "grupo") {
         const td = S.dia !== "__all" ? S.dia : u.tipo_operacao;
         key = grupoMap.get(`${linhaDom}|${td}`.toLowerCase()) ?? `(sem grupo) ${linhaDom}`;
       } else {
@@ -224,7 +230,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
       if (best) out.set(key, best);
     }
     return out;
-  }, [units, mode, S.groupBy, S.criterio, S.dia, grupoMap, linhaMap]);
+  }, [units, mode, S.groupBy, S.criterio, S.dia, grupoMap, linhaMap, linhas]);
 
   const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">(`resumo.${mode}.ordenarPor`, "padrao");
 
