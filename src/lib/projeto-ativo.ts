@@ -31,26 +31,30 @@ export async function ativarProjeto(linha: string, tipo_operacao: string, versao
   if (error) throw error;
 }
 
-/** Retorna todas as linhas do mesmo grupo/tipo_dia, incluindo a própria. */
+/** Retorna todas as linhas do mesmo grupo/tipo_dia, incluindo a própria.
+ *  Usa comparação sem diferenciar maiúsculas/minúsculas (ilike) pra não
+ *  quebrar silenciosamente se o dia tipo vier com grafia levemente
+ *  diferente entre importações (já causou esse problema antes). */
 async function linhasDoGrupo(linha: string, tipo_operacao: string): Promise<string[]> {
   const { data: g } = await (supabase as any)
     .from("parametro_multilinha")
     .select("grupo_du")
     .eq("linha", linha)
-    .eq("tipo_dia", tipo_operacao);
+    .ilike("tipo_dia", tipo_operacao);
   const grupos = Array.from(new Set((g ?? []).map((r: any) => r.grupo_du).filter(Boolean)));
   if (!grupos.length) return [linha];
   const { data: irmas } = await (supabase as any)
     .from("parametro_multilinha")
     .select("linha")
     .in("grupo_du", grupos)
-    .eq("tipo_dia", tipo_operacao);
+    .ilike("tipo_dia", tipo_operacao);
   const set = new Set<string>([linha, ...((irmas ?? []).map((r: any) => r.linha))]);
   return Array.from(set);
 }
 
 /** Ativa em lote todos os (linha, tipo_operacao) presentes na versão indicada,
- *  substituindo qualquer ativação anterior dessas combinações. */
+ *  substituindo qualquer ativação anterior dessas combinações. Também propaga
+ *  para as linhas do mesmo grupo (parametro_multilinha), igual ao ativarProjeto. */
 export async function ativarVersao(versao_programacao: string) {
   const { data, error } = await (supabase as any)
     .from("viagens")
@@ -58,14 +62,28 @@ export async function ativarVersao(versao_programacao: string) {
     .eq("versao_programacao", versao_programacao);
   if (error) throw error;
   const set = new Set<string>();
-  const payload: any[] = [];
+  const combos: { linha: string; tipo_operacao: string }[] = [];
   for (const v of (data ?? []) as any[]) {
     const key = `${v.linha}||${v.tipo_operacao ?? ""}`;
     if (set.has(key) || !v.tipo_operacao) continue;
     set.add(key);
-    payload.push({ linha: v.linha, tipo_operacao: v.tipo_operacao, versao_programacao });
+    combos.push({ linha: v.linha, tipo_operacao: v.tipo_operacao });
   }
-  if (!payload.length) return { count: 0 };
+  if (!combos.length) return { count: 0 };
+
+  // Expande cada combinação pras linhas irmãs do mesmo grupo/tipo_dia.
+  const payloadSet = new Set<string>();
+  const payload: any[] = [];
+  for (const c of combos) {
+    const linhasGrupo = await linhasDoGrupo(c.linha, c.tipo_operacao);
+    for (const l of linhasGrupo) {
+      const key = `${l}||${c.tipo_operacao}`;
+      if (payloadSet.has(key)) continue;
+      payloadSet.add(key);
+      payload.push({ linha: l, tipo_operacao: c.tipo_operacao, versao_programacao });
+    }
+  }
+
   const chunk = 200;
   for (let i = 0; i < payload.length; i += chunk) {
     const { error: e } = await supabase

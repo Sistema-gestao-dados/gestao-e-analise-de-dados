@@ -24,7 +24,7 @@ export const Route = createFileRoute("/importacao-txt-easybus")({
   component: ImportTxtEasyBusPage,
 });
 
-const DIAS_TIPO_BASE = ["dias úteis", "Sábado", "Domingo"];
+const DIAS_TIPO_BASE = ["Dias úteis", "Sábado", "Domingo"];
 const NOVO_SENTINEL = "__novo__";
 
 type FileReport = {
@@ -56,7 +56,7 @@ function GerenciarDiasTipoDialog({
         <DialogContent>
           <DialogHeader><DialogTitle>Gerenciar dias tipo criados</DialogTitle></DialogHeader>
           <p className="text-xs text-muted-foreground -mt-2">
-            Só os dias tipo que você criou (feriados etc.) aparecem aqui — dias úteis, Sábado e Domingo
+            Só os dias tipo que você criou (feriados etc.) aparecem aqui — Dias úteis, Sábado e Domingo
             são fixos do sistema e não podem ser editados nem excluídos.
           </p>
           <div className="max-h-[50vh] overflow-auto space-y-2">
@@ -162,7 +162,7 @@ function ImportTxtEasyBusPage() {
     if (!diaTipoEfetivo) {
       toast.error(criandoNovo
         ? "Digite o nome do novo dia tipo (ex.: Feriado 7 de Setembro)."
-        : "Escolha o dia tipo (dias úteis / Sábado / Domingo / outro cadastrado) antes de importar.");
+        : "Escolha o dia tipo (Dias úteis / Sábado / Domingo / outro cadastrado) antes de importar.");
       if (ref.current) ref.current.value = "";
       if (folderRef.current) folderRef.current.value = "";
       return;

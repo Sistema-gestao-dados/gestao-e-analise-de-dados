@@ -42,7 +42,7 @@
 //   Deslocamen  -> Movimento: Deslocamento| Categoria: Deslocamento
 // (Categoria só tem 2 valores possíveis no cadastro.)
 //
-// "Tipo Op." (dias úteis/Sábado/Domingo, ou um dia tipo novo tipo feriado)
+// "Tipo Op." (Dias úteis/Sábado/Domingo, ou um dia tipo novo tipo feriado)
 // não existe neste layout — é escolhido pelo usuário na tela antes de
 // importar e aplicado a todas as linhas do arquivo.
 //

@@ -381,7 +381,7 @@ function DashOperacional() {
 
   // Regra: apenas viagens comerciais
   const porDiaTipo = useMemo(() => {
-    const ordem = ["dias úteis", "Sábado", "Domingo"];
+    const ordem = ["Dias úteis", "Sábado", "Domingo"];
     const m = new Map<string, number>();
     comerciais.forEach((v) => { if (v.tipo_operacao) m.set(v.tipo_operacao, (m.get(v.tipo_operacao) ?? 0) + 1); });
     return ordem.filter((d) => m.has(d)).map((dia) => ({ dia, qtd: m.get(dia)! }));
@@ -403,7 +403,7 @@ function DashOperacional() {
     [filtered, kmMaps],
   );
 
-  const ORDEM_DIA = ["dias úteis", "Sábado", "Domingo"];
+  const ORDEM_DIA = ["Dias úteis", "Sábado", "Domingo"];
 
   // "Serviço = Motorista": 1 unidade de serviço (DIR T1/T2/APROV ou TU) = 1
   // motorista/turno. Mesma contagem usada no KPI "Serviços" e no Resumo por
@@ -460,7 +460,7 @@ function DashOperacional() {
     const s = new Set<string>();
     const js = buildJornadas(filtered as unknown as ViagemLite[], linhas);
     js.forEach((j) => { if (j.acimaDe9h) s.add(versaoParaDia.get(j.versao) || "Sem dia tipo"); });
-    const ord = ["dias úteis", "Sábado", "Domingo"];
+    const ord = ["Dias úteis", "Sábado", "Domingo"];
     return Array.from(s).sort((a, b) => {
       const ia = ord.indexOf(a), ib = ord.indexOf(b);
       return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
@@ -502,7 +502,7 @@ function DashOperacional() {
       a.frota.add(u.vehicleKey);
       a.servicos += 1;
     }
-    const order = ["dias úteis", "Sábado", "Domingo"];
+    const order = ["Dias úteis", "Sábado", "Domingo"];
     return Array.from(m, ([dia, a]) => ({ dia, viagens: a.viagens, km: a.km, frota: a.frota.size, servicos: a.servicos }))
       .sort((a, b) => {
         const ia = order.indexOf(a.dia), ib = order.indexOf(b.dia);

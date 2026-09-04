@@ -22,7 +22,7 @@ export const Route = createFileRoute("/viagens")({
 
 const COLUMNS: ColumnDef[] = [
   { key: "linha", label: "Linha", required: true },
-  { key: "tipo_operacao", label: "Tipo Op.", type: "select", options: () => ["dias úteis", "Sábado", "Domingo"] },
+  { key: "tipo_operacao", label: "Tipo Op.", type: "select", options: () => ["Dias úteis", "Sábado", "Domingo"] },
   { key: "versao_programacao", label: "Versão" },
   { key: "tipo_servico", label: "Tipo Serv.", type: "select", options: () => ["TU", "DIR"], width: "100px" },
   { key: "servico", label: "Serviço", width: "90px" },
@@ -30,7 +30,7 @@ const COLUMNS: ColumnDef[] = [
   { key: "turno", label: "Turno", width: "80px" },
   { key: "origem", label: "Origem" },
   { key: "destino", label: "Destino" },
-  { key: "tipo_movimento", label: "Movimento", type: "select", options: () => ["Soltura", "Comercial", "Recolha", "Deslocamento", "Intra"] },
+  { key: "tipo_movimento", label: "Movimento", type: "select", options: () => ["Soltura", "Comercial", "Recolha", "Deslocamento"] },
   { key: "categoria_movimento", label: "Categoria", type: "select", options: () => ["Deslocamento", "Viagem"] },
   { key: "sentido", label: "Sentido", type: "select", options: () => ["Ida", "Volta"], width: "90px" },
   { key: "partida", label: "Partida", width: "90px" },
@@ -97,10 +97,10 @@ function ViagensPage() {
 
   const filters = useMemo(() => [
     { key: "linha", label: "Linha", options: () => (linhasQ.data ?? []).map((l) => l.linha).sort() },
-    { key: "tipo_operacao", label: "Tipo Op.", options: () => ["dias úteis", "Sábado", "Domingo"] },
+    { key: "tipo_operacao", label: "Tipo Op.", options: () => ["Dias úteis", "Sábado", "Domingo"] },
     { key: "tipo_servico", label: "Tipo Serv.", options: () => ["TU", "DIR"] },
     { key: "versao_programacao", label: "Versão", options: () => distintosQ.data?.versoes ?? [] },
-    { key: "tipo_movimento", label: "Movimento", options: () => ["Soltura", "Comercial", "Recolha", "Deslocamento", "Intra"] },
+    { key: "tipo_movimento", label: "Movimento", options: () => ["Soltura", "Comercial", "Recolha", "Deslocamento"] },
     { key: "categoria_movimento", label: "Categoria", options: () => ["Deslocamento", "Viagem"] },
     { key: "sentido", label: "Sentido", options: () => ["Ida", "Volta"] },
     { key: "arquivo", label: "Arquivo", options: () => distintosQ.data?.arquivos ?? [] },
