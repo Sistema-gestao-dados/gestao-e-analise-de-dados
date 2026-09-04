@@ -8,7 +8,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { fetchLinhas, fetchKm, fetchMulti, type Linha, type ParametroMulti } from "@/lib/data";
+import { fetchLinhas, fetchKm, fetchMulti, fetchEmpresaEstacao, type Linha, type ParametroMulti } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import {
   buildServiceUnits, aggregateByLinha,
@@ -31,6 +31,7 @@ import { PdfPreviewDialog, type PdfOrientation } from "@/components/pdf-preview-
 import { logAudit } from "@/lib/audit";
 import { buildJornadas, fmtDur } from "@/lib/jornada";
 import { usePersistentState } from "@/hooks/use-persistent-state";
+import { buildEmpresaOverrideMap, resolveEmpresaViagem, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
 
 function parseHHMM(s: string | null): number | null {
   if (!s) return null;
@@ -75,13 +76,14 @@ function passesExceptLinha(
   f: Filters,
   linhaMap: Map<string, Linha>,
   grupoMap: Map<string, string>,
+  empresaOverrideMap: EmpresaOverrideMap,
 ): boolean {
   if (f.dia !== "__all" && v.tipo_operacao !== f.dia) return false;
   if (f.versao !== "__all" && v.versao_programacao !== f.versao) return false;
   if (f.origem !== "__all" && v.origem !== f.origem) return false;
   if (f.destino !== "__all" && v.destino !== f.destino) return false;
   const l = linhaMap.get(v.linha);
-  if (f.empresa !== "__all" && l?.empresa !== f.empresa) return false;
+  if (f.empresa !== "__all" && resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) !== f.empresa) return false;
   if (f.unidade !== "__all" && l?.unidade !== f.unidade) return false;
   if (f.grupoOrdem !== "__all" && l?.ordem !== f.grupoOrdem) return false;
   if (f.categoria !== "__all" && l?.categoria !== f.categoria) return false;
@@ -102,11 +104,12 @@ function applyFilters(
   f: Filters,
   linhaMap: Map<string, Linha>,
   grupoMap: Map<string, string>,
+  empresaOverrideMap: EmpresaOverrideMap,
 ): ViagemLite[] {
   const linhaSet = new Set(f.linha);
   return viagens.filter((v) => {
     if (linhaSet.size > 0 && !linhaSet.has(v.linha)) return false;
-    return passesExceptLinha(v, f, linhaMap, grupoMap);
+    return passesExceptLinha(v, f, linhaMap, grupoMap, empresaOverrideMap);
   });
 }
 
@@ -117,8 +120,9 @@ function applyFiltersSemLinha(
   f: Filters,
   linhaMap: Map<string, Linha>,
   grupoMap: Map<string, string>,
+  empresaOverrideMap: EmpresaOverrideMap,
 ): ViagemLite[] {
-  return viagens.filter((v) => passesExceptLinha(v, f, linhaMap, grupoMap));
+  return viagens.filter((v) => passesExceptLinha(v, f, linhaMap, grupoMap, empresaOverrideMap));
 }
 
 function FilterSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: string[] }) {
@@ -176,7 +180,7 @@ function FilterBlock({
   );
 }
 
-function buildOpts(viagens: ViagemLite[], linhas: Linha[], multi: ParametroMulti[]) {
+function buildOpts(viagens: ViagemLite[], linhas: Linha[], multi: ParametroMulti[], empresaEstacao: { empresa: string }[] = []) {
   const set = (fn: (v: ViagemLite) => string | null | undefined) =>
     Array.from(new Set(viagens.map(fn).filter(Boolean) as string[])).sort();
   return {
@@ -186,7 +190,10 @@ function buildOpts(viagens: ViagemLite[], linhas: Linha[], multi: ParametroMulti
     origem: set((v) => v.origem),
     destino: set((v) => v.destino),
     faixa: Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0")),
-    empresa: Array.from(new Set(linhas.map((l) => l.empresa).filter(Boolean) as string[])).sort(),
+    empresa: Array.from(new Set([
+      ...linhas.map((l) => l.empresa).filter(Boolean) as string[],
+      ...empresaEstacao.map((e) => e.empresa).filter(Boolean),
+    ])).sort(),
     unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
     grupoOrdem: Array.from(new Set(linhas.map((l) => l.ordem).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
     categoria: Array.from(new Set(linhas.map((l) => l.categoria).filter(Boolean) as string[])).sort(),
@@ -228,6 +235,7 @@ export function ComparativoView() {
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
   const kmQ = useQuery({ queryKey: ["km"], queryFn: fetchKm });
   const multiQ = useQuery({ queryKey: ["multi"], queryFn: fetchMulti });
+  const empresaEstacaoQ = useQuery({ queryKey: ["empresa-estacao"], queryFn: fetchEmpresaEstacao });
   const ativosQ = useQuery({ queryKey: ["projetos-ativos"], queryFn: fetchProjetosAtivos });
 
   const viagensRaw = viagensQ.data ?? [];
@@ -251,8 +259,10 @@ export function ComparativoView() {
   const linhas = linhasQ.data ?? [];
   const km = kmQ.data ?? [];
   const multi = multiQ.data ?? [];
+  const empresaEstacao = empresaEstacaoQ.data ?? [];
 
   const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
+  const empresaOverrideMap = useMemo(() => buildEmpresaOverrideMap(empresaEstacao), [empresaEstacao]);
   const ordemMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l.ordem])), [linhas]);
   const kmMaps = useMemo(() => buildKmMaps(km), [km]);
   const grupoMap = useMemo(() => {
@@ -261,7 +271,7 @@ export function ComparativoView() {
     return m;
   }, [multi]);
 
-  const opts = useMemo(() => buildOpts(viagens, linhas, multi), [viagens, linhas, multi]);
+  const opts = useMemo(() => buildOpts(viagens, linhas, multi, empresaEstacao), [viagens, linhas, multi, empresaEstacao]);
   const kmFn = useMemo(() => (v: ViagemLite) => viagemKm(v, kmMaps), [kmMaps]);
 
   const [atualFilters, setAtualFilters] = useState<Filters>(EMPTY_FILTERS);
@@ -282,27 +292,27 @@ export function ComparativoView() {
   const atualRows = useMemo(() => {
     if (!applied) return [] as AggRow[];
     const base = baseFor(applied.a);
-    const f = applyFilters(base, applied.a, linhaMap, grupoMap);
-    const fOrigem = applyFiltersSemLinha(base, applied.a, linhaMap, grupoMap);
+    const f = applyFilters(base, applied.a, linhaMap, grupoMap, empresaOverrideMap);
+    const fOrigem = applyFiltersSemLinha(base, applied.a, linhaMap, grupoMap, empresaOverrideMap);
     return withHE(aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio), f, linhas);
-  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas]);
+  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap]);
 
   const propostaRows = useMemo(() => {
     if (!applied) return [] as AggRow[];
     const base = baseFor(applied.p);
-    const f = applyFilters(base, applied.p, linhaMap, grupoMap);
-    const fOrigem = applyFiltersSemLinha(base, applied.p, linhaMap, grupoMap);
+    const f = applyFilters(base, applied.p, linhaMap, grupoMap, empresaOverrideMap);
+    const fOrigem = applyFiltersSemLinha(base, applied.p, linhaMap, grupoMap, empresaOverrideMap);
     return withHE(aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio), f, linhas);
-  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas]);
+  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap]);
 
 
   const basesAplicadas = useMemo(() => {
     if (!applied) return { atual: [] as ViagemLite[], proposta: [] as ViagemLite[] };
     return {
-      atual: applyFilters(baseFor(applied.a), applied.a, linhaMap, grupoMap),
-      proposta: applyFilters(baseFor(applied.p), applied.p, linhaMap, grupoMap),
+      atual: applyFilters(baseFor(applied.a), applied.a, linhaMap, grupoMap, empresaOverrideMap),
+      proposta: applyFilters(baseFor(applied.p), applied.p, linhaMap, grupoMap, empresaOverrideMap),
     };
-  }, [baseFor, applied, linhaMap, grupoMap]);
+  }, [baseFor, applied, linhaMap, grupoMap, empresaOverrideMap]);
 
 
   const totalFrotaUnica = useMemo(() => ({

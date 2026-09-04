@@ -1,10 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useCallback } from "react";
-import { fetchLinhas, fetchKm, fetchMulti } from "@/lib/data";
+import { fetchLinhas, fetchKm, fetchMulti, fetchEmpresaEstacao } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
 import { buildServiceUnits, dominantLinha, vehicleOrigemLinha, type ViagemLite } from "@/lib/resumo";
+import { buildEmpresaOverrideMap, resolveEmpresaViagem, buildEmpresaPorServico } from "@/lib/empresa-estacao";
 import { buildJornadas } from "@/lib/jornada";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -189,6 +190,7 @@ function DashOperacional() {
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
   const kmQ = useQuery({ queryKey: ["km"], queryFn: fetchKm });
   const multiQ = useQuery({ queryKey: ["multi"], queryFn: fetchMulti });
+  const empresaEstacaoQ = useQuery({ queryKey: ["empresa-estacao"], queryFn: fetchEmpresaEstacao });
   const ativosQ = useQuery({ queryKey: ["projetos-ativos"], queryFn: fetchProjetosAtivos });
 
   const viagensRaw = viagensQ.data ?? [];
@@ -201,9 +203,11 @@ function DashOperacional() {
   const linhas = linhasQ.data ?? [];
   const km = kmQ.data ?? [];
   const multi = multiQ.data ?? [];
+  const empresaEstacao = empresaEstacaoQ.data ?? [];
 
   // Lookups
   const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
+  const empresaOverrideMap = useMemo(() => buildEmpresaOverrideMap(empresaEstacao), [empresaEstacao]);
 
   // KM maps: trecho exato ou reverso; trecho ausente vale zero e gera alerta.
   const kmMaps = useMemo(() => buildKmMaps(km), [km]);
@@ -254,7 +258,10 @@ function DashOperacional() {
       Array.from(new Set(viagens.map(fn).filter(Boolean) as string[])).sort();
     return {
       dia: set((v) => v.tipo_operacao),
-      empresa: Array.from(new Set(linhas.map((l) => l.empresa).filter(Boolean) as string[])).sort(),
+      empresa: Array.from(new Set([
+        ...linhas.map((l) => l.empresa).filter(Boolean) as string[],
+        ...empresaEstacao.map((e) => e.empresa).filter(Boolean),
+      ])).sort(),
       unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
       grupoOrdem: Array.from(new Set(linhas.map((l) => l.ordem).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
       linha: set((v) => v.linha),
@@ -268,7 +275,7 @@ function DashOperacional() {
       catMov: set((v) => v.categoria_movimento),
       turno: set((v) => v.turno),
     };
-  }, [viagens, linhas, multi]);
+  }, [viagens, linhas, multi, empresaEstacao]);
 
   const periodos = [
     { v: "__all", l: "Todo período" },
@@ -293,7 +300,7 @@ function DashOperacional() {
       if (fCatMov !== "__all" && v.categoria_movimento !== fCatMov) return false;
       if (fTurno !== "__all" && v.turno !== fTurno) return false;
       const l = linhaMap.get(v.linha);
-      if (fEmpresa !== "__all" && l?.empresa !== fEmpresa) return false;
+      if (fEmpresa !== "__all" && resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) !== fEmpresa) return false;
       if (fUnidade !== "__all" && l?.unidade !== fUnidade) return false;
       if (fGrupoOrdem !== "__all" && l?.ordem !== fGrupoOrdem) return false;
       if (fCategoria !== "__all" && l?.categoria !== fCategoria) return false;
@@ -309,7 +316,7 @@ function DashOperacional() {
       }
       return true;
     });
-  }, [viagens, fPeriodo, fDia, fLinha, fTipoServ, fSentido, fEmpresa, fUnidade, fGrupoOrdem, fCategoria, fGrupo, fFaixa, fOrigem, fDestino, fTipoMov, fCatMov, fTurno, linhaMap, grupoMap]);
+  }, [viagens, fPeriodo, fDia, fLinha, fTipoServ, fSentido, fEmpresa, fUnidade, fGrupoOrdem, fCategoria, fGrupo, fFaixa, fOrigem, fDestino, fTipoMov, fCatMov, fTurno, linhaMap, grupoMap, empresaOverrideMap]);
 
   // Base dos gráficos = respeita o filtro de Movimento (use o filtro acima para isolar Comercial / Soltura / Recolha).
   const comerciais = filtered;
@@ -334,6 +341,13 @@ function DashOperacional() {
     [filtered],
   );
 
+  // Empresa por veículo/serviço — resolve exceções de linha com mais de uma
+  // empresa (por estação de origem/destino) antes de cair na empresa fixa.
+  const empresaPorServico = useMemo(
+    () => buildEmpresaPorServico(filtered, linhaMap, empresaOverrideMap),
+    [filtered, linhaMap, empresaOverrideMap],
+  );
+
   // versão de programação -> dia tipo (cada versão pertence a um único dia tipo)
   const versaoParaDia = useMemo(() => {
     const m = new Map<string, string>();
@@ -348,7 +362,7 @@ function DashOperacional() {
   // KPIs
   const kpis = useMemo(() => {
     const linhasUnicas = new Set(comerciais.map((v) => v.linha));
-    const empresasUnicas = new Set(comerciais.map((v) => linhaMap.get(v.linha)?.empresa).filter(Boolean));
+    const empresasUnicas = new Set(comerciais.map((v) => resolveEmpresaViagem(v, linhaMap, empresaOverrideMap)).filter(Boolean));
     const veiculos = new Set(Array.from(units.values()).map((u) => u.vehicleKey));
     return {
       viagens: comerciais.length,
@@ -359,7 +373,7 @@ function DashOperacional() {
       kmTot: kmTotal,
       partidas: comerciais.filter((v) => (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida).length,
     };
-  }, [comerciais, linhaMap, kmTotal, units]);
+  }, [comerciais, linhaMap, kmTotal, units, empresaOverrideMap]);
 
   // Charts (Top 10)
   const TOP = 10;
@@ -373,11 +387,11 @@ function DashOperacional() {
   const comPorEmpresa = useMemo(() => {
     const m = new Map<string, number>();
     comerciais.forEach((v) => {
-      const e = linhaMap.get(v.linha)?.empresa || "Sem empresa";
+      const e = resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa";
       m.set(e, (m.get(e) ?? 0) + 1);
     });
     return Array.from(m, ([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, TOP);
-  }, [comerciais, linhaMap]);
+  }, [comerciais, linhaMap, empresaOverrideMap]);
 
   // Regra: apenas viagens comerciais
   const porDiaTipo = useMemo(() => {
@@ -435,13 +449,13 @@ function DashOperacional() {
   const frotaPorEmpresa = useMemo(() => {
     const porEmpresa = new Map<string, Set<string>>();
     for (const [vehicleKey, linha] of origemPorVeiculo) {
-      const empresa = linhaMap.get(linha)?.empresa || "Sem empresa";
+      const empresa = empresaPorServico.get(vehicleKey) || linhaMap.get(linha)?.empresa || "Sem empresa";
       if (!porEmpresa.has(empresa)) porEmpresa.set(empresa, new Set());
       porEmpresa.get(empresa)!.add(vehicleKey);
     }
     return Array.from(porEmpresa, ([name, set]) => ({ name, value: set.size }))
       .sort((a, b) => b.value - a.value).slice(0, TOP);
-  }, [origemPorVeiculo, linhaMap]);
+  }, [origemPorVeiculo, linhaMap, empresaPorServico]);
 
   // KM total por Dia Tipo (soma do km já calculado por unidade de serviço).
   const kmPorDiaTipo = useMemo(() => {

@@ -30,6 +30,13 @@ export type ParametroMulti = {
   tipo_dia: string;
 };
 
+export type LinhaEmpresaEstacao = {
+  id: string;
+  linha: string;
+  estacao: string;
+  empresa: string;
+};
+
 export type Importacao = {
   id: string;
   tipo: string;
@@ -40,7 +47,7 @@ export type Importacao = {
   created_at: string;
 };
 
-async function fetchAllRows<T>(table: "linhas" | "parametro_km" | "parametro_multilinha", order?: string): Promise<T[]> {
+async function fetchAllRows<T>(table: "linhas" | "parametro_km" | "parametro_multilinha" | "linha_empresa_estacao", order?: string): Promise<T[]> {
   const all: T[] = [];
   for (let from = 0; ; from += 1000) {
     let query = supabase.from(table).select("*").range(from, from + 999);
@@ -63,6 +70,10 @@ export async function fetchKm(): Promise<ParametroKm[]> {
 
 export async function fetchMulti(): Promise<ParametroMulti[]> {
   return fetchAllRows<ParametroMulti>("parametro_multilinha");
+}
+
+export async function fetchEmpresaEstacao(): Promise<LinhaEmpresaEstacao[]> {
+  return fetchAllRows<LinhaEmpresaEstacao>("linha_empresa_estacao");
 }
 
 export async function fetchImportacoes(): Promise<Importacao[]> {

@@ -1,13 +1,14 @@
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { fetchLinhas, fetchKm, fetchMulti } from "@/lib/data";
+import { fetchLinhas, fetchKm, fetchMulti, fetchEmpresaEstacao } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import {
-  buildServiceUnits, aggregateByGroup, aggregateByLinha, dominantLinha, detectTUIncompletos, validarConsistenciaFrota, vehicleOrigemLinha,
+  buildServiceUnits, aggregateByGroup, aggregateByLinha, dominantLinha, detectTUIncompletos, validarConsistenciaFrota,
   type ViagemLite, type AggRow, type ServiceUnit, type CriterioLinha,
 } from "@/lib/resumo";
+import { buildEmpresaOverrideMap, resolveEmpresaViagem, buildEmpresaPorServico } from "@/lib/empresa-estacao";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -73,6 +74,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
   const kmQ = useQuery({ queryKey: ["km"], queryFn: fetchKm });
   const multiQ = useQuery({ queryKey: ["multi"], queryFn: fetchMulti });
+  const empresaEstacaoQ = useQuery({ queryKey: ["empresa-estacao"], queryFn: fetchEmpresaEstacao });
   const ativosQ = useQuery({ queryKey: ["projetos-ativos"], queryFn: fetchProjetosAtivos });
 
   const viagensRaw = viagensQ.data ?? [];
@@ -85,8 +87,14 @@ export function ResumoView({ mode }: { mode: Mode }) {
   const linhas = linhasQ.data ?? [];
   const km = kmQ.data ?? [];
   const multi = multiQ.data ?? [];
+  const empresaEstacao = empresaEstacaoQ.data ?? [];
 
   const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
+  const empresaOverrideMap = useMemo(() => buildEmpresaOverrideMap(empresaEstacao), [empresaEstacao]);
+  const empresaPorServico = useMemo(
+    () => buildEmpresaPorServico(viagens, linhaMap, empresaOverrideMap),
+    [viagens, linhaMap, empresaOverrideMap],
+  );
   const ordemMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l.ordem])), [linhas]);
   const kmMaps = useMemo(() => buildKmMaps(km), [km]);
   const grupoMap = useMemo(() => {
@@ -127,13 +135,16 @@ export function ResumoView({ mode }: { mode: Mode }) {
       origem: set((v) => v.origem),
       destino: set((v) => v.destino),
       faixa: Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0")),
-      empresa: Array.from(new Set(linhas.map((l) => l.empresa).filter(Boolean) as string[])).sort(),
+      empresa: Array.from(new Set([
+        ...linhas.map((l) => l.empresa).filter(Boolean) as string[],
+        ...empresaEstacao.map((e) => e.empresa).filter(Boolean),
+      ])).sort(),
       unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
       grupoOrdem: Array.from(new Set(linhas.map((l) => l.ordem).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
       categoria: Array.from(new Set(linhas.map((l) => l.categoria).filter(Boolean) as string[])).sort(),
       grupo: Array.from(new Set(multi.map((m) => m.grupo_du).filter(Boolean))).sort(),
     };
-  }, [viagens, linhas, multi]);
+  }, [viagens, linhas, multi, empresaEstacao]);
 
   const linhaSet = useMemo(() => new Set(S.linha), [S.linha]);
 
@@ -147,7 +158,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
     if (S.origem !== "__all" && v.origem !== S.origem) return false;
     if (S.destino !== "__all" && v.destino !== S.destino) return false;
     const l = linhaMap.get(v.linha);
-    if (S.empresa !== "__all" && l?.empresa !== S.empresa) return false;
+    if (S.empresa !== "__all" && resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) !== S.empresa) return false;
     if (S.unidade !== "__all" && l?.unidade !== S.unidade) return false;
     if (S.grupoOrdem !== "__all" && l?.ordem !== S.grupoOrdem) return false;
     if (S.categoria !== "__all" && l?.categoria !== S.categoria) return false;
@@ -161,7 +172,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
       if (String(Math.floor(m / 60)).padStart(2, "0") !== S.faixa) return false;
     }
     return true;
-  }, [S.dia, S.versao, S.origem, S.destino, S.empresa, S.unidade, S.grupoOrdem, S.categoria, S.grupo, S.faixa, linhaMap, grupoMap]);
+  }, [S.dia, S.versao, S.origem, S.destino, S.empresa, S.unidade, S.grupoOrdem, S.categoria, S.grupo, S.faixa, linhaMap, grupoMap, empresaOverrideMap]);
 
   const filtered = useMemo(() => {
     if (!applied) return [] as ViagemLite[];
@@ -283,22 +294,14 @@ const totals = useMemo(() => {
   // Resumo por empresa (rodapé gerencial)
   const resumoEmpresa = useMemo(() => {
     const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
-    const origemVeiculo = new Map<string, string>();
-    for (const [vk, linha] of vehicleOrigemLinha(viagensParaOrigem, S.criterio)) origemVeiculo.set(vk, linha);
     for (const u of units.values()) {
-      const linhaServico = dominantLinha(u, S.criterio);
-      const empresaServico = linhaMap.get(linhaServico)?.empresa || "Sem empresa";
+      const empresaServico = empresaPorServico.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, S.criterio))?.empresa || "Sem empresa";
       if (!m.has(empresaServico)) m.set(empresaServico, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
       m.get(empresaServico)!.servicos.add(u.key);
-      const linhaFrota = origemVeiculo.get(u.vehicleKey);
-      if (linhaFrota) {
-        const empresaFrota = linhaMap.get(linhaFrota)?.empresa || "Sem empresa";
-        if (!m.has(empresaFrota)) m.set(empresaFrota, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
-        m.get(empresaFrota)!.veiculos.add(u.vehicleKey);
-      }
+      m.get(empresaServico)!.veiculos.add(u.vehicleKey);
     }
     for (const v of filtered) {
-      const e = linhaMap.get(v.linha)?.empresa || "Sem empresa";
+      const e = resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa";
       if (!m.has(e)) m.set(e, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
       if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(e)!.partidas += 1;
       m.get(e)!.km += kmFn(v);
@@ -306,7 +309,7 @@ const totals = useMemo(() => {
     return Array.from(m, ([empresa, x]) => ({
       empresa, partidas: x.partidas, km: x.km, servicos: x.servicos.size, frota: x.veiculos.size,
     })).sort((a, b) => a.empresa.localeCompare(b.empresa));
-  }, [units, filtered, linhaMap, kmFn, viagensParaOrigem, S.criterio]);
+  }, [units, filtered, linhaMap, kmFn, S.criterio, empresaPorServico, empresaOverrideMap]);
 
   const title = mode === "linha" ? "Resumo por Linha" : "Resumo Operacional";
   const firstColLabel = mode === "linha" ? "Linha" : (groupBy === "grupo" ? "Grupo de Linha" : "Projeto / Versão");

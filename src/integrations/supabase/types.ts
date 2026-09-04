@@ -260,6 +260,30 @@ export type Database = {
         }
         Relationships: []
       }
+      linha_empresa_estacao: {
+        Row: {
+          created_at: string
+          empresa: string
+          estacao: string
+          id: string
+          linha: string
+        }
+        Insert: {
+          created_at?: string
+          empresa: string
+          estacao: string
+          id?: string
+          linha: string
+        }
+        Update: {
+          created_at?: string
+          empresa?: string
+          estacao?: string
+          id?: string
+          linha?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           ativo: boolean

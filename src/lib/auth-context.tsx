@@ -116,6 +116,7 @@ export const MODULES: { key: string; label: string }[] = [
   { key: "linhas", label: "Cadastro de Linhas" },
   { key: "cadastro_km", label: "Cadastro de KM" },
   { key: "cadastro_grupos", label: "Grupos de Linhas" },
+  { key: "cadastro_empresa_estacao", label: "Empresa por Estação" },
   { key: "viagens", label: "Viagens" },
   { key: "importacao", label: "Importação CSV" },
   { key: "importacao_txt", label: "Importação TXT GPS" },

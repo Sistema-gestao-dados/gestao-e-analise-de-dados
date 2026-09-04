@@ -1,5 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, Bus, Upload, Search, History, Gauge, Layers, Route as RouteIcon, FileUp, Activity, Users, ShieldAlert, ClipboardList, ListChecks, GitCompare, Clock, BarChart3, FileText, Ticket } from "lucide-react";
+import { LayoutDashboard, Bus, Upload, Search, History, Gauge, Layers, Route as RouteIcon, FileUp, Activity, Users, ShieldAlert, ClipboardList, ListChecks, GitCompare, Clock, BarChart3, FileText, Ticket, Building2 } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -34,6 +34,7 @@ const groups: { label: string; items: Item[] }[] = [
       { title: "Linhas", url: "/linhas", icon: Bus, perm: "linhas" },
       { title: "KM", url: "/cadastro-km", icon: Gauge, perm: "cadastro_km" },
       { title: "Grupos de Linhas", url: "/cadastro-grupos", icon: Layers, perm: "cadastro_grupos" },
+      { title: "Empresa por Estação", url: "/cadastro-empresa-estacao", icon: Building2, perm: "cadastro_empresa_estacao" },
     ],
   },
   {
