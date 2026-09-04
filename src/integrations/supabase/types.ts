@@ -265,6 +265,7 @@ export type Database = {
           created_at: string
           empresa: string
           estacao: string
+          grupo: string | null
           id: string
           linha: string
         }
@@ -272,6 +273,7 @@ export type Database = {
           created_at?: string
           empresa: string
           estacao: string
+          grupo?: string | null
           id?: string
           linha: string
         }
@@ -279,6 +281,7 @@ export type Database = {
           created_at?: string
           empresa?: string
           estacao?: string
+          grupo?: string | null
           id?: string
           linha?: string
         }

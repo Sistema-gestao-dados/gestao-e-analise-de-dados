@@ -2,10 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { fetchLinhas } from "@/lib/data";
+import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import { buildJornadas, jornadaTotais, fmtDur, LIMITE_DIR_MIN, LIMITE_TU_MIN, type JornadaServico } from "@/lib/jornada";
+import { buildEmpresaOverrideMap, resolveGrupoViagem } from "@/lib/empresa-estacao";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -69,9 +70,11 @@ function JornadaPage() {
 
   const viagensQ = useQuery({ queryKey: ["viagens-all"], queryFn: fetchAllViagens });
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
+  const empresaEstacaoQ = useQuery({ queryKey: ["empresa-estacao"], queryFn: fetchEmpresaEstacao });
   const ativosQ = useQuery({ queryKey: ["projetos-ativos"], queryFn: fetchProjetosAtivos });
   const viagensRaw = viagensQ.data ?? [];
   const linhas = linhasQ.data ?? [];
+  const empresaEstacao = empresaEstacaoQ.data ?? [];
   const ativos = ativosQ.data ?? [];
   const viagens = useMemo(
     () => (somenteAtivos ? filterViagensAtivas(viagensRaw, ativos) : viagensRaw),
@@ -79,14 +82,18 @@ function JornadaPage() {
   );
 
   const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
+  const empresaOverrideMap = useMemo(() => buildEmpresaOverrideMap(empresaEstacao), [empresaEstacao]);
 
   const opts = useMemo(() => ({
     dia: Array.from(new Set(viagens.map((v) => v.tipo_operacao).filter(Boolean) as string[])).sort(),
     versao: Array.from(new Set(viagens.map((v) => v.versao_programacao).filter(Boolean) as string[])).sort(),
     linha: Array.from(new Set(viagens.map((v) => v.linha).filter(Boolean))).sort(),
     unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
-    grupoOrdem: Array.from(new Set(linhas.map((l) => l.ordem).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
-  }), [viagens, linhas]);
+    grupoOrdem: Array.from(new Set([
+      ...linhas.map((l) => l.ordem).filter(Boolean) as string[],
+      ...empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[],
+    ])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
+  }), [viagens, linhas, empresaEstacao]);
 
   const filtered = useMemo(() => {
     if (!applied) return [];
@@ -96,10 +103,10 @@ function JornadaPage() {
       if (applied.versao !== "__all" && v.versao_programacao !== applied.versao) return false;
       if (set.size && !set.has(v.linha)) return false;
       if (applied.unidade !== "__all" && linhaMap.get(v.linha)?.unidade !== applied.unidade) return false;
-      if (applied.grupoOrdem !== "__all" && linhaMap.get(v.linha)?.ordem !== applied.grupoOrdem) return false;
+      if (applied.grupoOrdem !== "__all" && resolveGrupoViagem(v, linhaMap, empresaOverrideMap) !== applied.grupoOrdem) return false;
       return true;
     });
-  }, [viagens, applied, linhaMap]);
+  }, [viagens, applied, linhaMap, empresaOverrideMap]);
 
   const jornadas = useMemo(() => {
     if (!applied) return [];

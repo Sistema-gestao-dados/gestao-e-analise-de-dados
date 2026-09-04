@@ -35,6 +35,7 @@ export type LinhaEmpresaEstacao = {
   linha: string;
   estacao: string;
   empresa: string;
+  grupo: string | null;
 };
 
 export type Importacao = {

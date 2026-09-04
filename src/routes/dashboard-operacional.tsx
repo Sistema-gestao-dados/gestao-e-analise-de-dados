@@ -5,7 +5,7 @@ import { fetchLinhas, fetchKm, fetchMulti, fetchEmpresaEstacao } from "@/lib/dat
 import { fetchAllViagens } from "@/lib/viagens";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
 import { buildServiceUnits, dominantLinha, vehicleOrigemLinha, type ViagemLite } from "@/lib/resumo";
-import { buildEmpresaOverrideMap, resolveEmpresaViagem, buildEmpresaPorServico } from "@/lib/empresa-estacao";
+import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, buildEmpresaPorServico } from "@/lib/empresa-estacao";
 import { buildJornadas } from "@/lib/jornada";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -263,7 +263,10 @@ function DashOperacional() {
         ...empresaEstacao.map((e) => e.empresa).filter(Boolean),
       ])).sort(),
       unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
-      grupoOrdem: Array.from(new Set(linhas.map((l) => l.ordem).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
+      grupoOrdem: Array.from(new Set([
+        ...linhas.map((l) => l.ordem).filter(Boolean) as string[],
+        ...empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[],
+      ])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
       linha: set((v) => v.linha),
       categoria: Array.from(new Set(linhas.map((l) => l.categoria).filter(Boolean) as string[])).sort(),
       grupo: Array.from(new Set(multi.map((m) => m.grupo_du).filter(Boolean))).sort(),
@@ -302,7 +305,7 @@ function DashOperacional() {
       const l = linhaMap.get(v.linha);
       if (fEmpresa !== "__all" && resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) !== fEmpresa) return false;
       if (fUnidade !== "__all" && l?.unidade !== fUnidade) return false;
-      if (fGrupoOrdem !== "__all" && l?.ordem !== fGrupoOrdem) return false;
+      if (fGrupoOrdem !== "__all" && resolveGrupoViagem(v, linhaMap, empresaOverrideMap) !== fGrupoOrdem) return false;
       if (fCategoria !== "__all" && l?.categoria !== fCategoria) return false;
       if (fGrupo !== "__all") {
         const g = grupoMap.get(`${v.linha}|${v.tipo_operacao ?? ""}`.toLowerCase());

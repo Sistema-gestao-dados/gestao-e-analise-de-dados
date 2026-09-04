@@ -31,7 +31,7 @@ import { PdfPreviewDialog, type PdfOrientation } from "@/components/pdf-preview-
 import { logAudit } from "@/lib/audit";
 import { buildJornadas, fmtDur } from "@/lib/jornada";
 import { usePersistentState } from "@/hooks/use-persistent-state";
-import { buildEmpresaOverrideMap, resolveEmpresaViagem, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
+import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
 
 function parseHHMM(s: string | null): number | null {
   if (!s) return null;
@@ -85,7 +85,7 @@ function passesExceptLinha(
   const l = linhaMap.get(v.linha);
   if (f.empresa !== "__all" && resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) !== f.empresa) return false;
   if (f.unidade !== "__all" && l?.unidade !== f.unidade) return false;
-  if (f.grupoOrdem !== "__all" && l?.ordem !== f.grupoOrdem) return false;
+  if (f.grupoOrdem !== "__all" && resolveGrupoViagem(v, linhaMap, empresaOverrideMap) !== f.grupoOrdem) return false;
   if (f.categoria !== "__all" && l?.categoria !== f.categoria) return false;
   if (f.grupo !== "__all") {
     const g = grupoMap.get(`${v.linha}|${v.tipo_operacao ?? ""}`.toLowerCase());
@@ -180,7 +180,7 @@ function FilterBlock({
   );
 }
 
-function buildOpts(viagens: ViagemLite[], linhas: Linha[], multi: ParametroMulti[], empresaEstacao: { empresa: string }[] = []) {
+function buildOpts(viagens: ViagemLite[], linhas: Linha[], multi: ParametroMulti[], empresaEstacao: { empresa: string; grupo: string | null }[] = []) {
   const set = (fn: (v: ViagemLite) => string | null | undefined) =>
     Array.from(new Set(viagens.map(fn).filter(Boolean) as string[])).sort();
   return {
@@ -195,7 +195,10 @@ function buildOpts(viagens: ViagemLite[], linhas: Linha[], multi: ParametroMulti
       ...empresaEstacao.map((e) => e.empresa).filter(Boolean),
     ])).sort(),
     unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
-    grupoOrdem: Array.from(new Set(linhas.map((l) => l.ordem).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
+    grupoOrdem: Array.from(new Set([
+      ...linhas.map((l) => l.ordem).filter(Boolean) as string[],
+      ...empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[],
+    ])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
     categoria: Array.from(new Set(linhas.map((l) => l.categoria).filter(Boolean) as string[])).sort(),
     grupo: Array.from(new Set(multi.map((m) => m.grupo_du).filter(Boolean))).sort(),
   };

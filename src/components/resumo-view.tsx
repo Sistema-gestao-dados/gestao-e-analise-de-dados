@@ -8,7 +8,7 @@ import {
   buildServiceUnits, aggregateByGroup, aggregateByLinha, dominantLinha, detectTUIncompletos, validarConsistenciaFrota,
   type ViagemLite, type AggRow, type ServiceUnit, type CriterioLinha,
 } from "@/lib/resumo";
-import { buildEmpresaOverrideMap, resolveEmpresaViagem, buildEmpresaPorServico } from "@/lib/empresa-estacao";
+import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, buildEmpresaPorServico } from "@/lib/empresa-estacao";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -140,7 +140,10 @@ export function ResumoView({ mode }: { mode: Mode }) {
         ...empresaEstacao.map((e) => e.empresa).filter(Boolean),
       ])).sort(),
       unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
-      grupoOrdem: Array.from(new Set(linhas.map((l) => l.ordem).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
+      grupoOrdem: Array.from(new Set([
+        ...linhas.map((l) => l.ordem).filter(Boolean) as string[],
+        ...empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[],
+      ])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
       categoria: Array.from(new Set(linhas.map((l) => l.categoria).filter(Boolean) as string[])).sort(),
       grupo: Array.from(new Set(multi.map((m) => m.grupo_du).filter(Boolean))).sort(),
     };
@@ -160,7 +163,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
     const l = linhaMap.get(v.linha);
     if (S.empresa !== "__all" && resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) !== S.empresa) return false;
     if (S.unidade !== "__all" && l?.unidade !== S.unidade) return false;
-    if (S.grupoOrdem !== "__all" && l?.ordem !== S.grupoOrdem) return false;
+    if (S.grupoOrdem !== "__all" && resolveGrupoViagem(v, linhaMap, empresaOverrideMap) !== S.grupoOrdem) return false;
     if (S.categoria !== "__all" && l?.categoria !== S.categoria) return false;
     if (S.grupo !== "__all") {
       const g = grupoMap.get(`${v.linha}|${v.tipo_operacao ?? ""}`.toLowerCase());
