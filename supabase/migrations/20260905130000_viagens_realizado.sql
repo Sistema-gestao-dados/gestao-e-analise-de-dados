@@ -31,10 +31,9 @@ CREATE TABLE public.viagens_realizado (
   passageiros INTEGER,
   motivo TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  dedupe_key TEXT GENERATED ALWAYS AS (
-    data::text || '|' || coalesce(empresa,'') || '|' || linha || '|' ||
-    coalesce(numero,'') || '|' || coalesce(sentido,'')
-  ) STORED
+  -- Calculada no código (não gerada pelo banco) para evitar a restrição de
+  -- "immutability" do Postgres em funções de data/hora.
+  dedupe_key TEXT NOT NULL
 );
 
 CREATE UNIQUE INDEX viagens_realizado_dedupe_key_uidx ON public.viagens_realizado (dedupe_key);

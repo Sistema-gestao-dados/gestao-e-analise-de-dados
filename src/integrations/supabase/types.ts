@@ -265,7 +265,7 @@ export type Database = {
           arquivo: string | null
           created_at: string
           data: string
-          dedupe_key: string | null
+          dedupe_key: string
           dif_chegada: number | null
           dif_partida: number | null
           dif_tempo_viagem: number | null
@@ -295,6 +295,7 @@ export type Database = {
           arquivo?: string | null
           created_at?: string
           data: string
+          dedupe_key: string
           dif_chegada?: number | null
           dif_partida?: number | null
           dif_tempo_viagem?: number | null
@@ -324,6 +325,7 @@ export type Database = {
           arquivo?: string | null
           created_at?: string
           data?: string
+          dedupe_key?: string
           dif_chegada?: number | null
           dif_partida?: number | null
           dif_tempo_viagem?: number | null

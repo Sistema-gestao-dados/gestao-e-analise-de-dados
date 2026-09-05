@@ -41,8 +41,14 @@ export async function insertRealizado(
   let duplicadas = 0;
   const errors: string[] = [];
   const chunkSize = 500;
-  for (let i = 0; i < rows.length; i += chunkSize) {
-    const chunk = rows.slice(i, i + chunkSize);
+  // dedupe_key é calculada aqui (não pelo banco) — mesma chave natural de
+  // antes: data + empresa + linha + número + sentido.
+  const payload = rows.map((r) => ({
+    ...r,
+    dedupe_key: `${r.data}|${r.empresa ?? ""}|${r.linha}|${r.numero ?? ""}|${r.sentido ?? ""}`,
+  }));
+  for (let i = 0; i < payload.length; i += chunkSize) {
+    const chunk = payload.slice(i, i + chunkSize);
     const { data, error } = await (supabase as any)
       .from("viagens_realizado")
       .upsert(chunk, { onConflict: "dedupe_key", ignoreDuplicates: true })
