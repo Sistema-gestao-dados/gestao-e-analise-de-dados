@@ -260,6 +260,97 @@ export type Database = {
         }
         Relationships: []
       }
+      viagens_realizado: {
+        Row: {
+          arquivo: string | null
+          created_at: string
+          data: string
+          dedupe_key: string | null
+          dif_chegada: number | null
+          dif_partida: number | null
+          dif_tempo_viagem: number | null
+          empresa: string | null
+          id: string
+          linha: string
+          linha_raw: string | null
+          motivo: string | null
+          motorista: string | null
+          numero: string | null
+          passageiros: number | null
+          prefixo_raw: string | null
+          prev_chegada: string | null
+          prev_partida: string | null
+          prev_tempo_viagem: number | null
+          real_chegada: string | null
+          real_partida: string | null
+          real_tempo_viagem: number | null
+          sentido: string | null
+          servico: string | null
+          terminal_final: string | null
+          terminal_inicial: string | null
+          turno: string | null
+          veiculo: string | null
+        }
+        Insert: {
+          arquivo?: string | null
+          created_at?: string
+          data: string
+          dif_chegada?: number | null
+          dif_partida?: number | null
+          dif_tempo_viagem?: number | null
+          empresa?: string | null
+          id?: string
+          linha: string
+          linha_raw?: string | null
+          motivo?: string | null
+          motorista?: string | null
+          numero?: string | null
+          passageiros?: number | null
+          prefixo_raw?: string | null
+          prev_chegada?: string | null
+          prev_partida?: string | null
+          prev_tempo_viagem?: number | null
+          real_chegada?: string | null
+          real_partida?: string | null
+          real_tempo_viagem?: number | null
+          sentido?: string | null
+          servico?: string | null
+          terminal_final?: string | null
+          terminal_inicial?: string | null
+          turno?: string | null
+          veiculo?: string | null
+        }
+        Update: {
+          arquivo?: string | null
+          created_at?: string
+          data?: string
+          dif_chegada?: number | null
+          dif_partida?: number | null
+          dif_tempo_viagem?: number | null
+          empresa?: string | null
+          id?: string
+          linha?: string
+          linha_raw?: string | null
+          motivo?: string | null
+          motorista?: string | null
+          numero?: string | null
+          passageiros?: number | null
+          prefixo_raw?: string | null
+          prev_chegada?: string | null
+          prev_partida?: string | null
+          prev_tempo_viagem?: number | null
+          real_chegada?: string | null
+          real_partida?: string | null
+          real_tempo_viagem?: number | null
+          sentido?: string | null
+          servico?: string | null
+          terminal_final?: string | null
+          terminal_inicial?: string | null
+          turno?: string | null
+          veiculo?: string | null
+        }
+        Relationships: []
+      }
       linha_empresa_estacao: {
         Row: {
           created_at: string
