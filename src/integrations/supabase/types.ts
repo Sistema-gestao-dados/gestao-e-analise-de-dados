@@ -432,6 +432,7 @@ export type Database = {
         Row: {
           ativo: boolean
           created_at: string
+          modulos_restritos: boolean
           nome: string
           updated_at: string
           user_id: string
@@ -439,6 +440,7 @@ export type Database = {
         Insert: {
           ativo?: boolean
           created_at?: string
+          modulos_restritos?: boolean
           nome?: string
           updated_at?: string
           user_id: string
@@ -446,10 +448,17 @@ export type Database = {
         Update: {
           ativo?: boolean
           created_at?: string
+          modulos_restritos?: boolean
           nome?: string
           updated_at?: string
           user_id?: string
         }
+        Relationships: []
+      }
+      user_module_permissions: {
+        Row: { user_id: string; modulo: string; created_at: string }
+        Insert: { user_id: string; modulo: string; created_at?: string }
+        Update: { user_id?: string; modulo?: string; created_at?: string }
         Relationships: []
       }
       projeto_ativo: {

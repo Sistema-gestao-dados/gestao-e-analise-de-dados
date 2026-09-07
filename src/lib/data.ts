@@ -82,3 +82,10 @@ export async function fetchImportacoes(): Promise<Importacao[]> {
   if (error) throw error;
   return (data ?? []) as Importacao[];
 }
+
+/** Todas as importações com erro (sem limite de 50), pra auditoria pente-fino. */
+export async function fetchImportacoesComErro(): Promise<Importacao[]> {
+  const { data, error } = await supabase.from("importacoes").select("*").gt("registros_erro", 0).order("created_at", { ascending: false }).limit(500);
+  if (error) throw error;
+  return (data ?? []) as Importacao[];
+}

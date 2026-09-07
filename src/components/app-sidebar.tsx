@@ -1,5 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, Bus, Upload, Search, History, Gauge, Layers, Route as RouteIcon, FileUp, Activity, Users, ShieldAlert, ClipboardList, ListChecks, GitCompare, Clock, BarChart3, FileText, Ticket, Building2, FilePlus2, TrendingUp, ChevronDown } from "lucide-react";
+import { LayoutDashboard, Bus, Upload, Search, History, Gauge, Layers, Route as RouteIcon, FileUp, Activity, Users, ShieldAlert, ClipboardList, ListChecks, GitCompare, Clock, BarChart3, FileText, Ticket, Building2, FilePlus2, TrendingUp, ChevronDown, SearchCheck } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -17,7 +17,7 @@ import { useAuth } from "@/lib/auth-context";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 
 type Item = { title: string; url: string; icon: any; perm: string };
-const groups: { label: string; items: Item[] }[] = [
+export const groups: { label: string; items: Item[] }[] = [
   {
     label: "Operação",
     items: [
@@ -78,6 +78,7 @@ const groups: { label: string; items: Item[] }[] = [
     label: "Administração",
     items: [
       { title: "Auditoria", url: "/auditoria", icon: ShieldAlert, perm: "auditoria" },
+      { title: "Verificação de Integridade", url: "/verificacao-integridade", icon: SearchCheck, perm: "verificacao_integridade" },
       { title: "Usuários", url: "/usuarios", icon: Users, perm: "usuarios" },
     ],
   },

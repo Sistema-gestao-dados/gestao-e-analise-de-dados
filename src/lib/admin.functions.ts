@@ -5,6 +5,7 @@ import { z } from "zod";
 const emailSchema = z.string().trim().toLowerCase().email().max(200);
 const passwordSchema = z.string().min(6).max(72);
 const nomeSchema = z.string().trim().min(1).max(120);
+const modulosSchema = z.array(z.string().min(1).max(80)).max(200);
 
 // PUBLIC: report whether the very first admin still needs to be created.
 export const bootstrapNeeded = createServerFn({ method: "GET" }).handler(async () => {
@@ -61,9 +62,10 @@ export const adminListUsers = createServerFn({ method: "GET" })
     if (list.error) throw new Error(list.error.message);
     const users = list.data.users ?? [];
     const ids = users.map((u) => u.id);
-    const [profRes, rolesRes] = await Promise.all([
-      supabaseAdmin.from("profiles").select("user_id, nome, ativo").in("user_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
+    const [profRes, rolesRes, permsRes] = await Promise.all([
+      supabaseAdmin.from("profiles").select("user_id, nome, ativo, modulos_restritos").in("user_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
       supabaseAdmin.from("user_roles").select("user_id, role").in("user_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
+      supabaseAdmin.from("user_module_permissions").select("user_id, modulo").in("user_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
     ]);
     const profs = new Map((profRes.data ?? []).map((p: any) => [p.user_id, p]));
     const roleMap = new Map<string, Set<string>>();
@@ -71,6 +73,12 @@ export const adminListUsers = createServerFn({ method: "GET" })
       const s = roleMap.get(r.user_id) ?? new Set();
       s.add(r.role);
       roleMap.set(r.user_id, s);
+    }
+    const permsMap = new Map<string, string[]>();
+    for (const p of (permsRes.data ?? []) as any[]) {
+      const arr = permsMap.get(p.user_id) ?? [];
+      arr.push(p.modulo);
+      permsMap.set(p.user_id, arr);
     }
     return users.map((u) => {
       const p = profs.get(u.id) as any;
@@ -81,6 +89,8 @@ export const adminListUsers = createServerFn({ method: "GET" })
         nome: p?.nome ?? "",
         ativo: p?.ativo ?? true,
         isAdmin: roles.has("admin"),
+        modulosRestritos: p?.modulos_restritos ?? false,
+        modulos: permsMap.get(u.id) ?? [],
         created_at: u.created_at,
       };
     });
@@ -94,6 +104,8 @@ export const adminCreateUser = createServerFn({ method: "POST" })
       password: passwordSchema,
       nome: nomeSchema,
       isAdmin: z.boolean().default(false),
+      modulosRestritos: z.boolean().default(false),
+      modulos: modulosSchema.default([]),
     }).parse(raw),
   )
   .handler(async ({ data, context }) => {
@@ -107,9 +119,12 @@ export const adminCreateUser = createServerFn({ method: "POST" })
     });
     if (created.error) throw new Error(created.error.message);
     const uid = created.data.user!.id;
-    await supabaseAdmin.from("profiles").upsert({ user_id: uid, nome: data.nome, ativo: true });
+    await supabaseAdmin.from("profiles").upsert({ user_id: uid, nome: data.nome, ativo: true, modulos_restritos: data.modulosRestritos });
     if (data.isAdmin) {
       await supabaseAdmin.from("user_roles").insert({ user_id: uid, role: "admin" });
+    }
+    if (data.modulos.length) {
+      await supabaseAdmin.from("user_module_permissions").insert(data.modulos.map((modulo) => ({ user_id: uid, modulo })));
     }
     return { ok: true, userId: uid };
   });
@@ -123,16 +138,27 @@ export const adminUpdateUser = createServerFn({ method: "POST" })
       ativo: z.boolean().optional(),
       isAdmin: z.boolean().optional(),
       password: passwordSchema.optional(),
+      modulosRestritos: z.boolean().optional(),
+      modulos: modulosSchema.optional(),
     }).parse(raw),
   )
   .handler(async ({ data, context }) => {
     await assertCallerAdmin(context.supabase, context.userId);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    if (data.nome !== undefined || data.ativo !== undefined) {
-      const upd: { nome?: string; ativo?: boolean } = {};
+    if (data.nome !== undefined || data.ativo !== undefined || data.modulosRestritos !== undefined) {
+      const upd: { nome?: string; ativo?: boolean; modulos_restritos?: boolean } = {};
       if (data.nome !== undefined) upd.nome = data.nome;
       if (data.ativo !== undefined) upd.ativo = data.ativo;
+      if (data.modulosRestritos !== undefined) upd.modulos_restritos = data.modulosRestritos;
       await supabaseAdmin.from("profiles").update(upd).eq("user_id", data.userId);
+    }
+    if (data.modulos !== undefined) {
+      // Substitui a lista inteira (apaga tudo e insere de novo) — mais simples
+      // e seguro que tentar calcular o diff, e a lista nunca é grande.
+      await supabaseAdmin.from("user_module_permissions").delete().eq("user_id", data.userId);
+      if (data.modulos.length) {
+        await supabaseAdmin.from("user_module_permissions").insert(data.modulos.map((modulo) => ({ user_id: data.userId, modulo })));
+      }
     }
     if (data.password) {
       const res = await supabaseAdmin.auth.admin.updateUserById(data.userId, { password: data.password });

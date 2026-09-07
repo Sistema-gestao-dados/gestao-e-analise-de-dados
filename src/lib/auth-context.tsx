@@ -6,6 +6,8 @@ export type AppUser = {
   email: string;
   nome: string;
   isAdmin: boolean;
+  modulosRestritos: boolean;
+  modulosPermitidos: Set<string>;
 };
 
 type AuthCtx = {
@@ -21,20 +23,24 @@ type AuthCtx = {
 const Ctx = createContext<AuthCtx | null>(null);
 
 // Modules that require admin role
-const ADMIN_ONLY = new Set(["usuarios", "auditoria"]);
+const ADMIN_ONLY = new Set(["usuarios", "auditoria", "verificacao_integridade"]);
 
 async function fetchUserContext(userId: string, email: string): Promise<AppUser> {
-  const [profileRes, rolesRes] = await Promise.all([
-    supabase.from("profiles").select("nome").eq("user_id", userId).maybeSingle(),
+  const [profileRes, rolesRes, permsRes] = await Promise.all([
+    supabase.from("profiles").select("nome, modulos_restritos").eq("user_id", userId).maybeSingle(),
     supabase.from("user_roles").select("role").eq("user_id", userId),
+    supabase.from("user_module_permissions").select("modulo").eq("user_id", userId),
   ]);
-  const profile = profileRes.data as { nome?: string } | null;
+  const profile = profileRes.data as { nome?: string; modulos_restritos?: boolean } | null;
   const roles = (rolesRes.data ?? []) as { role: string }[];
+  const perms = (permsRes.data ?? []) as { modulo: string }[];
   return {
     id: userId,
     email,
     nome: profile?.nome?.trim() || email.split("@")[0],
     isAdmin: roles.some((r) => r.role === "admin"),
+    modulosRestritos: profile?.modulos_restritos ?? false,
+    modulosPermitidos: new Set(perms.map((p) => p.modulo)),
   };
 }
 
@@ -53,7 +59,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const ctx = await fetchUserContext(s.user.id, s.user.email ?? "");
       setUser(ctx);
     } catch {
-      setUser({ id: s.user.id, email: s.user.email ?? "", nome: s.user.email?.split("@")[0] ?? "", isAdmin: false });
+      setUser({ id: s.user.id, email: s.user.email ?? "", nome: s.user.email?.split("@")[0] ?? "", isAdmin: false, modulosRestritos: false, modulosPermitidos: new Set() });
     }
   }, []);
 
@@ -90,7 +96,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const can: AuthCtx["can"] = (modulo) => {
     if (!user) return false;
     if (ADMIN_ONLY.has(modulo)) return isAdmin;
-    return true;
+    if (isAdmin) return true;
+    if (!user.modulosRestritos) return true;
+    return user.modulosPermitidos.has(modulo);
   };
 
   return (
@@ -105,33 +113,6 @@ export function useAuth() {
   if (!v) throw new Error("useAuth must be used within AuthProvider");
   return v;
 }
-
-export const MODULES: { key: string; label: string }[] = [
-  { key: "dashboard_operacional", label: "Dashboard Operacional" },
-  { key: "resumo_operacional", label: "Resumo Operacional" },
-  { key: "resumo_linha", label: "Resumo por Linha" },
-  { key: "relatorio_comparativo", label: "Relatório Comparativo" },
-  { key: "jornada", label: "Jornada de Trabalho" },
-  { key: "realizado", label: "Realizado (Previsto x Real)" },
-  { key: "pesquisa", label: "Pesquisa" },
-  { key: "linhas", label: "Cadastro de Linhas" },
-  { key: "cadastro_km", label: "Cadastro de KM" },
-  { key: "cadastro_grupos", label: "Grupos de Linhas" },
-  { key: "cadastro_empresa_estacao", label: "Empresa por Estação" },
-  { key: "viagens", label: "Viagens" },
-  { key: "importacao", label: "Importação CSV" },
-  { key: "importacao_txt", label: "Importação TXT GPS" },
-  { key: "importacao_txt_easybus", label: "Importação TXT EasyBus" },
-  { key: "importacao_realizado", label: "Importação Realizado (Cittati)" },
-  { key: "historico_reprogramacao", label: "Histórico de Reprogramação" },
-  { key: "importacao_historico_reprogramacao", label: "Importação Reprogramação" },
-  { key: "historico", label: "Histórico" },
-  { key: "bi_cittati_conversor", label: "Conversor BI Cittati → TXT" },
-  { key: "relatorio_viagens_conversor", label: "Conversor Relat. Viagens → TXT" },
-  { key: "passagem_trecho_conversor", label: "Conversor Passagem Trecho → TXT" },
-  { key: "auditoria", label: "Auditoria (admin)" },
-  { key: "usuarios", label: "Usuários (admin)" },
-];
 
 // Kept for signature compatibility with usuarios.tsx (unused by new auth)
 export async function sha256(text: string): Promise<string> {

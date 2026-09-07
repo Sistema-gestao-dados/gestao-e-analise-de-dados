@@ -9,7 +9,7 @@ import {
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { Moon, Sun, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
@@ -53,7 +53,7 @@ function ClientDate() {
 
 import appCss from "../styles.css?url";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
-import { AppSidebar } from "@/components/app-sidebar";
+import { AppSidebar, groups } from "@/components/app-sidebar";
 import { Toaster } from "@/components/ui/sonner";
 
 function NotFoundComponent() {
@@ -202,7 +202,7 @@ function RefreshAllButton() {
 }
 
 function AuthGate() {
-  const { user, loading } = useAuth();
+  const { user, loading, can } = useAuth();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const search = useRouterState({ select: (s) => s.location.searchStr });
   const navigate = useNavigate();
@@ -213,8 +213,29 @@ function AuthGate() {
       navigate({ to: "/login", search: { next }, replace: true });
     }
   }, [user, loading, pathname, search, navigate]);
+
+  // Bloqueio por módulo também na rota (não só escondendo do menu) — pega a
+  // permissão do item de menu cujo url mais se aproxima do caminho atual.
+  const requiredPerm = useMemo(() => {
+    let best: { url: string; perm: string } | null = null;
+    for (const g of groups) {
+      for (const item of g.items) {
+        if (pathname === item.url || pathname.startsWith(item.url + "/")) {
+          if (!best || item.url.length > best.url.length) best = item;
+        }
+      }
+    }
+    return best?.perm ?? null;
+  }, [pathname]);
+  const allowed = !requiredPerm || can(requiredPerm);
+  useEffect(() => {
+    if (loading || !user) return;
+    if (!allowed) navigate({ to: "/", replace: true });
+  }, [loading, user, allowed, navigate]);
+
   if (pathname === "/login") return <Outlet />;
   if (loading || !user) return null;
+  if (!allowed) return null;
   return (
     <SidebarProvider>
       <div className="min-h-screen flex w-full bg-background">

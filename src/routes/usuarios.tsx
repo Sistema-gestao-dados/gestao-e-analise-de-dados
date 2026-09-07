@@ -11,6 +11,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
+import { MODULE_GROUPS, ALL_MODULE_KEYS } from "@/lib/modules";
 import { Plus, Pencil, Trash2, ShieldCheck, ShieldOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
@@ -20,7 +22,7 @@ export const Route = createFileRoute("/usuarios")({
   component: UsuariosPage,
 });
 
-type ListItem = { id: string; email: string; nome: string; ativo: boolean; isAdmin: boolean; created_at: string };
+type ListItem = { id: string; email: string; nome: string; ativo: boolean; isAdmin: boolean; modulosRestritos: boolean; modulos: string[]; created_at: string };
 type FormState = {
   id?: string;
   email: string;
@@ -28,8 +30,10 @@ type FormState = {
   password: string;
   isAdmin: boolean;
   ativo: boolean;
+  modulosRestritos: boolean;
+  modulos: string[];
 };
-const empty: FormState = { email: "", nome: "", password: "", isAdmin: false, ativo: true };
+const empty: FormState = { email: "", nome: "", password: "", isAdmin: false, ativo: true, modulosRestritos: false, modulos: [] };
 
 function UsuariosPage() {
   const { isAdmin, user: current, loading } = useAuth();
@@ -72,13 +76,15 @@ function UsuariosPage() {
             ativo: f.ativo,
             isAdmin: f.isAdmin,
             password: f.password ? f.password : undefined,
+            modulosRestritos: f.modulosRestritos,
+            modulos: f.modulos,
           },
         });
-        void logAudit({ action: "update", entity: "users", entity_id: f.id, details: { email: f.email, isAdmin: f.isAdmin, ativo: f.ativo, password_changed: !!f.password } });
+        void logAudit({ action: "update", entity: "users", entity_id: f.id, details: { email: f.email, isAdmin: f.isAdmin, ativo: f.ativo, password_changed: !!f.password, modulosRestritos: f.modulosRestritos, modulos: f.modulos } });
       } else {
         if (!f.password) throw new Error("Senha obrigatória para novo usuário");
-        await createFn({ data: { email: f.email.trim(), password: f.password, nome: f.nome.trim(), isAdmin: f.isAdmin } });
-        void logAudit({ action: "create", entity: "users", details: { email: f.email, isAdmin: f.isAdmin } });
+        await createFn({ data: { email: f.email.trim(), password: f.password, nome: f.nome.trim(), isAdmin: f.isAdmin, modulosRestritos: f.modulosRestritos, modulos: f.modulos } });
+        void logAudit({ action: "create", entity: "users", details: { email: f.email, isAdmin: f.isAdmin, modulosRestritos: f.modulosRestritos, modulos: f.modulos } });
       }
     },
     onSuccess: () => {
@@ -106,7 +112,7 @@ function UsuariosPage() {
 
   const startNew = () => { setForm(empty); setOpen(true); };
   const startEdit = (u: ListItem) => {
-    setForm({ id: u.id, email: u.email, nome: u.nome, password: "", isAdmin: u.isAdmin, ativo: u.ativo });
+    setForm({ id: u.id, email: u.email, nome: u.nome, password: "", isAdmin: u.isAdmin, ativo: u.ativo, modulosRestritos: u.modulosRestritos, modulos: u.modulos });
     setOpen(true);
   };
 
@@ -139,6 +145,7 @@ function UsuariosPage() {
                   <th className="py-2 pr-3">E-mail</th>
                   <th className="py-2 pr-3">Nome</th>
                   <th className="py-2 pr-3">Perfil</th>
+                  <th className="py-2 pr-3">Módulos</th>
                   <th className="py-2 pr-3">Status</th>
                   <th className="py-2 pr-3 text-right">Ações</th>
                 </tr>
@@ -154,6 +161,11 @@ function UsuariosPage() {
                         : <Badge variant="secondary"><ShieldOff className="h-3 w-3 mr-1" />Usuário</Badge>}
                     </td>
                     <td className="py-2 pr-3">
+                      {u.isAdmin || !u.modulosRestritos
+                        ? <span className="text-xs text-muted-foreground">Acesso total</span>
+                        : <Badge variant="outline" className="text-xs">Restrito · {u.modulos.length} módulo(s)</Badge>}
+                    </td>
+                    <td className="py-2 pr-3">
                       {u.ativo ? <Badge variant="outline" className="text-green-600 border-green-600/40">Ativo</Badge> : <Badge variant="outline" className="text-muted-foreground">Inativo</Badge>}
                     </td>
                     <td className="py-2 pr-3 text-right">
@@ -167,7 +179,7 @@ function UsuariosPage() {
                   </tr>
                 ))}
                 {!filtered.length && (
-                  <tr><td colSpan={5} className="py-6 text-center text-muted-foreground">Nenhum usuário encontrado.</td></tr>
+                  <tr><td colSpan={6} className="py-6 text-center text-muted-foreground">Nenhum usuário encontrado.</td></tr>
                 )}
               </tbody>
             </table>
@@ -208,6 +220,58 @@ function UsuariosPage() {
               </div>
               <Switch checked={form.ativo} onCheckedChange={(v) => setForm({ ...form, ativo: v })} disabled={form.id === current?.id} />
             </div>
+
+            {!form.isAdmin && (
+              <div className="rounded-md border border-border p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-medium">Restringir por módulo</div>
+                    <div className="text-xs text-muted-foreground">Quando desligado, o usuário enxerga todas as telas normalmente</div>
+                  </div>
+                  <Switch checked={form.modulosRestritos} onCheckedChange={(v) => setForm({ ...form, modulosRestritos: v })} />
+                </div>
+                {form.modulosRestritos && (
+                  <div className="space-y-3 max-h-64 overflow-y-auto pr-1 border-t border-border pt-3">
+                    <div className="flex justify-end gap-2 text-xs">
+                      <button type="button" className="underline text-primary" onClick={() => setForm((f) => ({ ...f, modulos: ALL_MODULE_KEYS }))}>Marcar tudo</button>
+                      <button type="button" className="underline text-muted-foreground" onClick={() => setForm((f) => ({ ...f, modulos: [] }))}>Limpar tudo</button>
+                    </div>
+                    {MODULE_GROUPS.map((g) => {
+                      const groupKeys = g.items.map((i) => i.key);
+                      const allChecked = groupKeys.every((k) => form.modulos.includes(k));
+                      return (
+                        <div key={g.label} className="space-y-1.5">
+                          <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            <Checkbox
+                              checked={allChecked}
+                              onCheckedChange={(v) => setForm((f) => ({
+                                ...f,
+                                modulos: v ? Array.from(new Set([...f.modulos, ...groupKeys])) : f.modulos.filter((m) => !groupKeys.includes(m)),
+                              }))}
+                            />
+                            {g.label}
+                          </label>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 pl-6">
+                            {g.items.map((item) => (
+                              <label key={item.key} className="flex items-center gap-2 text-sm">
+                                <Checkbox
+                                  checked={form.modulos.includes(item.key)}
+                                  onCheckedChange={(v) => setForm((f) => ({
+                                    ...f,
+                                    modulos: v ? [...f.modulos, item.key] : f.modulos.filter((m) => m !== item.key),
+                                  }))}
+                                />
+                                {item.label}
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)}>Cancelar</Button>
