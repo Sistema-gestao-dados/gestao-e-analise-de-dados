@@ -123,6 +123,8 @@ export const MODULES: { key: string; label: string }[] = [
   { key: "importacao_txt", label: "Importação TXT GPS" },
   { key: "importacao_txt_easybus", label: "Importação TXT EasyBus" },
   { key: "importacao_realizado", label: "Importação Realizado (Cittati)" },
+  { key: "historico_reprogramacao", label: "Histórico de Reprogramação" },
+  { key: "importacao_historico_reprogramacao", label: "Importação Reprogramação" },
   { key: "historico", label: "Histórico" },
   { key: "bi_cittati_conversor", label: "Conversor BI Cittati → TXT" },
   { key: "relatorio_viagens_conversor", label: "Conversor Relat. Viagens → TXT" },

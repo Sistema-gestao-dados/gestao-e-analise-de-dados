@@ -1,5 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, Bus, Upload, Search, History, Gauge, Layers, Route as RouteIcon, FileUp, Activity, Users, ShieldAlert, ClipboardList, ListChecks, GitCompare, Clock, BarChart3, FileText, Ticket, Building2 } from "lucide-react";
+import { LayoutDashboard, Bus, Upload, Search, History, Gauge, Layers, Route as RouteIcon, FileUp, Activity, Users, ShieldAlert, ClipboardList, ListChecks, GitCompare, Clock, BarChart3, FileText, Ticket, Building2, FilePlus2, TrendingUp } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -30,6 +30,15 @@ const groups: { label: string; items: Item[] }[] = [
     ],
   },
   {
+    label: "Reprogramação",
+    items: [
+      { title: "Histórico de Reprogramação", url: "/historico-consultar", icon: History, perm: "historico_reprogramacao" },
+      { title: "Registrar Reprogramação", url: "/historico-registrar", icon: FilePlus2, perm: "historico_reprogramacao" },
+      { title: "Resumo de Reprogramações", url: "/historico-resumo", icon: TrendingUp, perm: "historico_reprogramacao" },
+      { title: "Relatório PDF", url: "/historico-relatorio", icon: FileText, perm: "historico_reprogramacao" },
+    ],
+  },
+  {
     label: "Cadastros",
     items: [
       { title: "Linhas", url: "/linhas", icon: Bus, perm: "linhas" },
@@ -47,6 +56,7 @@ const groups: { label: string; items: Item[] }[] = [
       { title: "Importação TXT GPS", url: "/importacao-txt", icon: FileUp, perm: "importacao_txt" },
       { title: "Importação TXT EasyBus", url: "/importacao-txt-easybus", icon: FileUp, perm: "importacao_txt_easybus" },
       { title: "Importação Realizado (Cittati)", url: "/importacao-realizado", icon: FileUp, perm: "importacao_realizado" },
+      { title: "Importação Reprogramação", url: "/importacao-historico", icon: FileUp, perm: "importacao_historico_reprogramacao" },
       { title: "Histórico", url: "/historico", icon: History, perm: "historico" },
     ],
   },

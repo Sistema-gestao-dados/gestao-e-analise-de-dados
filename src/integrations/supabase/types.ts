@@ -353,6 +353,54 @@ export type Database = {
         }
         Relationships: []
       }
+      historico_dia_tipos: {
+        Row: { id: string; nome: string; created_at: string }
+        Insert: { id?: string; nome: string; created_at?: string }
+        Update: { id?: string; nome?: string; created_at?: string }
+        Relationships: []
+      }
+      historico_reprogramacao: {
+        Row: {
+          id: string
+          linha: string
+          versao: number | null
+          dia_tipo: string | null
+          data_solicitacao: string | null
+          vigencia: string | null
+          encerramento: string | null
+          alteracao: string | null
+          ativo: boolean | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          linha: string
+          versao?: number | null
+          dia_tipo?: string | null
+          data_solicitacao?: string | null
+          vigencia?: string | null
+          encerramento?: string | null
+          alteracao?: string | null
+          ativo?: boolean | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          linha?: string
+          versao?: number | null
+          dia_tipo?: string | null
+          data_solicitacao?: string | null
+          vigencia?: string | null
+          encerramento?: string | null
+          alteracao?: string | null
+          ativo?: boolean | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       linha_empresa_estacao: {
         Row: {
           created_at: string
