@@ -2,11 +2,11 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { fetchLinhas, fetchEmpresaEstacao, fetchMulti } from "@/lib/data";
+import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import { buildJornadas, jornadaTotais, fmtDur, LIMITE_DIR_MIN, LIMITE_TU_MIN, type JornadaServico } from "@/lib/jornada";
-import { buildEmpresaOverrideMap, resolveGrupoViagem, resolveEmpresaViagem, buildEmpresaPorServico } from "@/lib/empresa-estacao";
+import { buildEmpresaOverrideMap, resolveGrupoViagem, resolveEmpresaViagem, buildEmpresaPorServico, buildGrupoPorServico } from "@/lib/empresa-estacao";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -73,12 +73,10 @@ function JornadaPage() {
   const viagensQ = useQuery({ queryKey: ["viagens-all"], queryFn: fetchAllViagens });
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
   const empresaEstacaoQ = useQuery({ queryKey: ["empresa-estacao"], queryFn: fetchEmpresaEstacao });
-  const multiQ = useQuery({ queryKey: ["multi"], queryFn: fetchMulti });
   const ativosQ = useQuery({ queryKey: ["projetos-ativos"], queryFn: fetchProjetosAtivos });
   const viagensRaw = viagensQ.data ?? [];
   const linhas = linhasQ.data ?? [];
   const empresaEstacao = empresaEstacaoQ.data ?? [];
-  const multi = multiQ.data ?? [];
   const ativos = ativosQ.data ?? [];
   const viagens = useMemo(
     () => (somenteAtivos ? filterViagensAtivas(viagensRaw, ativos) : viagensRaw),
@@ -87,11 +85,6 @@ function JornadaPage() {
 
   const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
   const empresaOverrideMap = useMemo(() => buildEmpresaOverrideMap(empresaEstacao), [empresaEstacao]);
-  const grupoMap = useMemo(() => {
-    const m = new Map<string, string>();
-    multi.forEach((mu) => m.set(`${mu.linha}|${mu.tipo_dia}`.toLowerCase(), mu.grupo_du));
-    return m;
-  }, [multi]);
 
   const opts = useMemo(() => ({
     dia: Array.from(new Set(viagens.map((v) => v.tipo_operacao).filter(Boolean) as string[])).sort(),
@@ -174,10 +167,11 @@ function JornadaPage() {
     () => resumoPorChave((j) => linhaMap.get(j.linha)?.unidade || "Sem unidade"),
     [jornadas, linhaMap],
   );
-  const resumoGrupo = useMemo(() => {
-    const td = applied?.dia && applied.dia !== "__all" ? applied.dia : "";
-    return resumoPorChave((j) => grupoMap.get(`${j.linha}|${td}`.toLowerCase()) || "Sem grupo");
-  }, [jornadas, grupoMap, applied]);
+  const grupoPorServico = useMemo(() => buildGrupoPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
+  const resumoGrupo = useMemo(
+    () => resumoPorChave((j) => grupoPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.ordem || "Sem grupo"),
+    [jornadas, grupoPorServico, linhaMap],
+  );
 
   const listaModal = useMemo((): JornadaServico[] => {
     if (!modal) return [];
@@ -554,7 +548,7 @@ function JornadaPage() {
       </Card>
 
       <ResumoJornadaTable titulo="Resumo Gerencial por Empresa" rows={resumoEmpresa} />
-      <ResumoJornadaTable titulo="Resumo Gerencial por Grupo de Linha" rows={resumoGrupo} />
+      <ResumoJornadaTable titulo="Resumo Gerencial por Grupo" rows={resumoGrupo} />
       <ResumoJornadaTable titulo="Resumo Gerencial por Unidade" rows={resumoUnidade} />
       </div>
 

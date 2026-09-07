@@ -5,7 +5,7 @@ import { fetchLinhas, fetchKm, fetchMulti, fetchEmpresaEstacao } from "@/lib/dat
 import { fetchAllViagens } from "@/lib/viagens";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
 import { buildServiceUnits, dominantLinha, vehicleOrigemLinha, type ViagemLite } from "@/lib/resumo";
-import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, buildEmpresaPorServico } from "@/lib/empresa-estacao";
+import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, buildEmpresaPorServico, buildGrupoPorServico } from "@/lib/empresa-estacao";
 import { buildJornadas } from "@/lib/jornada";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -375,16 +375,13 @@ function DashOperacional() {
     ),
     [units, filtered, linhaMap, kmMaps],
   );
+  const grupoPorServico = useMemo(() => buildGrupoPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
   const resumoGrupoLinha = useMemo(() => {
-    const grupoDe = (linha: string, tipoOperacao: string | null | undefined) => {
-      const td = fDia !== "__all" ? fDia : (tipoOperacao ?? "");
-      return grupoMap.get(`${linha}|${td}`.toLowerCase()) || "Sem grupo";
-    };
     return resumoPorChave(
-      (v) => grupoDe(v.linha, v.tipo_operacao),
-      (u: any) => grupoDe(dominantLinha(u, "predominancia"), u.tipo_operacao),
+      (v) => resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo",
+      (u: any) => grupoPorServico.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, "predominancia"))?.ordem || "Sem grupo",
     );
-  }, [units, filtered, grupoMap, fDia, kmMaps]);
+  }, [units, filtered, grupoPorServico, linhaMap, empresaOverrideMap, kmMaps]);
 
   // versão de programação -> dia tipo (cada versão pertence a um único dia tipo)
   const versaoParaDia = useMemo(() => {
@@ -995,7 +992,7 @@ function DashOperacional() {
           <div className="grid gap-4 lg:grid-cols-3">
             <ResumoGerencialDashTable titulo="Resumo Gerencial por Empresa" rows={resumoEmpresaTabela} />
             <ResumoGerencialDashTable titulo="Resumo Gerencial por Unidade" rows={resumoUnidade} />
-            <ResumoGerencialDashTable titulo="Resumo Gerencial por Grupo de Linha" rows={resumoGrupoLinha} />
+            <ResumoGerencialDashTable titulo="Resumo Gerencial por Grupo" rows={resumoGrupoLinha} />
           </div>
         </>
       )}

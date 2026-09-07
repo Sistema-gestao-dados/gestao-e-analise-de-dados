@@ -58,6 +58,32 @@ export function resolveGrupoViagem(
   return linhaMap.get(v.linha)?.ordem ?? null;
 }
 
+/** Resolve o Grupo por SERVIÇO — mesma lógica do buildEmpresaPorServico, mas
+ * pro campo Grupo (ex-"Ordem"), pra usar em resumos que agregam por
+ * serviço/frota (jornada, dashboard). */
+export function buildGrupoPorServico(
+  viagens: { linha: string; origem?: string | null; destino?: string | null; versao_programacao?: string | null; tipo_operacao?: string | null; servico?: string | null }[],
+  linhaMap: Map<string, Linha>,
+  overrideMap: EmpresaOverrideMap,
+): Map<string, string> {
+  const tally = new Map<string, Map<string, number>>();
+  for (const v of viagens) {
+    const vehicleKey = `${v.versao_programacao ?? ""}||${v.tipo_operacao ?? ""}||${v.servico ?? ""}`;
+    const grupo = resolveGrupoViagem(v, linhaMap, overrideMap);
+    if (!grupo) continue;
+    const m = tally.get(vehicleKey) ?? new Map<string, number>();
+    m.set(grupo, (m.get(grupo) ?? 0) + 1);
+    tally.set(vehicleKey, m);
+  }
+  const out = new Map<string, string>();
+  for (const [key, m] of tally) {
+    let best: string | null = null, bestN = -1;
+    for (const [g, n] of m) if (n > bestN) { best = g; bestN = n; }
+    if (best) out.set(key, best);
+  }
+  return out;
+}
+
 /** Resolve a empresa por SERVIÇO (vehicleKey = versao||tipo_operacao||servico),
  * pra usar em resumos que agregam por serviço/frota. Cada serviço deve
  * pertencer inteiro a uma empresa só (o carro roda pra uma empresa só no

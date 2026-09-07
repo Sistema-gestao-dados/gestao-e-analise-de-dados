@@ -31,7 +31,7 @@ import { PdfPreviewDialog, type PdfOrientation } from "@/components/pdf-preview-
 import { logAudit } from "@/lib/audit";
 import { buildJornadas, fmtDur } from "@/lib/jornada";
 import { usePersistentState } from "@/hooks/use-persistent-state";
-import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, buildEmpresaPorServico, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
+import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, buildEmpresaPorServico, buildGrupoPorServico, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
 
 function parseHHMM(s: string | null): number | null {
   if (!s) return null;
@@ -379,16 +379,12 @@ export function ComparativoView() {
 
   const resumoPorGrupo = useMemo(() => {
     if (!applied) return [];
-    const grupoDe = (dia: string) => (linha: string, tipoOperacao: string | null | undefined) => {
-      const td = dia !== "__all" ? dia : (tipoOperacao ?? "");
-      return grupoMap.get(`${linha}|${td}`.toLowerCase()) || "Sem grupo";
-    };
-    const gA = grupoDe(applied.a.dia);
-    const gP = grupoDe(applied.p.dia);
-    const a = buildBreakdown(basesAplicadas.atual, (v) => gA(v.linha, v.tipo_operacao), (u) => gA(dominantLinha(u, criterio), u.tipo_operacao));
-    const p = buildBreakdown(basesAplicadas.proposta, (v) => gP(v.linha, v.tipo_operacao), (u) => gP(dominantLinha(u, criterio), u.tipo_operacao));
+    const grpA = buildGrupoPorServico(basesAplicadas.atual, linhaMap, empresaOverrideMap);
+    const grpP = buildGrupoPorServico(basesAplicadas.proposta, linhaMap, empresaOverrideMap);
+    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo", (u) => grpA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.ordem || "Sem grupo");
+    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo", (u) => grpP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.ordem || "Sem grupo");
     return mergeBreakdown(a, p);
-  }, [applied, basesAplicadas, grupoMap, criterio, kmFn]);
+  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn]);
 
   const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">("comparativo.ordenarPor", "padrao");
 
@@ -828,7 +824,7 @@ export function ComparativoView() {
       </Card>
 
       <ResumoComparativoTable titulo="Resumo Gerencial por Empresa" rows={resumoPorEmpresa} />
-      <ResumoComparativoTable titulo="Resumo Gerencial por Grupo de Linha" rows={resumoPorGrupo} />
+      <ResumoComparativoTable titulo="Resumo Gerencial por Grupo" rows={resumoPorGrupo} />
       <ResumoComparativoTable titulo="Resumo Gerencial por Unidade" rows={resumoPorUnidade} />
       </div>
     </div>

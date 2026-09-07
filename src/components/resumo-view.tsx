@@ -8,7 +8,7 @@ import {
   buildServiceUnits, aggregateByGroup, aggregateByLinha, dominantLinha, detectTUIncompletos, validarConsistenciaFrota,
   type ViagemLite, type AggRow, type ServiceUnit, type CriterioLinha,
 } from "@/lib/resumo";
-import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, buildEmpresaPorServico } from "@/lib/empresa-estacao";
+import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, buildEmpresaPorServico, buildGrupoPorServico } from "@/lib/empresa-estacao";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -334,22 +334,23 @@ const totals = useMemo(() => {
     })).sort((a, b) => a.unidade.localeCompare(b.unidade));
   }, [units, filtered, linhaMap, kmFn, S.criterio]);
 
-  // Resumo por Grupo de Linha (rodapé gerencial)
+  // Resumo por Grupo (rodapé gerencial) — campo "Grupo" (ex-Ordem, com
+  // exceção por estação tipo Grupo Rio Ita/Grupo Maua), NÃO é "Grupo de
+  // Linha" (grupo_du, esse é outro campo, usado no filtro/agrupamento acima).
+  const grupoPorServico = useMemo(
+    () => buildGrupoPorServico(filtered, linhaMap, empresaOverrideMap),
+    [filtered, linhaMap, empresaOverrideMap],
+  );
   const resumoGrupoLinha = useMemo(() => {
     const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
-    const grupoDeLinha = (linha: string, tipoOperacao: string | null | undefined) => {
-      const td = S.dia !== "__all" ? S.dia : (tipoOperacao ?? "");
-      return grupoMap.get(`${linha}|${td}`.toLowerCase()) || "Sem grupo";
-    };
     for (const u of units.values()) {
-      const linhaDom = dominantLinha(u, S.criterio);
-      const grupo = grupoDeLinha(linhaDom, u.tipo_operacao);
+      const grupo = grupoPorServico.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, S.criterio))?.ordem || "Sem grupo";
       if (!m.has(grupo)) m.set(grupo, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
       m.get(grupo)!.servicos.add(u.key);
       m.get(grupo)!.veiculos.add(u.vehicleKey);
     }
     for (const v of filtered) {
-      const grupo = grupoDeLinha(v.linha, v.tipo_operacao);
+      const grupo = resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo";
       if (!m.has(grupo)) m.set(grupo, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
       if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(grupo)!.partidas += 1;
       m.get(grupo)!.km += kmFn(v);
@@ -357,7 +358,7 @@ const totals = useMemo(() => {
     return Array.from(m, ([grupo, x]) => ({
       grupo, partidas: x.partidas, km: x.km, servicos: x.servicos.size, frota: x.veiculos.size,
     })).sort((a, b) => a.grupo.localeCompare(b.grupo));
-  }, [units, filtered, linhaMap, kmFn, S.criterio, S.dia, grupoMap]);
+  }, [units, filtered, linhaMap, kmFn, S.criterio, grupoPorServico, empresaOverrideMap]);
 
   const title = mode === "linha" ? "Resumo por Linha" : "Resumo Operacional";
   const firstColLabel = mode === "linha" ? "Linha" : (groupBy === "grupo" ? "Grupo de Linha" : "Projeto / Versão");
@@ -391,7 +392,7 @@ const totals = useMemo(() => {
     // Aba Empresa
     appendResumoSheet(wb, "Empresa", "empresa", resumoEmpresa);
     appendResumoSheet(wb, "Unidade", "unidade", resumoUnidade);
-    appendResumoSheet(wb, "Grupo de Linha", "grupo", resumoGrupoLinha);
+    appendResumoSheet(wb, "Grupo", "grupo", resumoGrupoLinha);
 
     XLSX.writeFile(wb, `${title.replace(/\s+/g, "_").toLowerCase()}_${new Date().toISOString().slice(0, 10)}.xlsx`);
     void logAudit({ action: "export", entity: mode === "linha" ? "resumo_linha" : "resumo_operacional", details: { format: "xlsx", rows: rows.length } });
@@ -446,7 +447,7 @@ const totals = useMemo(() => {
         fmtKm(resumoUnidade.reduce((s, e) => s + e.km, 0)),
       ];
       const grpBody = resumoGrupoLinha.map((e) => [e.grupo, fmtInt(e.servicos), fmtInt(e.frota), fmtInt(e.partidas), fmtKm(e.km)]);
-      const grpHeaders = ["Grupo de Linha", "Serviços", "Frota", "Partidas", "KM"];
+      const grpHeaders = ["Grupo", "Serviços", "Frota", "Partidas", "KM"];
       const grpFoot = ["TOTAL",
         fmtInt(resumoGrupoLinha.reduce((s, e) => s + e.servicos, 0)),
         fmtInt(resumoGrupoLinha.reduce((s, e) => s + e.frota, 0)),
@@ -543,7 +544,7 @@ const totals = useMemo(() => {
 
         const afterGrpY = (d as any).lastAutoTable.finalY + 8 * zoom;
         d.setFontSize(10 * zoom); d.setFont("helvetica", "bold"); d.setTextColor(20);
-        d.text("Resumo Gerencial por Grupo de Linha", marginLeft, afterGrpY);
+        d.text("Resumo Gerencial por Grupo", marginLeft, afterGrpY);
         autoTable(d, {
           startY: afterGrpY + 2 * zoom,
           head: [grpHeaders],
@@ -892,7 +893,7 @@ const totals = useMemo(() => {
       {/* Resumo Gerencial por Empresa / Unidade / Grupo de Linha */}
       <ResumoGerencialTable titulo="Resumo Gerencial por Empresa" rows={resumoEmpresa} keyField="empresa" loading={loading} />
       <ResumoGerencialTable titulo="Resumo Gerencial por Unidade" rows={resumoUnidade} keyField="unidade" loading={loading} />
-      <ResumoGerencialTable titulo="Resumo Gerencial por Grupo de Linha" rows={resumoGrupoLinha} keyField="grupo" loading={loading} />
+      <ResumoGerencialTable titulo="Resumo Gerencial por Grupo" rows={resumoGrupoLinha} keyField="grupo" loading={loading} />
       </div>
     </div>
   );
