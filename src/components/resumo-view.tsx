@@ -314,6 +314,51 @@ const totals = useMemo(() => {
     })).sort((a, b) => a.empresa.localeCompare(b.empresa));
   }, [units, filtered, linhaMap, kmFn, S.criterio, empresaPorServico, empresaOverrideMap]);
 
+  // Resumo por Unidade (rodapé gerencial)
+  const resumoUnidade = useMemo(() => {
+    const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
+    for (const u of units.values()) {
+      const unidade = linhaMap.get(dominantLinha(u, S.criterio))?.unidade || "Sem unidade";
+      if (!m.has(unidade)) m.set(unidade, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      m.get(unidade)!.servicos.add(u.key);
+      m.get(unidade)!.veiculos.add(u.vehicleKey);
+    }
+    for (const v of filtered) {
+      const un = linhaMap.get(v.linha)?.unidade || "Sem unidade";
+      if (!m.has(un)) m.set(un, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(un)!.partidas += 1;
+      m.get(un)!.km += kmFn(v);
+    }
+    return Array.from(m, ([unidade, x]) => ({
+      unidade, partidas: x.partidas, km: x.km, servicos: x.servicos.size, frota: x.veiculos.size,
+    })).sort((a, b) => a.unidade.localeCompare(b.unidade));
+  }, [units, filtered, linhaMap, kmFn, S.criterio]);
+
+  // Resumo por Grupo de Linha (rodapé gerencial)
+  const resumoGrupoLinha = useMemo(() => {
+    const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
+    const grupoDeLinha = (linha: string, tipoOperacao: string | null | undefined) => {
+      const td = S.dia !== "__all" ? S.dia : (tipoOperacao ?? "");
+      return grupoMap.get(`${linha}|${td}`.toLowerCase()) || "Sem grupo";
+    };
+    for (const u of units.values()) {
+      const linhaDom = dominantLinha(u, S.criterio);
+      const grupo = grupoDeLinha(linhaDom, u.tipo_operacao);
+      if (!m.has(grupo)) m.set(grupo, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      m.get(grupo)!.servicos.add(u.key);
+      m.get(grupo)!.veiculos.add(u.vehicleKey);
+    }
+    for (const v of filtered) {
+      const grupo = grupoDeLinha(v.linha, v.tipo_operacao);
+      if (!m.has(grupo)) m.set(grupo, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(grupo)!.partidas += 1;
+      m.get(grupo)!.km += kmFn(v);
+    }
+    return Array.from(m, ([grupo, x]) => ({
+      grupo, partidas: x.partidas, km: x.km, servicos: x.servicos.size, frota: x.veiculos.size,
+    })).sort((a, b) => a.grupo.localeCompare(b.grupo));
+  }, [units, filtered, linhaMap, kmFn, S.criterio, S.dia, grupoMap]);
+
   const title = mode === "linha" ? "Resumo por Linha" : "Resumo Operacional";
   const firstColLabel = mode === "linha" ? "Linha" : (groupBy === "grupo" ? "Grupo de Linha" : "Projeto / Versão");
   const headers = [firstColLabel, "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas", "KM Total"];
@@ -344,22 +389,9 @@ const totals = useMemo(() => {
     XLSX.utils.book_append_sheet(wb, ws, title.slice(0, 31));
 
     // Aba Empresa
-    const empAoa: (string | number)[][] = [
-      ["RESUMO GERENCIAL POR EMPRESA"],
-      [],
-      ["Empresa", "Serviços", "Frota", "Partidas", "KM"],
-      ...resumoEmpresa.map((e) => [e.empresa, e.servicos, e.frota, e.partidas, Number(e.km.toFixed(1))]),
-      ["TOTAL",
-        resumoEmpresa.reduce((s, e) => s + e.servicos, 0),
-        resumoEmpresa.reduce((s, e) => s + e.frota, 0),
-        resumoEmpresa.reduce((s, e) => s + e.partidas, 0),
-        Number(resumoEmpresa.reduce((s, e) => s + e.km, 0).toFixed(1)),
-      ],
-    ];
-    const wsEmp = XLSX.utils.aoa_to_sheet(empAoa);
-    wsEmp["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }];
-    wsEmp["!cols"] = [{ wch: 28 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 14 }];
-    XLSX.utils.book_append_sheet(wb, wsEmp, "Resumo Empresa");
+    appendResumoSheet(wb, "Empresa", "empresa", resumoEmpresa);
+    appendResumoSheet(wb, "Unidade", "unidade", resumoUnidade);
+    appendResumoSheet(wb, "Grupo de Linha", "grupo", resumoGrupoLinha);
 
     XLSX.writeFile(wb, `${title.replace(/\s+/g, "_").toLowerCase()}_${new Date().toISOString().slice(0, 10)}.xlsx`);
     void logAudit({ action: "export", entity: mode === "linha" ? "resumo_linha" : "resumo_operacional", details: { format: "xlsx", rows: rows.length } });
@@ -404,6 +436,22 @@ const totals = useMemo(() => {
         fmtInt(resumoEmpresa.reduce((s, e) => s + e.frota, 0)),
         fmtInt(resumoEmpresa.reduce((s, e) => s + e.partidas, 0)),
         fmtKm(resumoEmpresa.reduce((s, e) => s + e.km, 0)),
+      ];
+      const uniBody = resumoUnidade.map((e) => [e.unidade, fmtInt(e.servicos), fmtInt(e.frota), fmtInt(e.partidas), fmtKm(e.km)]);
+      const uniHeaders = ["Unidade", "Serviços", "Frota", "Partidas", "KM"];
+      const uniFoot = ["TOTAL",
+        fmtInt(resumoUnidade.reduce((s, e) => s + e.servicos, 0)),
+        fmtInt(resumoUnidade.reduce((s, e) => s + e.frota, 0)),
+        fmtInt(resumoUnidade.reduce((s, e) => s + e.partidas, 0)),
+        fmtKm(resumoUnidade.reduce((s, e) => s + e.km, 0)),
+      ];
+      const grpBody = resumoGrupoLinha.map((e) => [e.grupo, fmtInt(e.servicos), fmtInt(e.frota), fmtInt(e.partidas), fmtKm(e.km)]);
+      const grpHeaders = ["Grupo de Linha", "Serviços", "Frota", "Partidas", "KM"];
+      const grpFoot = ["TOTAL",
+        fmtInt(resumoGrupoLinha.reduce((s, e) => s + e.servicos, 0)),
+        fmtInt(resumoGrupoLinha.reduce((s, e) => s + e.frota, 0)),
+        fmtInt(resumoGrupoLinha.reduce((s, e) => s + e.partidas, 0)),
+        fmtKm(resumoGrupoLinha.reduce((s, e) => s + e.km, 0)),
       ];
 
       // Largura natural calculada só com getTextWidth (API padrão do jsPDF).
@@ -473,6 +521,46 @@ const totals = useMemo(() => {
           rowPageBreak: "avoid",
           didDrawPage: () => drawHeader(d),
         });
+        const afterUniY = (d as any).lastAutoTable.finalY + 8 * zoom;
+        d.setFontSize(10 * zoom); d.setFont("helvetica", "bold"); d.setTextColor(20);
+        d.text("Resumo Gerencial por Unidade", marginLeft, afterUniY);
+        autoTable(d, {
+          startY: afterUniY + 2 * zoom,
+          head: [uniHeaders],
+          body: uniBody,
+          foot: [uniFoot],
+          styles: { fontSize: fontSize - 0.3, cellPadding: Math.max(padY - 0.2 * zoom, 0.3), halign: "right", valign: "middle", lineColor: [180, 180, 180], lineWidth: 0.18 },
+          columnStyles: { 0: { halign: "left", fontStyle: "bold" } },
+          headStyles: { fillColor: [37, 99, 235], textColor: 255, halign: "center", fontStyle: "bold", cellPadding: 1.6 * zoom },
+          footStyles: { fillColor: [219, 234, 254], textColor: 20, fontStyle: "bold" },
+          alternateRowStyles: { fillColor: [249, 250, 251] },
+          margin: { left: marginLeft, right: 10, top: HEADER_H + 3, bottom: 12 },
+          theme: "grid",
+          tableWidth: "wrap",
+          rowPageBreak: "avoid",
+          didDrawPage: () => drawHeader(d),
+        });
+
+        const afterGrpY = (d as any).lastAutoTable.finalY + 8 * zoom;
+        d.setFontSize(10 * zoom); d.setFont("helvetica", "bold"); d.setTextColor(20);
+        d.text("Resumo Gerencial por Grupo de Linha", marginLeft, afterGrpY);
+        autoTable(d, {
+          startY: afterGrpY + 2 * zoom,
+          head: [grpHeaders],
+          body: grpBody,
+          foot: [grpFoot],
+          styles: { fontSize: fontSize - 0.3, cellPadding: Math.max(padY - 0.2 * zoom, 0.3), halign: "right", valign: "middle", lineColor: [180, 180, 180], lineWidth: 0.18 },
+          columnStyles: { 0: { halign: "left", fontStyle: "bold" } },
+          headStyles: { fillColor: [37, 99, 235], textColor: 255, halign: "center", fontStyle: "bold", cellPadding: 1.6 * zoom },
+          footStyles: { fillColor: [219, 234, 254], textColor: 20, fontStyle: "bold" },
+          alternateRowStyles: { fillColor: [249, 250, 251] },
+          margin: { left: marginLeft, right: 10, top: HEADER_H + 3, bottom: 12 },
+          theme: "grid",
+          tableWidth: "wrap",
+          rowPageBreak: "avoid",
+          didDrawPage: () => drawHeader(d),
+        });
+
         const totalHeight = (d as any).lastAutoTable.finalY - (HEADER_H + 3);
         return { doc: d, pages: d.getNumberOfPages(), totalHeight };
       }
@@ -801,48 +889,76 @@ const totals = useMemo(() => {
         </CardContent>
       </Card>
 
-      {/* Resumo Gerencial por Empresa */}
-      {!loading && resumoEmpresa.length > 0 && (
-        <Card className="shadow-[var(--shadow-card)]">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm font-semibold">Resumo Gerencial por Empresa</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-0">
-            <div className="overflow-auto">
-              <Table className="text-xs">
-                <TableHeader>
-                  <TableRow className="h-8">
-                    <TableHead className="px-2 py-1">Empresa</TableHead>
-                    <TableHead className="px-2 py-1 text-right">Serviços</TableHead>
-                    <TableHead className="px-2 py-1 text-right">Frota</TableHead>
-                    <TableHead className="px-2 py-1 text-right">Partidas</TableHead>
-                    <TableHead className="px-2 py-1 text-right">KM</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {resumoEmpresa.map((e) => (
-                    <TableRow key={e.empresa} className="h-8">
-                      <TableCell className="px-2 py-1 font-medium">{e.empresa}</TableCell>
-                      <TableCell className="px-2 py-1 text-right tabular-nums">{e.servicos}</TableCell>
-                      <TableCell className="px-2 py-1 text-right tabular-nums">{e.frota}</TableCell>
-                      <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(e.partidas)}</TableCell>
-                      <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(e.km)}</TableCell>
-                    </TableRow>
-                  ))}
-                  <TableRow className="bg-muted/50 font-bold h-9">
-                    <TableCell className="px-2 py-1">TOTAL</TableCell>
-                    <TableCell className="px-2 py-1 text-right tabular-nums">{resumoEmpresa.reduce((s, e) => s + e.servicos, 0)}</TableCell>
-                    <TableCell className="px-2 py-1 text-right tabular-nums">{resumoEmpresa.reduce((s, e) => s + e.frota, 0)}</TableCell>
-                    <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(resumoEmpresa.reduce((s, e) => s + e.partidas, 0))}</TableCell>
-                    <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(resumoEmpresa.reduce((s, e) => s + e.km, 0))}</TableCell>
-                  </TableRow>
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
-      )}
+      {/* Resumo Gerencial por Empresa / Unidade / Grupo de Linha */}
+      <ResumoGerencialTable titulo="Resumo Gerencial por Empresa" rows={resumoEmpresa} keyField="empresa" loading={loading} />
+      <ResumoGerencialTable titulo="Resumo Gerencial por Unidade" rows={resumoUnidade} keyField="unidade" loading={loading} />
+      <ResumoGerencialTable titulo="Resumo Gerencial por Grupo de Linha" rows={resumoGrupoLinha} keyField="grupo" loading={loading} />
       </div>
     </div>
+  );
+}
+
+type ResumoGerencialRow = { partidas: number; km: number; servicos: number; frota: number; [k: string]: string | number };
+
+function appendResumoSheet(wb: XLSX.WorkBook, nomeAba: string, keyField: string, rows: { [k: string]: string | number; servicos: number; frota: number; partidas: number; km: number }[]) {
+  const aoa: (string | number)[][] = [
+    [`RESUMO GERENCIAL POR ${nomeAba.toUpperCase()}`],
+    [],
+    [nomeAba, "Serviços", "Frota", "Partidas", "KM"],
+    ...rows.map((r) => [r[keyField], r.servicos, r.frota, r.partidas, Number(r.km.toFixed(1))]),
+    ["TOTAL",
+      rows.reduce((s, r) => s + r.servicos, 0),
+      rows.reduce((s, r) => s + r.frota, 0),
+      rows.reduce((s, r) => s + r.partidas, 0),
+      Number(rows.reduce((s, r) => s + r.km, 0).toFixed(1)),
+    ],
+  ];
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }];
+  ws["!cols"] = [{ wch: 28 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 14 }];
+  XLSX.utils.book_append_sheet(wb, ws, `Resumo ${nomeAba}`.slice(0, 31));
+}
+
+function ResumoGerencialTable({ titulo, rows, keyField, loading }: { titulo: string; rows: ResumoGerencialRow[]; keyField: string; loading: boolean }) {
+  if (loading || rows.length === 0) return null;
+  return (
+    <Card className="shadow-[var(--shadow-card)]">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm font-semibold">{titulo}</CardTitle>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="overflow-auto">
+          <Table className="text-xs">
+            <TableHeader>
+              <TableRow className="h-8">
+                <TableHead className="px-2 py-1 capitalize">{keyField}</TableHead>
+                <TableHead className="px-2 py-1 text-right">Serviços</TableHead>
+                <TableHead className="px-2 py-1 text-right">Frota</TableHead>
+                <TableHead className="px-2 py-1 text-right">Partidas</TableHead>
+                <TableHead className="px-2 py-1 text-right">KM</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r) => (
+                <TableRow key={String(r[keyField])} className="h-8">
+                  <TableCell className="px-2 py-1 font-medium">{r[keyField]}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.servicos}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.frota}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(r.partidas)}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(r.km)}</TableCell>
+                </TableRow>
+              ))}
+              <TableRow className="bg-muted/50 font-bold h-9">
+                <TableCell className="px-2 py-1">TOTAL</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{rows.reduce((s, r) => s + r.servicos, 0)}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{rows.reduce((s, r) => s + r.frota, 0)}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(rows.reduce((s, r) => s + r.partidas, 0))}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(rows.reduce((s, r) => s + r.km, 0))}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

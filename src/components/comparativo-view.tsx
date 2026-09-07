@@ -11,8 +11,8 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchLinhas, fetchKm, fetchMulti, fetchEmpresaEstacao, type Linha, type ParametroMulti } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import {
-  buildServiceUnits, aggregateByLinha,
-  type ViagemLite, type AggRow, type CriterioLinha,
+  buildServiceUnits, aggregateByLinha, dominantLinha,
+  type ViagemLite, type AggRow, type CriterioLinha, type ServiceUnit,
 } from "@/lib/resumo";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
@@ -31,7 +31,7 @@ import { PdfPreviewDialog, type PdfOrientation } from "@/components/pdf-preview-
 import { logAudit } from "@/lib/audit";
 import { buildJornadas, fmtDur } from "@/lib/jornada";
 import { usePersistentState } from "@/hooks/use-persistent-state";
-import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
+import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, buildEmpresaPorServico, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
 
 function parseHHMM(s: string | null): number | null {
   if (!s) return null;
@@ -327,6 +327,68 @@ export function ComparativoView() {
     atual: basesAplicadas.atual.filter((v) => viagemKmResult(v, kmMaps).fonte === "sem_cadastro").length,
     proposta: basesAplicadas.proposta.filter((v) => viagemKmResult(v, kmMaps).fonte === "sem_cadastro").length,
   }), [basesAplicadas, kmMaps]);
+
+  // Resumo Gerencial (Atual x Proposta) por Empresa / Grupo de Linha / Unidade
+  function buildBreakdown(
+    viagens: ViagemLite[],
+    chaveViagem: (v: ViagemLite) => string,
+    chaveUnit: (u: ServiceUnit) => string,
+  ) {
+    const units = buildServiceUnits(viagens, kmFn);
+    const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
+    for (const u of units.values()) {
+      const k = chaveUnit(u);
+      if (!m.has(k)) m.set(k, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      m.get(k)!.servicos.add(u.key);
+      m.get(k)!.veiculos.add(u.vehicleKey);
+    }
+    for (const v of viagens) {
+      const k = chaveViagem(v);
+      if (!m.has(k)) m.set(k, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(k)!.partidas += 1;
+      m.get(k)!.km += kmFn(v);
+    }
+    const out = new Map<string, { servicos: number; frota: number; partidas: number; km: number }>();
+    for (const [k, x] of m) out.set(k, { servicos: x.servicos.size, frota: x.veiculos.size, partidas: x.partidas, km: x.km });
+    return out;
+  }
+
+  function mergeBreakdown(a: Map<string, { servicos: number; frota: number; partidas: number; km: number }>, p: Map<string, { servicos: number; frota: number; partidas: number; km: number }>) {
+    const chaves = new Set([...a.keys(), ...p.keys()]);
+    const zero = { servicos: 0, frota: 0, partidas: 0, km: 0 };
+    return Array.from(chaves, (chave) => ({
+      chave, atual: a.get(chave) ?? zero, proposta: p.get(chave) ?? zero,
+    })).sort((x, y) => x.chave.localeCompare(y.chave));
+  }
+
+  const resumoPorEmpresa = useMemo(() => {
+    if (!applied) return [];
+    const empA = buildEmpresaPorServico(basesAplicadas.atual, linhaMap, empresaOverrideMap);
+    const empP = buildEmpresaPorServico(basesAplicadas.proposta, linhaMap, empresaOverrideMap);
+    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa", (u) => empA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.empresa || "Sem empresa");
+    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa", (u) => empP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.empresa || "Sem empresa");
+    return mergeBreakdown(a, p);
+  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn]);
+
+  const resumoPorUnidade = useMemo(() => {
+    if (!applied) return [];
+    const a = buildBreakdown(basesAplicadas.atual, (v) => linhaMap.get(v.linha)?.unidade || "Sem unidade", (u) => linhaMap.get(dominantLinha(u, criterio))?.unidade || "Sem unidade");
+    const p = buildBreakdown(basesAplicadas.proposta, (v) => linhaMap.get(v.linha)?.unidade || "Sem unidade", (u) => linhaMap.get(dominantLinha(u, criterio))?.unidade || "Sem unidade");
+    return mergeBreakdown(a, p);
+  }, [applied, basesAplicadas, linhaMap, criterio, kmFn]);
+
+  const resumoPorGrupo = useMemo(() => {
+    if (!applied) return [];
+    const grupoDe = (dia: string) => (linha: string, tipoOperacao: string | null | undefined) => {
+      const td = dia !== "__all" ? dia : (tipoOperacao ?? "");
+      return grupoMap.get(`${linha}|${td}`.toLowerCase()) || "Sem grupo";
+    };
+    const gA = grupoDe(applied.a.dia);
+    const gP = grupoDe(applied.p.dia);
+    const a = buildBreakdown(basesAplicadas.atual, (v) => gA(v.linha, v.tipo_operacao), (u) => gA(dominantLinha(u, criterio), u.tipo_operacao));
+    const p = buildBreakdown(basesAplicadas.proposta, (v) => gP(v.linha, v.tipo_operacao), (u) => gP(dominantLinha(u, criterio), u.tipo_operacao));
+    return mergeBreakdown(a, p);
+  }, [applied, basesAplicadas, grupoMap, criterio, kmFn]);
 
   const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">("comparativo.ordenarPor", "padrao");
 
@@ -764,7 +826,69 @@ export function ComparativoView() {
           )}
         </CardContent>
       </Card>
+
+      <ResumoComparativoTable titulo="Resumo Gerencial por Empresa" rows={resumoPorEmpresa} />
+      <ResumoComparativoTable titulo="Resumo Gerencial por Grupo de Linha" rows={resumoPorGrupo} />
+      <ResumoComparativoTable titulo="Resumo Gerencial por Unidade" rows={resumoPorUnidade} />
       </div>
     </div>
+  );
+}
+
+type BreakdownVal = { servicos: number; frota: number; partidas: number; km: number };
+function ResumoComparativoTable({ titulo, rows }: { titulo: string; rows: { chave: string; atual: BreakdownVal; proposta: BreakdownVal }[] }) {
+  if (rows.length === 0) return null;
+  const totA = rows.reduce((s, r) => ({ servicos: s.servicos + r.atual.servicos, frota: s.frota + r.atual.frota, partidas: s.partidas + r.atual.partidas, km: s.km + r.atual.km }), { servicos: 0, frota: 0, partidas: 0, km: 0 });
+  const totP = rows.reduce((s, r) => ({ servicos: s.servicos + r.proposta.servicos, frota: s.frota + r.proposta.frota, partidas: s.partidas + r.proposta.partidas, km: s.km + r.proposta.km }), { servicos: 0, frota: 0, partidas: 0, km: 0 });
+  return (
+    <Card className="shadow-[var(--shadow-card)]">
+      <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">{titulo}</CardTitle></CardHeader>
+      <CardContent className="pt-0">
+        <div className="overflow-auto">
+          <Table className="text-xs">
+            <TableHeader>
+              <TableRow className="h-8">
+                <TableHead className="px-2 py-1" rowSpan={2}></TableHead>
+                <TableHead className="px-2 py-1 text-center border-l" colSpan={2}>Serviços</TableHead>
+                <TableHead className="px-2 py-1 text-center border-l" colSpan={2}>Frota</TableHead>
+                <TableHead className="px-2 py-1 text-center border-l" colSpan={2}>Partidas</TableHead>
+                <TableHead className="px-2 py-1 text-center border-l" colSpan={2}>KM</TableHead>
+              </TableRow>
+              <TableRow className="h-7">
+                {["Atual", "Proposta", "Atual", "Proposta", "Atual", "Proposta", "Atual", "Proposta"].map((l, i) => (
+                  <TableHead key={i} className={`px-2 py-1 text-right text-[10px] ${i % 2 === 0 ? "border-l" : ""}`}>{l}</TableHead>
+                ))}
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r) => (
+                <TableRow key={r.chave} className="h-8">
+                  <TableCell className="px-2 py-1 font-medium">{r.chave}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums border-l">{r.atual.servicos}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.proposta.servicos}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums border-l">{r.atual.frota}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.proposta.frota}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtInt(r.atual.partidas)}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(r.proposta.partidas)}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtKm(r.atual.km)}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(r.proposta.km)}</TableCell>
+                </TableRow>
+              ))}
+              <TableRow className="bg-muted/50 font-bold h-9">
+                <TableCell className="px-2 py-1">TOTAL</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums border-l">{totA.servicos}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{totP.servicos}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums border-l">{totA.frota}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{totP.frota}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtInt(totA.partidas)}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(totP.partidas)}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtKm(totA.km)}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(totP.km)}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

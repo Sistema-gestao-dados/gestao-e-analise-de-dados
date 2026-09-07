@@ -1,12 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
+import { fetchLinhas, fetchEmpresaEstacao, fetchMulti } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import { buildJornadas, jornadaTotais, fmtDur, LIMITE_DIR_MIN, LIMITE_TU_MIN, type JornadaServico } from "@/lib/jornada";
-import { buildEmpresaOverrideMap, resolveGrupoViagem } from "@/lib/empresa-estacao";
+import { buildEmpresaOverrideMap, resolveGrupoViagem, resolveEmpresaViagem, buildEmpresaPorServico } from "@/lib/empresa-estacao";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -62,7 +62,9 @@ function JornadaPage() {
   const [fLinha, setFLinha] = usePersistentState<string[]>("jornada.fLinha", []);
   const [fUnidade, setFUnidade] = usePersistentState("jornada.fUnidade", "__all");
   const [fGrupoOrdem, setFGrupoOrdem] = usePersistentState("jornada.fGrupoOrdem", "__all");
-  const [modal, setModal] = useState<null | "7" | "9" | "he">(null);
+  const [modal, setModal] = useState<null | "7" | "9" | "he" | "sem_param">(null);
+  const [pageSize, setPageSize] = usePersistentState("jornada.pageSize", 50);
+  const [page, setPage] = useState(0);
   const [somenteAtivos, setSomenteAtivos] = usePersistentState("jornada.somenteAtivos", true);
   type Snap = { dia: string; versao: string; tipo: string; linha: string[]; unidade: string; grupoOrdem: string };
   // Aplica filtros automaticamente ao abrir (usa cache se houver, sem recarregar)
@@ -71,10 +73,12 @@ function JornadaPage() {
   const viagensQ = useQuery({ queryKey: ["viagens-all"], queryFn: fetchAllViagens });
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
   const empresaEstacaoQ = useQuery({ queryKey: ["empresa-estacao"], queryFn: fetchEmpresaEstacao });
+  const multiQ = useQuery({ queryKey: ["multi"], queryFn: fetchMulti });
   const ativosQ = useQuery({ queryKey: ["projetos-ativos"], queryFn: fetchProjetosAtivos });
   const viagensRaw = viagensQ.data ?? [];
   const linhas = linhasQ.data ?? [];
   const empresaEstacao = empresaEstacaoQ.data ?? [];
+  const multi = multiQ.data ?? [];
   const ativos = ativosQ.data ?? [];
   const viagens = useMemo(
     () => (somenteAtivos ? filterViagensAtivas(viagensRaw, ativos) : viagensRaw),
@@ -83,6 +87,11 @@ function JornadaPage() {
 
   const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
   const empresaOverrideMap = useMemo(() => buildEmpresaOverrideMap(empresaEstacao), [empresaEstacao]);
+  const grupoMap = useMemo(() => {
+    const m = new Map<string, string>();
+    multi.forEach((mu) => m.set(`${mu.linha}|${mu.tipo_dia}`.toLowerCase(), mu.grupo_du));
+    return m;
+  }, [multi]);
 
   const opts = useMemo(() => ({
     dia: Array.from(new Set(viagens.map((v) => v.tipo_operacao).filter(Boolean) as string[])).sort(),
@@ -130,15 +139,56 @@ function JornadaPage() {
 
   const totais = useMemo(() => jornadaTotais(jornadas), [jornadas]);
 
+  const totalPaginas = Math.max(1, Math.ceil(jornadas.length / pageSize));
+  const paginaAtual = Math.min(page, totalPaginas - 1);
+  const jornadasPagina = useMemo(
+    () => jornadas.slice(paginaAtual * pageSize, paginaAtual * pageSize + pageSize),
+    [jornadas, paginaAtual, pageSize],
+  );
+  useEffect(() => setPage(0), [applied, pageSize]);
+
+  // Resumo Gerencial por Empresa / Grupo de Linha / Unidade
+  const empresaPorServico = useMemo(() => buildEmpresaPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
+
+  function resumoPorChave(chaveFn: (j: JornadaServico) => string) {
+    const m = new Map<string, { jornadas: number; frota: Set<string>; minutosTotal: number; horasExtras: number }>();
+    for (const j of jornadas) {
+      const k = chaveFn(j);
+      const cur = m.get(k) ?? { jornadas: 0, frota: new Set<string>(), minutosTotal: 0, horasExtras: 0 };
+      cur.jornadas++;
+      cur.frota.add(j.vehicleKey);
+      cur.minutosTotal += j.minutosTotal;
+      cur.horasExtras += j.horasExtras;
+      m.set(k, cur);
+    }
+    return Array.from(m, ([chave, x]) => ({
+      chave, jornadas: x.jornadas, frota: x.frota.size, minutosTotal: x.minutosTotal, horasExtras: x.horasExtras,
+    })).sort((a, b) => a.chave.localeCompare(b.chave));
+  }
+
+  const resumoEmpresa = useMemo(
+    () => resumoPorChave((j) => empresaPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.empresa || "Sem empresa"),
+    [jornadas, empresaPorServico, linhaMap],
+  );
+  const resumoUnidade = useMemo(
+    () => resumoPorChave((j) => linhaMap.get(j.linha)?.unidade || "Sem unidade"),
+    [jornadas, linhaMap],
+  );
+  const resumoGrupo = useMemo(() => {
+    const td = applied?.dia && applied.dia !== "__all" ? applied.dia : "";
+    return resumoPorChave((j) => grupoMap.get(`${j.linha}|${td}`.toLowerCase()) || "Sem grupo");
+  }, [jornadas, grupoMap, applied]);
+
   const listaModal = useMemo((): JornadaServico[] => {
     if (!modal) return [];
     if (modal === "7") return jornadas.filter((j) => j.acimaDe7h && !j.acimaDe9h);
     if (modal === "9") return jornadas.filter((j) => j.acimaDe9h);
+    if (modal === "sem_param") return jornadas.filter((j) => j.semCadastroLinha);
     return jornadas.filter((j) => j.horasExtras > 0);
   }, [jornadas, modal]);
 
   function exportModalXLSX() {
-    const nome = modal === "9" ? "acima_10h_critico" : modal === "7" ? "acima_9h" : "horas_extras";
+    const nome = modal === "9" ? "acima_10h_critico" : modal === "7" ? "acima_9h" : modal === "sem_param" ? "sem_parametro_antecipacao" : "horas_extras";
     const rows = listaModal.map((j) => ({
       Versao: j.versao,
       Linha: j.linha,
@@ -435,7 +485,11 @@ function JornadaPage() {
       {(totais.incompletas > 0 || totais.semCadastroLinha > 0) && (
         <div className="rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
           {totais.incompletas > 0 && <span><strong>{totais.incompletas}</strong> TU incompleto(s) foram excluídos dos totais. </span>}
-          {totais.semCadastroLinha > 0 && <span><strong>{totais.semCadastroLinha}</strong> jornada(s) estão sem parâmetros de antecipação/prestação da linha.</span>}
+          {totais.semCadastroLinha > 0 && (
+            <button className="underline decoration-dotted hover:decoration-solid" onClick={() => setModal("sem_param")}>
+              <strong>{totais.semCadastroLinha}</strong> jornada(s) estão sem parâmetros de antecipação/prestação da linha — clique para ver quais.
+            </button>
+          )}
         </div>
       )}
 
@@ -458,7 +512,7 @@ function JornadaPage() {
               <TableBody>
                 {!applied && <TableRow><TableCell colSpan={7} className="text-center py-6 text-muted-foreground">Aplique os filtros e clique em <strong>Consultar</strong>.</TableCell></TableRow>}
                 {applied && loading && <TableRow><TableCell colSpan={7} className="text-center py-6 text-muted-foreground">Carregando...</TableCell></TableRow>}
-                {!loading && jornadas.slice(0, 500).map((j) => (
+                {!loading && jornadasPagina.map((j) => (
                   <TableRow key={`${j.vehicleKey}||${j.bucket}`}>
                     <TableCell className="font-medium">{j.linha}</TableCell>
                     <TableCell><Badge variant="outline">{j.tipoServico}</Badge></TableCell>
@@ -477,9 +531,31 @@ function JornadaPage() {
               </TableBody>
             </Table>
           </div>
-          {jornadas.length > 500 && <p className="text-xs text-muted-foreground p-3">Mostrando 500 de {jornadas.length}. Use os filtros para refinar.</p>}
+          {jornadas.length > 0 && (
+            <div className="flex items-center justify-between gap-3 flex-wrap p-3 border-t">
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <span>Exibir</span>
+                <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+                  <SelectTrigger className="w-20 h-7 text-xs"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {[50, 100, 200].map((n) => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                <span>por página · {jornadas.length} no total</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" disabled={paginaAtual === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>Anterior</Button>
+                <span className="text-xs text-muted-foreground">Página {paginaAtual + 1} de {totalPaginas}</span>
+                <Button variant="outline" size="sm" disabled={paginaAtual >= totalPaginas - 1} onClick={() => setPage((p) => Math.min(totalPaginas - 1, p + 1))}>Próxima</Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
+
+      <ResumoJornadaTable titulo="Resumo Gerencial por Empresa" rows={resumoEmpresa} />
+      <ResumoJornadaTable titulo="Resumo Gerencial por Grupo de Linha" rows={resumoGrupo} />
+      <ResumoJornadaTable titulo="Resumo Gerencial por Unidade" rows={resumoUnidade} />
       </div>
 
       <Dialog open={!!modal} onOpenChange={(o) => !o && setModal(null)}>
@@ -489,6 +565,7 @@ function JornadaPage() {
               {modal === "9" && `Serviços acima de 10h — crítico (${listaModal.length})`}
               {modal === "7" && `Serviços entre 9h e 10h (${listaModal.length})`}
               {modal === "he" && `Serviços com horas extras (${listaModal.length})`}
+              {modal === "sem_param" && `Jornadas sem parâmetro de antecipação/prestação (${listaModal.length})`}
             </DialogTitle>
           </DialogHeader>
           <div className="flex justify-end">
@@ -525,5 +602,49 @@ function JornadaPage() {
         </DialogContent>
       </Dialog>
     </div>
+  );
+}
+
+type ResumoJornadaRow = { chave: string; jornadas: number; frota: number; minutosTotal: number; horasExtras: number };
+function ResumoJornadaTable({ titulo, rows }: { titulo: string; rows: ResumoJornadaRow[] }) {
+  if (rows.length === 0) return null;
+  const tot = rows.reduce((s, r) => ({ jornadas: s.jornadas + r.jornadas, frota: s.frota + r.frota, minutosTotal: s.minutosTotal + r.minutosTotal, horasExtras: s.horasExtras + r.horasExtras }), { jornadas: 0, frota: 0, minutosTotal: 0, horasExtras: 0 });
+  return (
+    <Card className="shadow-[var(--shadow-card)]">
+      <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">{titulo}</CardTitle></CardHeader>
+      <CardContent className="pt-0">
+        <div className="overflow-auto">
+          <Table className="text-xs">
+            <TableHeader>
+              <TableRow className="h-8">
+                <TableHead className="px-2 py-1"></TableHead>
+                <TableHead className="px-2 py-1 text-right">Jornadas</TableHead>
+                <TableHead className="px-2 py-1 text-right">Frota</TableHead>
+                <TableHead className="px-2 py-1 text-right">Jornada Total</TableHead>
+                <TableHead className="px-2 py-1 text-right">Horas Extras</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r) => (
+                <TableRow key={r.chave} className="h-8">
+                  <TableCell className="px-2 py-1 font-medium">{r.chave}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.jornadas}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.frota}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(r.minutosTotal)}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(r.horasExtras)}</TableCell>
+                </TableRow>
+              ))}
+              <TableRow className="bg-muted/50 font-bold h-9">
+                <TableCell className="px-2 py-1">TOTAL</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{tot.jornadas}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{tot.frota}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(tot.minutosTotal)}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(tot.horasExtras)}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
   );
 }

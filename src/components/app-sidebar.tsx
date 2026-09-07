@@ -1,5 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, Bus, Upload, Search, History, Gauge, Layers, Route as RouteIcon, FileUp, Activity, Users, ShieldAlert, ClipboardList, ListChecks, GitCompare, Clock, BarChart3, FileText, Ticket, Building2, FilePlus2, TrendingUp } from "lucide-react";
+import { LayoutDashboard, Bus, Upload, Search, History, Gauge, Layers, Route as RouteIcon, FileUp, Activity, Users, ShieldAlert, ClipboardList, ListChecks, GitCompare, Clock, BarChart3, FileText, Ticket, Building2, FilePlus2, TrendingUp, ChevronDown } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -12,30 +12,38 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useAuth } from "@/lib/auth-context";
+import { usePersistentState } from "@/hooks/use-persistent-state";
 
 type Item = { title: string; url: string; icon: any; perm: string };
 const groups: { label: string; items: Item[] }[] = [
   {
     label: "Operação",
     items: [
-      
       { title: "Dashboard Operacional", url: "/dashboard-operacional", icon: Activity, perm: "dashboard_operacional" },
       { title: "Resumo Operacional", url: "/resumo-operacional", icon: ClipboardList, perm: "resumo_operacional" },
       { title: "Resumo por Linha", url: "/resumo-linha", icon: ListChecks, perm: "resumo_linha" },
       { title: "Relatório Comparativo", url: "/relatorio-comparativo", icon: GitCompare, perm: "relatorio_comparativo" },
       { title: "Jornada de Trabalho", url: "/jornada", icon: Clock, perm: "jornada" },
-      { title: "Realizado (Previsto x Real)", url: "/realizado", icon: Gauge, perm: "realizado" },
       { title: "Pesquisa", url: "/pesquisa", icon: Search, perm: "pesquisa" },
     ],
   },
   {
-    label: "Reprogramação",
+    label: "Previsto e Realizado",
+    items: [
+      { title: "Realizado (Previsto x Real)", url: "/realizado", icon: Gauge, perm: "realizado" },
+      { title: "Importação Realizado (Cittati)", url: "/importacao-realizado", icon: FileUp, perm: "importacao_realizado" },
+    ],
+  },
+  {
+    label: "Histórico de Programação",
     items: [
       { title: "Histórico de Reprogramação", url: "/historico-consultar", icon: History, perm: "historico_reprogramacao" },
       { title: "Registrar Reprogramação", url: "/historico-registrar", icon: FilePlus2, perm: "historico_reprogramacao" },
       { title: "Resumo de Reprogramações", url: "/historico-resumo", icon: TrendingUp, perm: "historico_reprogramacao" },
       { title: "Relatório PDF", url: "/historico-relatorio", icon: FileText, perm: "historico_reprogramacao" },
+      { title: "Importação Reprogramação", url: "/importacao-historico", icon: FileUp, perm: "importacao_historico_reprogramacao" },
     ],
   },
   {
@@ -45,6 +53,7 @@ const groups: { label: string; items: Item[] }[] = [
       { title: "KM", url: "/cadastro-km", icon: Gauge, perm: "cadastro_km" },
       { title: "Grupos de Linhas", url: "/cadastro-grupos", icon: Layers, perm: "cadastro_grupos" },
       { title: "Empresa por Estação", url: "/cadastro-empresa-estacao", icon: Building2, perm: "cadastro_empresa_estacao" },
+      { title: "Importação CSV", url: "/importacao", icon: Upload, perm: "importacao" },
     ],
   },
   {
@@ -52,12 +61,9 @@ const groups: { label: string; items: Item[] }[] = [
     items: [
       { title: "Viagens", url: "/viagens", icon: RouteIcon, perm: "viagens" },
       { title: "Versões Ativas", url: "/versoes-ativas", icon: ListChecks, perm: "viagens" },
-      { title: "Importação CSV", url: "/importacao", icon: Upload, perm: "importacao" },
       { title: "Importação TXT GPS", url: "/importacao-txt", icon: FileUp, perm: "importacao_txt" },
       { title: "Importação TXT EasyBus", url: "/importacao-txt-easybus", icon: FileUp, perm: "importacao_txt_easybus" },
-      { title: "Importação Realizado (Cittati)", url: "/importacao-realizado", icon: FileUp, perm: "importacao_realizado" },
-      { title: "Importação Reprogramação", url: "/importacao-historico", icon: FileUp, perm: "importacao_historico_reprogramacao" },
-      { title: "Histórico", url: "/historico", icon: History, perm: "historico" },
+      { title: "Histórico de Importação", url: "/historico", icon: History, perm: "historico" },
     ],
   },
   {
@@ -107,28 +113,55 @@ export function AppSidebar() {
       </SidebarHeader>
       <SidebarContent>
         {visibleGroups.map((g) => (
-          <SidebarGroup key={g.label}>
-            <SidebarGroupLabel>{g.label}</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {g.items.map((item) => {
-                  const active = item.url === "/" ? pathname === "/" : pathname.startsWith(item.url);
-                  return (
-                    <SidebarMenuItem key={item.url}>
-                      <SidebarMenuButton asChild isActive={active} tooltip={item.title}>
-                        <Link to={item.url}>
-                          <item.icon className="h-4 w-4" />
-                          <span>{item.title}</span>
-                        </Link>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
+          <SidebarGroupCollapsible key={g.label} label={g.label} collapsedRail={collapsed}>
+            {g.items.map((item) => {
+              const active = item.url === "/" ? pathname === "/" : pathname.startsWith(item.url);
+              return (
+                <SidebarMenuItem key={item.url}>
+                  <SidebarMenuButton asChild isActive={active} tooltip={item.title}>
+                    <Link to={item.url}>
+                      <item.icon className="h-4 w-4" />
+                      <span>{item.title}</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              );
+            })}
+          </SidebarGroupCollapsible>
         ))}
       </SidebarContent>
     </Sidebar>
+  );
+}
+
+/** Grupo de menu expansível/colapsável, lembrando a última escolha do
+ * usuário (localStorage). Quando a sidebar inteira está no modo "ícone"
+ * (colapsada), ignora o collapse de grupo e sempre mostra os itens, pra
+ * não esconder tudo atrás de 2 cliques. */
+function SidebarGroupCollapsible({ label, collapsedRail, children }: { label: string; collapsedRail: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = usePersistentState(`sidebar.group.${label}`, true);
+  if (collapsedRail) {
+    return (
+      <SidebarGroup>
+        <SidebarGroupContent>
+          <SidebarMenu>{children}</SidebarMenu>
+        </SidebarGroupContent>
+      </SidebarGroup>
+    );
+  }
+  return (
+    <SidebarGroup>
+      <Collapsible open={open} onOpenChange={setOpen}>
+        <CollapsibleTrigger className="flex w-full items-center justify-between group/trigger">
+          <SidebarGroupLabel className="cursor-pointer hover:text-sidebar-foreground transition-colors">{label}</SidebarGroupLabel>
+          <ChevronDown className="h-3.5 w-3.5 mr-2 text-sidebar-foreground/50 transition-transform group-data-[state=open]/trigger:rotate-180" />
+        </CollapsibleTrigger>
+        <CollapsibleContent>
+          <SidebarGroupContent>
+            <SidebarMenu>{children}</SidebarMenu>
+          </SidebarGroupContent>
+        </CollapsibleContent>
+      </Collapsible>
+    </SidebarGroup>
   );
 }

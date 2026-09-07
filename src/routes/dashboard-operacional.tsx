@@ -9,6 +9,7 @@ import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, buil
 import { buildJornadas } from "@/lib/jornada";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -234,7 +235,6 @@ function DashOperacional() {
   );
 
   // Filters
-  const [fPeriodo, setFPeriodo] = usePersistentState("dashboard.fPeriodo", "__all");
   const [fDia, setFDia] = usePersistentState("dashboard.fDia", "__all");
   const [fEmpresa, setFEmpresa] = usePersistentState("dashboard.fEmpresa", "__all");
   const [fUnidade, setFUnidade] = usePersistentState("dashboard.fUnidade", "__all");
@@ -280,19 +280,9 @@ function DashOperacional() {
     };
   }, [viagens, linhas, multi, empresaEstacao]);
 
-  const periodos = [
-    { v: "__all", l: "Todo período" },
-    { v: "7", l: "Últimos 7 dias" },
-    { v: "30", l: "Últimos 30 dias" },
-    { v: "90", l: "Últimos 90 dias" },
-  ];
-
   // Apply filters
   const filtered = useMemo(() => {
-    const now = Date.now();
-    const periodMs = fPeriodo === "__all" ? null : parseInt(fPeriodo, 10) * 86_400_000;
     return viagens.filter((v) => {
-      if (periodMs && now - new Date(v.created_at).getTime() > periodMs) return false;
       if (fDia !== "__all" && v.tipo_operacao !== fDia) return false;
       if (linhaSet.size > 0 && !linhaSet.has(v.linha)) return false;
       if (fTipoServ !== "__all" && v.tipo_servico !== fTipoServ) return false;
@@ -319,7 +309,7 @@ function DashOperacional() {
       }
       return true;
     });
-  }, [viagens, fPeriodo, fDia, fLinha, fTipoServ, fSentido, fEmpresa, fUnidade, fGrupoOrdem, fCategoria, fGrupo, fFaixa, fOrigem, fDestino, fTipoMov, fCatMov, fTurno, linhaMap, grupoMap, empresaOverrideMap]);
+  }, [viagens, fDia, fLinha, fTipoServ, fSentido, fEmpresa, fUnidade, fGrupoOrdem, fCategoria, fGrupo, fFaixa, fOrigem, fDestino, fTipoMov, fCatMov, fTurno, linhaMap, grupoMap, empresaOverrideMap]);
 
   // Base dos gráficos = respeita o filtro de Movimento (use o filtro acima para isolar Comercial / Soltura / Recolha).
   const comerciais = filtered;
@@ -350,6 +340,51 @@ function DashOperacional() {
     () => buildEmpresaPorServico(filtered, linhaMap, empresaOverrideMap),
     [filtered, linhaMap, empresaOverrideMap],
   );
+
+  // Resumo Gerencial por Empresa / Unidade / Grupo de Linha (mesmo padrão dos demais relatórios)
+  function resumoPorChave(chaveViagem: (v: ViagemLite) => string, chaveUnit: (u: ReturnType<typeof buildServiceUnits> extends Map<string, infer U> ? U : never) => string) {
+    const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
+    for (const u of units.values()) {
+      const k = chaveUnit(u as any);
+      if (!m.has(k)) m.set(k, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      m.get(k)!.servicos.add(u.key);
+      m.get(k)!.veiculos.add(u.vehicleKey);
+    }
+    for (const v of filtered) {
+      const k = chaveViagem(v as any);
+      if (!m.has(k)) m.set(k, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(k)!.partidas += 1;
+      m.get(k)!.km += viagemKm(v, kmMaps);
+    }
+    return Array.from(m, ([chave, x]) => ({
+      chave, partidas: x.partidas, km: x.km, servicos: x.servicos.size, frota: x.veiculos.size,
+    })).sort((a, b) => a.chave.localeCompare(b.chave));
+  }
+
+  const resumoEmpresaTabela = useMemo(
+    () => resumoPorChave(
+      (v) => empresaPorServico.get(`${v.versao_programacao ?? ""}||${v.tipo_operacao ?? ""}||${v.servico ?? ""}`) || linhaMap.get(v.linha)?.empresa || resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa",
+      (u: any) => empresaPorServico.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, "predominancia"))?.empresa || "Sem empresa",
+    ),
+    [units, filtered, empresaPorServico, linhaMap, empresaOverrideMap, kmMaps],
+  );
+  const resumoUnidade = useMemo(
+    () => resumoPorChave(
+      (v) => linhaMap.get(v.linha)?.unidade || "Sem unidade",
+      (u: any) => linhaMap.get(dominantLinha(u, "predominancia"))?.unidade || "Sem unidade",
+    ),
+    [units, filtered, linhaMap, kmMaps],
+  );
+  const resumoGrupoLinha = useMemo(() => {
+    const grupoDe = (linha: string, tipoOperacao: string | null | undefined) => {
+      const td = fDia !== "__all" ? fDia : (tipoOperacao ?? "");
+      return grupoMap.get(`${linha}|${td}`.toLowerCase()) || "Sem grupo";
+    };
+    return resumoPorChave(
+      (v) => grupoDe(v.linha, v.tipo_operacao),
+      (u: any) => grupoDe(dominantLinha(u, "predominancia"), u.tipo_operacao),
+    );
+  }, [units, filtered, grupoMap, fDia, kmMaps]);
 
   // versão de programação -> dia tipo (cada versão pertence a um único dia tipo)
   const versaoParaDia = useMemo(() => {
@@ -567,6 +602,21 @@ function DashOperacional() {
 
   // Label formatter for charts
   const labelProps = showValues ? { fill: "var(--foreground)", fontSize: 10 } : undefined;
+  // Rótulo externo de gráfico de pizza (Recharts, por padrão, ignora o tema
+  // e pinta o texto de preto — invisível no fundo escuro). Desenha o texto
+  // manualmente com a cor do tema, na mesma posição que o labelLine aponta.
+  const renderPieLabel = (props: any) => {
+    const RADIAN = Math.PI / 180;
+    const { cx, cy, midAngle, outerRadius, value } = props;
+    const radius = outerRadius + 18;
+    const x = cx + radius * Math.cos(-midAngle * RADIAN);
+    const y = cy + radius * Math.sin(-midAngle * RADIAN);
+    return (
+      <text x={x} y={y} fill="var(--foreground)" fontSize={11} textAnchor={x > cx ? "start" : "end"} dominantBaseline="central">
+        {String(value)}
+      </text>
+    );
+  };
 
   return (
     <div className="relative space-y-5 animate-in fade-in duration-500">
@@ -575,7 +625,7 @@ function DashOperacional() {
       <div className="flex items-end justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Dashboard Operacional</h1>
-          <p className="text-sm text-muted-foreground mt-1">Análise consolidada das viagens importadas (GPS).</p>
+          <p className="text-sm text-muted-foreground mt-1">Análise consolidada das viagens importadas.</p>
         </div>
         <div className="flex items-center gap-3">
           <MultiSelect label="Gráficos" values={visibleCharts} onChange={setVisibleCharts} options={CHART_TITLES} placeholder="Todos" />
@@ -601,7 +651,6 @@ function DashOperacional() {
         <CardContent className="p-3">
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 xl:grid-cols-7 gap-2">
             {[
-              { label: "Período", value: fPeriodo, set: setFPeriodo, options: periodos.map((p) => ({ v: p.v, l: p.l })) },
               { label: "Dia Tipo", value: fDia, set: setFDia, options: [{ v: "__all", l: "Todos" }, ...opts.dia.map((x) => ({ v: x, l: x }))] },
               { label: "Empresa", value: fEmpresa, set: setFEmpresa, options: [{ v: "__all", l: "Todas" }, ...opts.empresa.map((x) => ({ v: x, l: x }))] },
               { label: "Unidade", value: fUnidade, set: setFUnidade, options: [{ v: "__all", l: "Todas" }, ...opts.unidade.map((x) => ({ v: x, l: x }))] },
@@ -772,7 +821,7 @@ function DashOperacional() {
               <ResponsiveContainer width="100%" height={320}>
                 <PieChart>
                   <Pie filter="url(#glow)" data={linhasPorCategoria} dataKey="value" nameKey="name" outerRadius={110} innerRadius={60} paddingAngle={2} stroke="var(--background)" strokeWidth={2}
-                    label={showValues ? ({ value }) => String(value) : false} labelLine={showValues}>
+                    label={showValues ? renderPieLabel : false} labelLine={showValues}>
                     {linhasPorCategoria.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Pie>
                   <Tooltip contentStyle={tooltipStyle} />
@@ -887,7 +936,7 @@ function DashOperacional() {
               <ResponsiveContainer width="100%" height={300}>
                 <PieChart>
                   <Pie filter="url(#glow)" data={frotaPorEmpresa} dataKey="value" nameKey="name" outerRadius={110} innerRadius={62} paddingAngle={3} stroke="var(--background)" strokeWidth={2}
-                    label={showValues ? ({ value }) => String(value) : false} labelLine={showValues}>
+                    label={showValues ? renderPieLabel : false} labelLine={showValues}>
                     {frotaPorEmpresa.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
                   </Pie>
                   <Tooltip contentStyle={tooltipStyle} formatter={(v: any, n: any) => [`${fmtInt(Number(v))} veículo(s)`, n]} />
@@ -942,8 +991,56 @@ function DashOperacional() {
             </ChartCard>
             )}
           </div>
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <ResumoGerencialDashTable titulo="Resumo Gerencial por Empresa" rows={resumoEmpresaTabela} />
+            <ResumoGerencialDashTable titulo="Resumo Gerencial por Unidade" rows={resumoUnidade} />
+            <ResumoGerencialDashTable titulo="Resumo Gerencial por Grupo de Linha" rows={resumoGrupoLinha} />
+          </div>
         </>
       )}
     </div>
+  );
+}
+
+function ResumoGerencialDashTable({ titulo, rows }: { titulo: string; rows: { chave: string; servicos: number; frota: number; partidas: number; km: number }[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <Card className="shadow-[var(--shadow-card)]">
+      <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">{titulo}</CardTitle></CardHeader>
+      <CardContent className="pt-0">
+        <div className="overflow-auto max-h-80">
+          <Table className="text-xs">
+            <TableHeader>
+              <TableRow className="h-8">
+                <TableHead className="px-2 py-1"></TableHead>
+                <TableHead className="px-2 py-1 text-right">Serviços</TableHead>
+                <TableHead className="px-2 py-1 text-right">Frota</TableHead>
+                <TableHead className="px-2 py-1 text-right">Partidas</TableHead>
+                <TableHead className="px-2 py-1 text-right">KM</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {rows.map((r) => (
+                <TableRow key={r.chave} className="h-8">
+                  <TableCell className="px-2 py-1 font-medium">{r.chave}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.servicos}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.frota}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(r.partidas)}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(r.km)}</TableCell>
+                </TableRow>
+              ))}
+              <TableRow className="bg-muted/50 font-bold h-9">
+                <TableCell className="px-2 py-1">TOTAL</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{rows.reduce((s, r) => s + r.servicos, 0)}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{rows.reduce((s, r) => s + r.frota, 0)}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(rows.reduce((s, r) => s + r.partidas, 0))}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(rows.reduce((s, r) => s + r.km, 0))}</TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
