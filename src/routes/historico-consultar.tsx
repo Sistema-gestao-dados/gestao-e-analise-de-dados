@@ -11,8 +11,9 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
-import { Pencil, X, Check, Trash2, Filter, Search, ArrowRight } from "lucide-react";
+import { Pencil, X, Check, Trash2, Filter, Search, ArrowRight, Loader2 } from "lucide-react";
 
 export const Route = createFileRoute("/historico-consultar")({
   head: () => ({ meta: [{ title: "Histórico de Reprogramação — Gestão e Análise de Dados" }] }),
@@ -90,6 +91,56 @@ function ConsultarPage() {
     onError: (e: Error) => toast.error("Erro ao excluir", { description: e.message }),
   });
 
+  const [selecionados, setSelecionados] = useState<Set<string>>(new Set());
+  const [excluindoLote, setExcluindoLote] = useState(false);
+  const [confirmDeleteLote, setConfirmDeleteLote] = useState(false);
+
+  const todosVisiveisSelecionados = filtered.length > 0 && filtered.every((h) => selecionados.has(h.id));
+  const algunsVisiveisSelecionados = filtered.some((h) => selecionados.has(h.id));
+
+  function toggleSelecionarTudo() {
+    setSelecionados((prev) => {
+      const next = new Set(prev);
+      if (todosVisiveisSelecionados) {
+        // já estava tudo marcado (dentre os visíveis) -> desmarca só os visíveis
+        for (const h of filtered) next.delete(h.id);
+      } else {
+        // marca todos os visíveis (mantém marcações de fora do filtro atual, se houver)
+        for (const h of filtered) next.add(h.id);
+      }
+      return next;
+    });
+  }
+
+  function toggleUm(id: string) {
+    setSelecionados((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function excluirSelecionados() {
+    setExcluindoLote(true);
+    const ids = Array.from(selecionados);
+    let ok = 0, falhas = 0;
+    for (const id of ids) {
+      try {
+        await deleteHistorico(id);
+        void logAudit({ action: "delete", entity: "historico_reprogramacao", entity_id: id });
+        ok++;
+      } catch {
+        falhas++;
+      }
+    }
+    setExcluindoLote(false);
+    setConfirmDeleteLote(false);
+    setSelecionados(new Set());
+    qc.invalidateQueries({ queryKey: ["historico-reprogramacao"] });
+    if (falhas === 0) toast.success(`${ok} registro(s) excluído(s)`);
+    else toast.error(`${ok} excluído(s), ${falhas} com erro`);
+  }
+
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editRow, setEditRow] = useState<Partial<Historico>>({});
   const [detalhe, setDetalhe] = useState<Historico | null>(null);
@@ -144,10 +195,29 @@ function ConsultarPage() {
           ) : filtered.length === 0 ? (
             <div className="p-8 text-center text-sm text-muted-foreground">Nenhum registro encontrado.</div>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+              {selecionados.size > 0 && (
+                <div className="flex items-center justify-between gap-3 border-b border-border bg-muted/40 px-4 py-2">
+                  <span className="text-sm font-medium">{selecionados.size} selecionado(s)</span>
+                  <div className="flex items-center gap-2">
+                    <Button variant="ghost" size="sm" onClick={() => setSelecionados(new Set())}>Limpar seleção</Button>
+                    <Button variant="destructive" size="sm" onClick={() => setConfirmDeleteLote(true)}>
+                      <Trash2 className="h-4 w-4 mr-1" /> Excluir selecionados
+                    </Button>
+                  </div>
+                </div>
+              )}
+              <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead className="w-10">
+                      <Checkbox
+                        checked={todosVisiveisSelecionados ? true : algunsVisiveisSelecionados ? "indeterminate" : false}
+                        onCheckedChange={toggleSelecionarTudo}
+                        aria-label="Selecionar tudo"
+                      />
+                    </TableHead>
                     <TableHead>Linha</TableHead>
                     <TableHead>Versão</TableHead>
                     <TableHead>Dia Tipo</TableHead>
@@ -162,7 +232,10 @@ function ConsultarPage() {
                   {filtered.map((h) => {
                     const isEditing = editingId === h.id;
                     return (
-                      <TableRow key={h.id}>
+                      <TableRow key={h.id} className={selecionados.has(h.id) ? "bg-muted/30" : undefined}>
+                        <TableCell>
+                          <Checkbox checked={selecionados.has(h.id)} onCheckedChange={() => toggleUm(h.id)} aria-label="Selecionar linha" />
+                        </TableCell>
                         <TableCell className="font-medium">{h.linha}</TableCell>
                         <TableCell>
                           {isEditing ? <Input className="w-20" type="number" value={editRow.versao ?? ""} onChange={(e) => setEditRow((r) => ({ ...r, versao: e.target.value ? Number(e.target.value) : null }))} /> : (h.versao ?? "—")}
@@ -209,7 +282,8 @@ function ConsultarPage() {
                   })}
                 </TableBody>
               </Table>
-            </div>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
@@ -233,6 +307,21 @@ function ConsultarPage() {
           <div className="flex justify-end gap-2">
             <Button variant="outline" onClick={() => setConfirmDelete(null)}>Cancelar</Button>
             <Button variant="destructive" onClick={() => { if (confirmDelete) deleteMut.mutate(confirmDelete); setConfirmDelete(null); }}>Excluir</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={confirmDeleteLote} onOpenChange={(o) => !o && !excluindoLote && setConfirmDeleteLote(false)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Excluir {selecionados.size} registro(s)?</DialogTitle>
+            <DialogDescription>Essa ação não pode ser desfeita.</DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConfirmDeleteLote(false)} disabled={excluindoLote}>Cancelar</Button>
+            <Button variant="destructive" onClick={excluirSelecionados} disabled={excluindoLote}>
+              {excluindoLote ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Excluindo...</> : `Excluir ${selecionados.size} registro(s)`}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
