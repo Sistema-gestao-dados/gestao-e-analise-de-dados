@@ -72,6 +72,17 @@ function parseAtivo(v: string | undefined): boolean {
   return s !== "N" && s !== "NAO" && s !== "NÃO" && s !== "FALSE" && s !== "0";
 }
 
+/** "102" -> 102. "102-MAUÁ" ou "147- MAUÁ" -> 102/147 (pega só o número do
+ * início — o sufixo com nome de empresa não tem coluna própria hoje, então
+ * fica de fora, mas pelo menos o número da versão não se perde como null). */
+function parseVersao(v: string | undefined): number | null {
+  const s = (v ?? "").trim();
+  if (!s || s === "-") return null;
+  const m = s.match(/^(\d+)/);
+  if (!m) return null;
+  return Number(m[1]);
+}
+
 function ImportacaoHistoricoPage() {
   useAuditView("importacao_historico");
   const qc = useQueryClient();
@@ -114,7 +125,7 @@ function ImportacaoHistoricoPage() {
         if (diaTipo) diaTiposNovos.add(diaTipo);
         const payload: HistoricoInput = {
           linha,
-          versao: iVersao !== -1 && r[iVersao]?.trim() ? Number(r[iVersao]) : null,
+          versao: iVersao !== -1 ? parseVersao(r[iVersao]) : null,
           dia_tipo: diaTipo,
           data_solicitacao: iDataSol !== -1 ? parseDate(r[iDataSol]) : null,
           vigencia: iVigencia !== -1 ? parseDate(r[iVigencia]) : null,
