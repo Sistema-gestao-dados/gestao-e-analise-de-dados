@@ -15,7 +15,17 @@ export const Route = createFileRoute("/importacao-historico")({
   component: ImportacaoHistoricoPage,
 });
 
+function detectDelimiter(headerLine: string): string {
+  const counts = [";", ",", "\t"].map((d) => [d, headerLine.split(d).length - 1] as const);
+  counts.sort((a, b) => b[1] - a[1]);
+  return counts[0][1] > 0 ? counts[0][0] : ";";
+}
+
 function parseCSV(text: string): string[][] {
+  const firstLineEnd = text.search(/\r?\n/);
+  const headerLine = firstLineEnd === -1 ? text : text.slice(0, firstLineEnd);
+  const delim = detectDelimiter(headerLine);
+
   const rows: string[][] = [];
   let cur: string[] = [];
   let val = "";
@@ -28,7 +38,7 @@ function parseCSV(text: string): string[][] {
       else val += c;
     } else {
       if (c === '"') inQuotes = true;
-      else if (c === "," || c === ";") { cur.push(val); val = ""; }
+      else if (c === delim) { cur.push(val); val = ""; }
       else if (c === "\n") { cur.push(val); rows.push(cur); cur = []; val = ""; }
       else if (c === "\r") { /* skip */ }
       else val += c;
