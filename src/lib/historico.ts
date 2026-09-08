@@ -63,6 +63,23 @@ export async function deleteHistorico(id: string): Promise<void> {
   if (error) throw error;
 }
 
+/** Exclusão em lote — 1 requisição por lote de ~200 ids, em vez de 1 por
+ * registro. Um DELETE ... WHERE id IN (...) com os 2000+ ids de uma vez só
+ * estoura o limite prático de tamanho de URL do Supabase, por isso divide
+ * em lotes pequenos (ainda assim, poucas dezenas de requisições no total,
+ * não milhares). */
+export async function deleteHistoricoBulk(ids: string[]): Promise<{ ok: number; falhas: number }> {
+  const CHUNK = 200;
+  let ok = 0, falhas = 0;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const chunk = ids.slice(i, i + CHUNK);
+    const { error, count } = await supabase.from("historico_reprogramacao").delete({ count: "exact" }).in("id", chunk);
+    if (error) falhas += chunk.length;
+    else ok += count ?? chunk.length;
+  }
+  return { ok, falhas };
+}
+
 /** Linhas de um Grupo de Linha (mesmo cadastro usado nos relatórios de
  * Resumo/Comparativo/Dashboard) — reaproveita `parametro_multilinha`
  * (grupo_du), ignorando a distinção por tipo de dia (aqui é "pertence ao

@@ -1,11 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
-import { fetchHistorico, updateHistorico, deleteHistorico, buildGrupoParaLinhas, type Historico } from "@/lib/historico";
+import { useEffect, useMemo, useState } from "react";
+import { fetchHistorico, updateHistorico, deleteHistorico, deleteHistoricoBulk, buildGrupoParaLinhas, type Historico } from "@/lib/historico";
 import { fetchLinhas, fetchMulti } from "@/lib/data";
 import { logAudit } from "@/lib/audit";
 import { useAuditView } from "@/lib/use-audit-view";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { usePersistentState } from "@/hooks/use-persistent-state";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -72,6 +73,16 @@ function ConsultarPage() {
     });
   }, [historico, filtros, empresaMap, grupoParaLinhas]);
 
+  const [pageSize, setPageSize] = usePersistentState("historico.pageSize", 50);
+  const [page, setPage] = useState(0);
+  const totalPaginas = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const paginaAtual = Math.min(page, totalPaginas - 1);
+  const pageItems = useMemo(
+    () => filtered.slice(paginaAtual * pageSize, paginaAtual * pageSize + pageSize),
+    [filtered, paginaAtual, pageSize],
+  );
+  useEffect(() => setPage(0), [filtros, pageSize]);
+
   const updateMut = useMutation({
     mutationFn: async (row: Partial<Historico> & { id: string }) => {
       const { id, ...rest } = row;
@@ -123,16 +134,9 @@ function ConsultarPage() {
   async function excluirSelecionados() {
     setExcluindoLote(true);
     const ids = Array.from(selecionados);
-    let ok = 0, falhas = 0;
-    for (const id of ids) {
-      try {
-        await deleteHistorico(id);
-        void logAudit({ action: "delete", entity: "historico_reprogramacao", entity_id: id });
-        ok++;
-      } catch {
-        falhas++;
-      }
-    }
+    const { ok, falhas } = await deleteHistoricoBulk(ids);
+    // 1 registro de auditoria resumindo a ação em lote, não 1 por item.
+    void logAudit({ action: "delete", entity: "historico_reprogramacao", details: { acao: "exclusao_em_lote", quantidade: ok, falhas } });
     setExcluindoLote(false);
     setConfirmDeleteLote(false);
     setSelecionados(new Set());
@@ -229,7 +233,7 @@ function ConsultarPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filtered.map((h) => {
+                  {pageItems.map((h) => {
                     const isEditing = editingId === h.id;
                     return (
                       <TableRow key={h.id} className={selecionados.has(h.id) ? "bg-muted/30" : undefined}>
@@ -282,6 +286,23 @@ function ConsultarPage() {
                   })}
                 </TableBody>
               </Table>
+              </div>
+              <div className="flex items-center justify-between gap-3 flex-wrap p-3 border-t border-border">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <span>Exibir</span>
+                  <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
+                    <SelectTrigger className="w-20 h-7 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {[25, 50, 100].map((n) => <SelectItem key={n} value={String(n)}>{n}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <span>por página · {filtered.length} registro(s) no filtro atual</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button variant="outline" size="sm" disabled={paginaAtual === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>Anterior</Button>
+                  <span className="text-xs text-muted-foreground">Página {paginaAtual + 1} de {totalPaginas}</span>
+                  <Button variant="outline" size="sm" disabled={paginaAtual >= totalPaginas - 1} onClick={() => setPage((p) => Math.min(totalPaginas - 1, p + 1))}>Próxima</Button>
+                </div>
               </div>
             </>
           )}
