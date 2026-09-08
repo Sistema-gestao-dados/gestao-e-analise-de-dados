@@ -17,6 +17,7 @@
 
 import type { Linha } from "@/lib/data";
 import type { ViagemLite, ServiceUnit } from "@/lib/resumo";
+import { dominantLinha } from "@/lib/resumo";
 
 export const LIMITE_DIR_MIN = 420;    // 7h — motorista DIR
 export const LIMITE_TU_MIN = 504;     // 8h24 — motorista TU
@@ -174,10 +175,27 @@ export function buildJornadas(
   const out: JornadaServico[] = [];
 
   for (const g of groups.values()) {
-    const cnt = new Map<string, number>();
-    for (const v of g.viagens) cnt.set(v.linha, (cnt.get(v.linha) ?? 0) + 1);
-    let linhaDom = "—", bestC = -1;
-    for (const [l, c] of cnt) if (c > bestC) { linhaDom = l; bestC = c; }
+    // Linha dominante: MESMA regra usada em Resumo/Comparativo/Dashboard
+    // (dominantLinha, baseada em partidas comerciais + desempate por 1ª
+    // partida) — antes essa tela calculava a própria conta simplificada
+    // (contava toda viagem, sem desempate determinístico), podendo divergir
+    // da linha mostrada nos outros relatórios pro mesmo serviço.
+    const partidasPorLinha = new Map<string, number>();
+    const primeiraPartidaPorLinha = new Map<string, number>();
+    const viagensPorLinha = new Map<string, number>();
+    for (const v of g.viagens) {
+      viagensPorLinha.set(v.linha, (viagensPorLinha.get(v.linha) ?? 0) + 1);
+      const isPartida = (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && Boolean(v.partida);
+      if (isPartida) {
+        partidasPorLinha.set(v.linha, (partidasPorLinha.get(v.linha) ?? 0) + 1);
+        const min = parseHHMM(v.partida);
+        if (min != null) {
+          const atual = primeiraPartidaPorLinha.get(v.linha);
+          if (atual == null || min < atual) primeiraPartidaPorLinha.set(v.linha, min);
+        }
+      }
+    }
+    const linhaDom = dominantLinha({ partidasPorLinha, primeiraPartidaPorLinha, viagensPorLinha } as ServiceUnit);
     const linhaCad = linhaMap.get(linhaDom);
     const semCadastroLinha = !linhaCad;
     const diaTipo = g.viagens[0]?.tipo_operacao ?? "";

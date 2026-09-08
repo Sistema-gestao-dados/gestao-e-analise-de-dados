@@ -46,8 +46,13 @@ export function buildKmMaps(km: ParametroKm[]): KmMaps {
   const trecho = new Map<string, number>();
   const porLinha = new Map<string, { o: string; d: string; km: number }[]>();
   for (const k of km) {
-    const kmv = Number(k.km || 0);
-    if (kmv <= 0) continue;
+    // Toda linha da tabela parametro_km é um cadastro intencional (a coluna
+    // é NOT NULL DEFAULT 0) — não existe jeito de "não preencher" o KM.
+    // Por isso NÃO descartamos km <= 0 aqui: fazer isso faz o sistema tratar
+    // um trecho cadastrado como 0.0 km (ex.: linhas 01/01A em certos pontos)
+    // como se fosse "sem cadastro", o que é errado — são coisas diferentes.
+    const kmv = Number(k.km ?? 0);
+    if (!Number.isFinite(kmv) || kmv < 0) continue;
     const l = normKey(k.linha);
     const o = normKey(k.origem);
     const d = normKey(k.destino);
