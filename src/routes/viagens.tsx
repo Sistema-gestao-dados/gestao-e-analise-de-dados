@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
-import { buildEmpresaOverrideMap, resolveGrupoViagem } from "@/lib/empresa-estacao";
+import { buildEmpresaOverrideMap, resolveGrupoViagem, resolveUnidadeViagem } from "@/lib/empresa-estacao";
 import { CrudTable, type ColumnDef } from "@/components/crud-table";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -136,7 +136,7 @@ function ViagensPage() {
         const v = ativosKey.get(key);
         if (v && r.versao_programacao !== v) return false;
       }
-      if (fUnidade !== "__all" && linhaMap.get(r.linha)?.unidade !== fUnidade) return false;
+      if (fUnidade !== "__all" && resolveUnidadeViagem(r, linhaMap, empresaOverrideMap) !== fUnidade) return false;
       if (fGrupo !== "__all" && resolveGrupoViagem(r, linhaMap, empresaOverrideMap) !== fGrupo) return false;
       return true;
     };

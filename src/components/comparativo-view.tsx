@@ -31,7 +31,7 @@ import { PdfPreviewDialog, type PdfOrientation } from "@/components/pdf-preview-
 import { logAudit } from "@/lib/audit";
 import { buildJornadas, fmtDur } from "@/lib/jornada";
 import { usePersistentState } from "@/hooks/use-persistent-state";
-import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, buildEmpresaPorServico, buildGrupoPorServico, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
+import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
 
 function parseHHMM(s: string | null): number | null {
   if (!s) return null;
@@ -84,7 +84,7 @@ function passesExceptLinha(
   if (f.destino !== "__all" && v.destino !== f.destino) return false;
   const l = linhaMap.get(v.linha);
   if (f.empresa !== "__all" && resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) !== f.empresa) return false;
-  if (f.unidade !== "__all" && l?.unidade !== f.unidade) return false;
+  if (f.unidade !== "__all" && resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) !== f.unidade) return false;
   if (f.grupoOrdem !== "__all" && resolveGrupoViagem(v, linhaMap, empresaOverrideMap) !== f.grupoOrdem) return false;
   if (f.categoria !== "__all" && l?.categoria !== f.categoria) return false;
   if (f.grupo !== "__all") {
@@ -372,10 +372,12 @@ export function ComparativoView() {
 
   const resumoPorUnidade = useMemo(() => {
     if (!applied) return [];
-    const a = buildBreakdown(basesAplicadas.atual, (v) => linhaMap.get(v.linha)?.unidade || "Sem unidade", (u) => linhaMap.get(dominantLinha(u, criterio))?.unidade || "Sem unidade");
-    const p = buildBreakdown(basesAplicadas.proposta, (v) => linhaMap.get(v.linha)?.unidade || "Sem unidade", (u) => linhaMap.get(dominantLinha(u, criterio))?.unidade || "Sem unidade");
+    const uniA = buildUnidadePorServico(basesAplicadas.atual, linhaMap, empresaOverrideMap);
+    const uniP = buildUnidadePorServico(basesAplicadas.proposta, linhaMap, empresaOverrideMap);
+    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade", (u) => uniA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.unidade || "Sem unidade");
+    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade", (u) => uniP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.unidade || "Sem unidade");
     return mergeBreakdown(a, p);
-  }, [applied, basesAplicadas, linhaMap, criterio, kmFn]);
+  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn]);
 
   const resumoPorGrupo = useMemo(() => {
     if (!applied) return [];
@@ -387,6 +389,26 @@ export function ComparativoView() {
   }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn]);
 
   const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">("comparativo.ordenarPor", "padrao");
+
+  // Unidade por linha (com exceção por estação), pra ordenar por unidade —
+  // tally de maioria a partir das viagens de ambos os cenários.
+  const unidadePorLinha = useMemo(() => {
+    const tally = new Map<string, Map<string, number>>();
+    for (const v of [...basesAplicadas.atual, ...basesAplicadas.proposta]) {
+      const un = resolveUnidadeViagem(v, linhaMap, empresaOverrideMap);
+      if (!un) continue;
+      const m = tally.get(v.linha) ?? new Map<string, number>();
+      m.set(un, (m.get(un) ?? 0) + 1);
+      tally.set(v.linha, m);
+    }
+    const out = new Map<string, string>();
+    for (const [key, m] of tally) {
+      let best: string | null = null, bestN = -1;
+      for (const [un, n] of m) if (n > bestN) { best = un; bestN = n; }
+      if (best) out.set(key, best);
+    }
+    return out;
+  }, [basesAplicadas, linhaMap, empresaOverrideMap]);
 
   const merged = useMemo(() => {
     const map = new Map<string, { linha: string; order: string; a: AggRow | null; p: AggRow | null }>();
@@ -400,8 +422,8 @@ export function ComparativoView() {
     }
     let arr = Array.from(map.values()).sort((a, b) => {
       if (ordenarPor === "unidade") {
-        const ua = linhaMap.get(a.linha)?.unidade ?? "";
-        const ub = linhaMap.get(b.linha)?.unidade ?? "";
+        const ua = unidadePorLinha.get(a.linha) ?? "";
+        const ub = unidadePorLinha.get(b.linha) ?? "";
         if (ua !== ub) return ua.localeCompare(ub, "pt-BR");
       }
       if (a.order !== b.order) return a.order.localeCompare(b.order, "pt-BR", { numeric: true, sensitivity: "base" });
@@ -413,7 +435,7 @@ export function ComparativoView() {
       );
     }
     return arr;
-  }, [atualRows, propostaRows, onlyDiff, ordenarPor, linhaMap]);
+  }, [atualRows, propostaRows, onlyDiff, ordenarPor, unidadePorLinha]);
 
   const totals = useMemo(() => {
     const base = { a: {} as Record<string, number>, p: {} as Record<string, number> };

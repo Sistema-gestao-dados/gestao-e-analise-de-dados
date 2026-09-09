@@ -1,22 +1,22 @@
-// Resolve EMPRESA e GRUPO (campo "Grupo", ex-"Ordem") de uma viagem quando a
-// mesma linha é operada por mais de uma empresa/grupo (ex.: linha "07" =
-// Icaraí + Grupo Maua em alguns trechos, Tanguá + Grupo Rio Ita em outros).
-// A regra é a mesma pros dois campos: se a linha tiver exceções cadastradas
-// em `linha_empresa_estacao`, decide pela origem OU destino da viagem
-// batendo com uma estação cadastrada; se não bater com nenhuma exceção (ou
-// a linha não tiver exceção nenhuma, ou o campo grupo daquela estação
-// estiver em branco), cai no cadastro normal da linha (`linhas`).
+// Resolve EMPRESA, GRUPO (ex-"Ordem") e UNIDADE de uma viagem quando a
+// mesma linha é operada por mais de uma empresa (ex.: linha "07" = Icaraí +
+// Grupo Maua + Unidade Icaraí em alguns trechos, Tanguá + Grupo Rio Ita +
+// Unidade Expresso Tanguá em outros). A regra é a mesma pros três campos:
+// se a linha tiver exceções cadastradas em `linha_empresa_estacao`, decide
+// pela origem OU destino da viagem batendo com uma estação cadastrada; se
+// não bater com nenhuma exceção (ou o campo daquela estação estiver em
+// branco), cai no cadastro normal da linha (`linhas`).
 
 import type { Linha, LinhaEmpresaEstacao } from "./data";
 
-type Override = { empresa: string; grupo: string | null };
-export type EmpresaOverrideMap = Map<string, Map<string, Override>>; // linha -> (estacao -> {empresa, grupo})
+type Override = { empresa: string; grupo: string | null; unidade: string | null };
+export type EmpresaOverrideMap = Map<string, Map<string, Override>>; // linha -> (estacao -> {empresa, grupo, unidade})
 
 export function buildEmpresaOverrideMap(rows: LinhaEmpresaEstacao[]): EmpresaOverrideMap {
   const m: EmpresaOverrideMap = new Map();
   for (const r of rows) {
     const porEstacao = m.get(r.linha) ?? new Map<string, Override>();
-    porEstacao.set(r.estacao, { empresa: r.empresa, grupo: r.grupo ?? null });
+    porEstacao.set(r.estacao, { empresa: r.empresa, grupo: r.grupo ?? null, unidade: r.unidade ?? null });
     m.set(r.linha, porEstacao);
   }
   return m;
@@ -58,55 +58,70 @@ export function resolveGrupoViagem(
   return linhaMap.get(v.linha)?.ordem ?? null;
 }
 
-/** Resolve o Grupo por SERVIÇO — mesma lógica do buildEmpresaPorServico, mas
- * pro campo Grupo (ex-"Ordem"), pra usar em resumos que agregam por
- * serviço/frota (jornada, dashboard). */
-export function buildGrupoPorServico(
-  viagens: { linha: string; origem?: string | null; destino?: string | null; versao_programacao?: string | null; tipo_operacao?: string | null; servico?: string | null }[],
+/** Resolve a Unidade de UMA viagem. Mesma prioridade: exceção por estação
+ * (se o campo unidade dela estiver preenchido) > cadastro normal da linha. */
+export function resolveUnidadeViagem(
+  v: { linha: string; origem?: string | null; destino?: string | null },
+  linhaMap: Map<string, Linha>,
+  overrideMap: EmpresaOverrideMap,
+): string | null {
+  const o = findOverride(v, overrideMap);
+  if (o?.unidade) return o.unidade;
+  return linhaMap.get(v.linha)?.unidade ?? null;
+}
+
+type Viagem = { linha: string; origem?: string | null; destino?: string | null; versao_programacao?: string | null; tipo_operacao?: string | null; servico?: string | null };
+
+function buildPorServicoGenerico(
+  viagens: Viagem[],
+  resolver: (v: Viagem, linhaMap: Map<string, Linha>, overrideMap: EmpresaOverrideMap) => string | null,
   linhaMap: Map<string, Linha>,
   overrideMap: EmpresaOverrideMap,
 ): Map<string, string> {
   const tally = new Map<string, Map<string, number>>();
   for (const v of viagens) {
     const vehicleKey = `${v.versao_programacao ?? ""}||${v.tipo_operacao ?? ""}||${v.servico ?? ""}`;
-    const grupo = resolveGrupoViagem(v, linhaMap, overrideMap);
-    if (!grupo) continue;
+    const val = resolver(v, linhaMap, overrideMap);
+    if (!val) continue;
     const m = tally.get(vehicleKey) ?? new Map<string, number>();
-    m.set(grupo, (m.get(grupo) ?? 0) + 1);
+    m.set(val, (m.get(val) ?? 0) + 1);
     tally.set(vehicleKey, m);
   }
   const out = new Map<string, string>();
   for (const [key, m] of tally) {
     let best: string | null = null, bestN = -1;
-    for (const [g, n] of m) if (n > bestN) { best = g; bestN = n; }
+    for (const [val, n] of m) if (n > bestN) { best = val; bestN = n; }
     if (best) out.set(key, best);
   }
   return out;
 }
 
-/** Resolve a empresa por SERVIÇO (vehicleKey = versao||tipo_operacao||servico),
- * pra usar em resumos que agregam por serviço/frota. Cada serviço deve
- * pertencer inteiro a uma empresa só (o carro roda pra uma empresa só no
- * dia) — usa a maioria das viagens do serviço, com desempate pela primeira. */
-export function buildEmpresaPorServico(
-  viagens: { linha: string; origem?: string | null; destino?: string | null; versao_programacao?: string | null; tipo_operacao?: string | null; servico?: string | null }[],
+/** Resolve o Grupo por SERVIÇO (vehicleKey = versao||tipo_operacao||servico),
+ * pra usar em resumos que agregam por serviço/frota (jornada, dashboard).
+ * Cada serviço deve pertencer inteiro a uma empresa só (o carro roda pra
+ * uma empresa só no dia) — usa a maioria das viagens do serviço. */
+export function buildGrupoPorServico(
+  viagens: Viagem[],
   linhaMap: Map<string, Linha>,
   overrideMap: EmpresaOverrideMap,
 ): Map<string, string> {
-  const tally = new Map<string, Map<string, number>>();
-  for (const v of viagens) {
-    const vehicleKey = `${v.versao_programacao ?? ""}||${v.tipo_operacao ?? ""}||${v.servico ?? ""}`;
-    const empresa = resolveEmpresaViagem(v, linhaMap, overrideMap);
-    if (!empresa) continue;
-    const m = tally.get(vehicleKey) ?? new Map<string, number>();
-    m.set(empresa, (m.get(empresa) ?? 0) + 1);
-    tally.set(vehicleKey, m);
-  }
-  const out = new Map<string, string>();
-  for (const [key, m] of tally) {
-    let best: string | null = null, bestN = -1;
-    for (const [emp, n] of m) if (n > bestN) { best = emp; bestN = n; }
-    if (best) out.set(key, best);
-  }
-  return out;
+  return buildPorServicoGenerico(viagens, resolveGrupoViagem, linhaMap, overrideMap);
+}
+
+/** Mesma ideia do buildGrupoPorServico, mas pra Empresa. */
+export function buildEmpresaPorServico(
+  viagens: Viagem[],
+  linhaMap: Map<string, Linha>,
+  overrideMap: EmpresaOverrideMap,
+): Map<string, string> {
+  return buildPorServicoGenerico(viagens, resolveEmpresaViagem, linhaMap, overrideMap);
+}
+
+/** Mesma ideia do buildGrupoPorServico, mas pra Unidade. */
+export function buildUnidadePorServico(
+  viagens: Viagem[],
+  linhaMap: Map<string, Linha>,
+  overrideMap: EmpresaOverrideMap,
+): Map<string, string> {
+  return buildPorServicoGenerico(viagens, resolveUnidadeViagem, linhaMap, overrideMap);
 }

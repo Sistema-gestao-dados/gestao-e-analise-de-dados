@@ -5,7 +5,7 @@ import { fetchLinhas, fetchKm, fetchMulti, fetchEmpresaEstacao } from "@/lib/dat
 import { fetchAllViagens } from "@/lib/viagens";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
 import { buildServiceUnits, dominantLinha, vehicleOrigemLinha, type ViagemLite } from "@/lib/resumo";
-import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, buildEmpresaPorServico, buildGrupoPorServico } from "@/lib/empresa-estacao";
+import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
 import { buildJornadas } from "@/lib/jornada";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -294,7 +294,7 @@ function DashOperacional() {
       if (fTurno !== "__all" && v.turno !== fTurno) return false;
       const l = linhaMap.get(v.linha);
       if (fEmpresa !== "__all" && resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) !== fEmpresa) return false;
-      if (fUnidade !== "__all" && l?.unidade !== fUnidade) return false;
+      if (fUnidade !== "__all" && resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) !== fUnidade) return false;
       if (fGrupoOrdem !== "__all" && resolveGrupoViagem(v, linhaMap, empresaOverrideMap) !== fGrupoOrdem) return false;
       if (fCategoria !== "__all" && l?.categoria !== fCategoria) return false;
       if (fGrupo !== "__all") {
@@ -340,6 +340,10 @@ function DashOperacional() {
     () => buildEmpresaPorServico(filtered, linhaMap, empresaOverrideMap),
     [filtered, linhaMap, empresaOverrideMap],
   );
+  const unidadePorServico = useMemo(
+    () => buildUnidadePorServico(filtered, linhaMap, empresaOverrideMap),
+    [filtered, linhaMap, empresaOverrideMap],
+  );
 
   // Resumo Gerencial por Empresa / Unidade / Grupo de Linha (mesmo padrão dos demais relatórios)
   function resumoPorChave(chaveViagem: (v: ViagemLite) => string, chaveUnit: (u: ReturnType<typeof buildServiceUnits> extends Map<string, infer U> ? U : never) => string) {
@@ -370,10 +374,10 @@ function DashOperacional() {
   );
   const resumoUnidade = useMemo(
     () => resumoPorChave(
-      (v) => linhaMap.get(v.linha)?.unidade || "Sem unidade",
-      (u: any) => linhaMap.get(dominantLinha(u, "predominancia"))?.unidade || "Sem unidade",
+      (v) => resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade",
+      (u: any) => unidadePorServico.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, "predominancia"))?.unidade || "Sem unidade",
     ),
-    [units, filtered, linhaMap, kmMaps],
+    [units, filtered, linhaMap, empresaOverrideMap, unidadePorServico, kmMaps],
   );
   const grupoPorServico = useMemo(() => buildGrupoPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
   const resumoGrupoLinha = useMemo(() => {

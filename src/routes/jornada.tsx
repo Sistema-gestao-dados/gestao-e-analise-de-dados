@@ -6,7 +6,7 @@ import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import { buildJornadas, jornadaTotais, fmtDur, LIMITE_DIR_MIN, LIMITE_TU_MIN, type JornadaServico } from "@/lib/jornada";
-import { buildEmpresaOverrideMap, resolveGrupoViagem, resolveEmpresaViagem, buildEmpresaPorServico, buildGrupoPorServico } from "@/lib/empresa-estacao";
+import { buildEmpresaOverrideMap, resolveGrupoViagem, resolveEmpresaViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -104,7 +104,7 @@ function JornadaPage() {
       if (applied.dia !== "__all" && v.tipo_operacao !== applied.dia) return false;
       if (applied.versao !== "__all" && v.versao_programacao !== applied.versao) return false;
       if (set.size && !set.has(v.linha)) return false;
-      if (applied.unidade !== "__all" && linhaMap.get(v.linha)?.unidade !== applied.unidade) return false;
+      if (applied.unidade !== "__all" && resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) !== applied.unidade) return false;
       if (applied.grupoOrdem !== "__all" && resolveGrupoViagem(v, linhaMap, empresaOverrideMap) !== applied.grupoOrdem) return false;
       return true;
     });
@@ -123,12 +123,12 @@ function JornadaPage() {
   const jornadasOrdenadas = useMemo(() => {
     if (ordenarPor !== "unidade") return jornadas;
     return [...jornadas].sort((a, b) => {
-      const ua = linhaMap.get(a.linha)?.unidade ?? "";
-      const ub = linhaMap.get(b.linha)?.unidade ?? "";
+      const ua = unidadePorServico.get(a.vehicleKey) ?? "";
+      const ub = unidadePorServico.get(b.vehicleKey) ?? "";
       if (ua !== ub) return ua.localeCompare(ub, "pt-BR");
       return a.linha.localeCompare(b.linha, "pt-BR");
     });
-  }, [jornadas, ordenarPor, linhaMap]);
+  }, [jornadas, ordenarPor, unidadePorServico]);
 
   const totais = useMemo(() => jornadaTotais(jornadas), [jornadas]);
 
@@ -142,6 +142,7 @@ function JornadaPage() {
 
   // Resumo Gerencial por Empresa / Grupo de Linha / Unidade
   const empresaPorServico = useMemo(() => buildEmpresaPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
+  const unidadePorServico = useMemo(() => buildUnidadePorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
 
   function resumoPorChave(chaveFn: (j: JornadaServico) => string) {
     const m = new Map<string, { jornadas: number; frota: Set<string>; minutosTotal: number; horasExtras: number }>();
@@ -164,8 +165,8 @@ function JornadaPage() {
     [jornadas, empresaPorServico, linhaMap],
   );
   const resumoUnidade = useMemo(
-    () => resumoPorChave((j) => linhaMap.get(j.linha)?.unidade || "Sem unidade"),
-    [jornadas, linhaMap],
+    () => resumoPorChave((j) => unidadePorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.unidade || "Sem unidade"),
+    [jornadas, linhaMap, unidadePorServico],
   );
   const grupoPorServico = useMemo(() => buildGrupoPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
   const resumoGrupo = useMemo(

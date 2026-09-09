@@ -19,7 +19,7 @@ function EmpresaEstacaoCadastro() {
   return (
     <CrudTable
       title="Empresa por Estação"
-      description={'Exceção para linhas operadas por mais de uma empresa/grupo (ex.: linha "07" = Icaraí + Grupo Maua em alguns trechos, Tanguá + Grupo Rio Ita em outros). Cadastre a estação (origem OU destino) que identifica cada um. O campo Grupo é opcional — deixe em branco pra essa estação usar o Grupo normal do Cadastro de Linhas.'}
+      description={'Exceção para linhas operadas por mais de uma empresa/grupo/unidade (ex.: linha "07" = Icaraí + Grupo Maua + Unidade Icaraí em alguns trechos, Tanguá + Grupo Rio Ita + Unidade Expresso Tanguá em outros). Cadastre a estação (origem OU destino) que identifica cada um. Grupo e Unidade são opcionais — deixe em branco pra essa estação usar o valor normal do Cadastro de Linhas.'}
       table="linha_empresa_estacao"
       pk="id"
       queryKey="empresa-estacao"
@@ -32,6 +32,7 @@ function EmpresaEstacaoCadastro() {
         { key: "estacao", label: "Estação (origem ou destino)", required: true, sortable: true },
         { key: "empresa", label: "Empresa", required: true, sortable: true },
         { key: "grupo", label: "Grupo (opcional)", sortable: true },
+        { key: "unidade", label: "Unidade (opcional)", sortable: true },
       ]}
     />
   );

@@ -8,12 +8,13 @@ import {
   buildServiceUnits, aggregateByGroup, aggregateByLinha, dominantLinha, detectTUIncompletos, validarConsistenciaFrota,
   type ViagemLite, type AggRow, type ServiceUnit, type CriterioLinha,
 } from "@/lib/resumo";
-import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, buildEmpresaPorServico, buildGrupoPorServico } from "@/lib/empresa-estacao";
-import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
+import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
+import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt, normKey } from "@/lib/km";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Bus, Users, Activity, Gauge, FileSpreadsheet, FileText, Layers, AlertTriangle, Play, RotateCcw, Printer } from "lucide-react";
@@ -97,6 +98,37 @@ export function ResumoView({ mode }: { mode: Mode }) {
   );
   const ordemMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l.ordem])), [linhas]);
   const kmMaps = useMemo(() => buildKmMaps(km), [km]);
+
+  // Descrição da linha (ex.: "ALCÂNTARA X MÉIER"), só faz sentido no modo
+  // "Resumo por Linha". Pega o trecho mais comum entre as viagens
+  // Comercial + Ida daquela linha, e busca a descrição cadastrada em KM
+  // pra esse trecho específico.
+  const descricaoPorLinha = useMemo(() => {
+    if (mode !== "linha" || !mostrarDescricao) return new Map<string, string>();
+    const descTrecho = new Map<string, string>();
+    for (const k of km) {
+      if (!k.descricao?.trim()) continue;
+      descTrecho.set(`${normKey(k.linha)}|${normKey(k.origem)}|${normKey(k.destino)}`, k.descricao.trim());
+    }
+    const tally = new Map<string, Map<string, number>>();
+    for (const v of filtered) {
+      if ((v.tipo_movimento ?? "").trim().toUpperCase() !== "COMERCIAL") continue;
+      if ((v.sentido ?? "").trim().toUpperCase() !== "IDA") continue;
+      const trechoKey = `${normKey(v.origem)}|${normKey(v.destino)}`;
+      const m = tally.get(v.linha) ?? new Map<string, number>();
+      m.set(trechoKey, (m.get(trechoKey) ?? 0) + 1);
+      tally.set(v.linha, m);
+    }
+    const out = new Map<string, string>();
+    for (const [linha, m] of tally) {
+      let bestTrecho: string | null = null, bestN = -1;
+      for (const [trecho, n] of m) if (n > bestN) { bestTrecho = trecho; bestN = n; }
+      if (!bestTrecho) continue;
+      const desc = descTrecho.get(`${normKey(linha)}|${bestTrecho}`);
+      if (desc) out.set(linha, desc);
+    }
+    return out;
+  }, [mode, mostrarDescricao, km, filtered]);
   const grupoMap = useMemo(() => {
     const m = new Map<string, string>();
     multi.forEach((mu) => m.set(`${mu.linha}|${mu.tipo_dia}`.toLowerCase(), mu.grupo_du));
@@ -106,6 +138,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
   const [groupBy, setGroupBy] = usePersistentState<"versao" | "grupo">(`resumo.${mode}.groupBy`, "versao");
   // FLAG: regra de contagem de serviço/frota por linha
   const [criterio, setCriterio] = usePersistentState<CriterioLinha>(`resumo.${mode}.criterio`, "predominancia");
+  const [mostrarDescricao, setMostrarDescricao] = usePersistentState(`resumo.${mode}.mostrarDescricao`, false);
 
   const [fDia, setFDia] = usePersistentState(`resumo.${mode}.fDia`, "__all");
   const [fLinha, setFLinha] = usePersistentState<string[]>(`resumo.${mode}.fLinha`, []);
@@ -162,7 +195,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
     if (S.destino !== "__all" && v.destino !== S.destino) return false;
     const l = linhaMap.get(v.linha);
     if (S.empresa !== "__all" && resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) !== S.empresa) return false;
-    if (S.unidade !== "__all" && l?.unidade !== S.unidade) return false;
+    if (S.unidade !== "__all" && resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) !== S.unidade) return false;
     if (S.grupoOrdem !== "__all" && resolveGrupoViagem(v, linhaMap, empresaOverrideMap) !== S.grupoOrdem) return false;
     if (S.categoria !== "__all" && l?.categoria !== S.categoria) return false;
     if (S.grupo !== "__all") {
@@ -210,22 +243,37 @@ export function ResumoView({ mode }: { mode: Mode }) {
     return aggregateByGroup(units, (u) => ({ key: u.versao, label: u.versao }));
   }, [applied, units, mode, S.groupBy, S.criterio, grupoMap, ordemMap, S.dia, filtered, viagensParaOrigem]);
 
-  // Unidade (cadastro de Linhas) de cada linha de resumo. Em modo "linha", a
-  // linha do relatório já É o código da linha — busca direto no cadastro.
-  // Em modo "grupo" (grupo de linha ou versão), a linha do relatório agrega
-  // várias linhas físicas, então usa a unidade predominante entre os
-  // serviços que caem nesse grupo.
+  // Unidade (cadastro de Linhas, com exceção por estação) de cada linha de
+  // resumo. Em modo "linha", tally por linha diretamente das viagens
+  // (respeitando a exceção por estação). Em modo "grupo"/"versão", usa a
+  // unidade predominante já resolvida por serviço (buildUnidadePorServico).
+  const unidadePorServico = useMemo(
+    () => buildUnidadePorServico(filtered, linhaMap, empresaOverrideMap),
+    [filtered, linhaMap, empresaOverrideMap],
+  );
   const unidadePorGrupo = useMemo(() => {
     if (mode === "linha") {
+      const tally = new Map<string, Map<string, number>>();
+      for (const v of filtered) {
+        const un = resolveUnidadeViagem(v, linhaMap, empresaOverrideMap);
+        if (!un) continue;
+        const m = tally.get(v.linha) ?? new Map<string, number>();
+        m.set(un, (m.get(un) ?? 0) + 1);
+        tally.set(v.linha, m);
+      }
       const out = new Map<string, string>();
-      for (const l of linhas) if (l.unidade) out.set(l.linha, l.unidade);
+      for (const [key, m] of tally) {
+        let best: string | null = null, bestN = -1;
+        for (const [un, n] of m) if (n > bestN) { best = un; bestN = n; }
+        if (best) out.set(key, best);
+      }
       return out;
     }
     const tally = new Map<string, Map<string, number>>();
     for (const u of units.values()) {
-      const linhaDom = dominantLinha(u, S.criterio);
-      const unidade = linhaMap.get(linhaDom)?.unidade;
+      const unidade = unidadePorServico.get(u.vehicleKey);
       if (!unidade) continue;
+      const linhaDom = dominantLinha(u, S.criterio);
       let key: string;
       if (S.groupBy === "grupo") {
         const td = S.dia !== "__all" ? S.dia : u.tipo_operacao;
@@ -244,7 +292,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
       if (best) out.set(key, best);
     }
     return out;
-  }, [units, mode, S.groupBy, S.criterio, S.dia, grupoMap, linhaMap, linhas]);
+  }, [units, mode, S.groupBy, S.criterio, S.dia, grupoMap, filtered, linhaMap, empresaOverrideMap, unidadePorServico]);
 
   const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">(`resumo.${mode}.ordenarPor`, "padrao");
 
@@ -318,13 +366,13 @@ const totals = useMemo(() => {
   const resumoUnidade = useMemo(() => {
     const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
     for (const u of units.values()) {
-      const unidade = linhaMap.get(dominantLinha(u, S.criterio))?.unidade || "Sem unidade";
+      const unidade = unidadePorServico.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, S.criterio))?.unidade || "Sem unidade";
       if (!m.has(unidade)) m.set(unidade, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
       m.get(unidade)!.servicos.add(u.key);
       m.get(unidade)!.veiculos.add(u.vehicleKey);
     }
     for (const v of filtered) {
-      const un = linhaMap.get(v.linha)?.unidade || "Sem unidade";
+      const un = resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade";
       if (!m.has(un)) m.set(un, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
       if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(un)!.partidas += 1;
       m.get(un)!.km += kmFn(v);
@@ -332,7 +380,7 @@ const totals = useMemo(() => {
     return Array.from(m, ([unidade, x]) => ({
       unidade, partidas: x.partidas, km: x.km, servicos: x.servicos.size, frota: x.veiculos.size,
     })).sort((a, b) => a.unidade.localeCompare(b.unidade));
-  }, [units, filtered, linhaMap, kmFn, S.criterio]);
+  }, [units, filtered, linhaMap, kmFn, S.criterio, unidadePorServico, empresaOverrideMap]);
 
   // Resumo por Grupo (rodapé gerencial) — campo "Grupo" (ex-Ordem, com
   // exceção por estação tipo Grupo Rio Ita/Grupo Maua), NÃO é "Grupo de
@@ -600,6 +648,12 @@ const totals = useMemo(() => {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {mode === "linha" && (
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none px-2">
+              <Switch checked={mostrarDescricao} onCheckedChange={setMostrarDescricao} className="scale-90" />
+              Mostrar descrição da linha
+            </label>
+          )}
           <Select value={ordenarPor} onValueChange={(v) => setOrdenarPor(v as any)}>
             <SelectTrigger className="h-8 w-[170px] text-xs"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -861,7 +915,12 @@ const totals = useMemo(() => {
                 <TableBody>
                   {displayRows.map((r) => (
                     <TableRow key={r.groupKey} className="h-8">
-                      <TableCell className="px-2 py-1 font-medium">{r.groupLabel}</TableCell>
+                      <TableCell className="px-2 py-1 font-medium">
+                        {r.groupLabel}
+                        {mostrarDescricao && descricaoPorLinha.get(r.groupKey) && (
+                          <span className="block text-[10px] font-normal text-muted-foreground">{descricaoPorLinha.get(r.groupKey)}</span>
+                        )}
+                      </TableCell>
                       <TableCell className="px-2 py-1 text-right tabular-nums">{r.dir1}</TableCell>
                       <TableCell className="px-2 py-1 text-right tabular-nums">{r.dir2}</TableCell>
                       <TableCell className="px-2 py-1 text-right tabular-nums">{r.aprov}</TableCell>

@@ -409,6 +409,7 @@ export type Database = {
           grupo: string | null
           id: string
           linha: string
+          unidade: string | null
         }
         Insert: {
           created_at?: string
@@ -417,6 +418,7 @@ export type Database = {
           grupo?: string | null
           id?: string
           linha: string
+          unidade?: string | null
         }
         Update: {
           created_at?: string
@@ -425,6 +427,7 @@ export type Database = {
           grupo?: string | null
           id?: string
           linha?: string
+          unidade?: string | null
         }
         Relationships: []
       }
