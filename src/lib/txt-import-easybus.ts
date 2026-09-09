@@ -74,6 +74,29 @@ function mapMovimento(tipoViagemRaw: string): { movimento: string | null; catego
   return { movimento: null, categoria: null };
 }
 
+// O EasyBus exporta o par serviço/turno em dois formatos diferentes,
+// dependendo da versão/config de quem gerou o arquivo:
+//   - "01.1" (ponto): serviço 01, turno 1 — formato mais comum.
+//   - "01A"  (letra): serviço 01, turno 1 — A=turno 1, B=turno 2,
+//     C=turno 3 (aproveitamento), E=TU (o próprio bloco tem uma viagem
+//     "Intra-jorn" no meio — mesmo mecanismo do TU no formato com ponto,
+//     que separa em T1/T2 automaticamente a partir daí).
+function parseServicoTurno(raw: string): { servico: string | null; turno: string | null } {
+  const v = raw.trim();
+  if (v.includes(".")) {
+    const [servicoRaw, turnoRaw] = v.split(".");
+    return { servico: servicoRaw?.trim() || null, turno: turnoRaw?.trim() || null };
+  }
+  const letra = v.match(/^(\d+)\s*([ABCEabce])$/);
+  if (letra) {
+    const turnoPorLetra: Record<string, string> = { A: "1", B: "2", C: "3", E: "1" };
+    return { servico: letra[1], turno: turnoPorLetra[letra[2].toUpperCase()] };
+  }
+  // Não bateu com nenhum dos formatos conhecidos — trata a coluna inteira
+  // como serviço, sem turno definido, em vez de descartar a linha.
+  return { servico: v || null, turno: null };
+}
+
 function minutos(hhmm: string | null): number {
   if (!hhmm) return 0;
   const [h, m] = hhmm.split(":").map(Number);
@@ -110,9 +133,7 @@ export function parseTxtEasyBus(
       if (!partida) errors.push({ line: i + 1, reason: `Partida não reconhecida (bruto: "${raw.slice(50, 56)}")` });
       if (!chegada) errors.push({ line: i + 1, reason: `Chegada não reconhecida (bruto: "${raw.slice(56, 62)}")` });
 
-      const [servicoRaw, turnoRaw] = servicoTurno.split(".");
-      const servico = servicoRaw?.trim() || null;
-      const turno = turnoRaw?.trim() || null;
+      const { servico, turno } = parseServicoTurno(servicoTurno);
       const sentido = sentidoRaw || null;
       const grupo = `${versao_programacao ?? ""}|${servico ?? ""}|${turno ?? ""}`;
       const intraJorn = tipoViagemRaw.toLowerCase().startsWith("intra");
