@@ -3,10 +3,12 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
-import { fetchLinhas } from "@/lib/data";
+import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
+import { buildEmpresaOverrideMap, resolveGrupoViagem } from "@/lib/empresa-estacao";
 import { CrudTable, type ColumnDef } from "@/components/crud-table";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { FileSpreadsheet, FileText } from "lucide-react";
 import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
@@ -64,9 +66,23 @@ function exportPDF(rows: any[]) {
 function ViagensPage() {
   useAuditView("viagens");
   const [somenteAtivos, setSomenteAtivos] = usePersistentState("viagens.somenteAtivos", true);
+  const [fUnidade, setFUnidade] = usePersistentState("viagens.fUnidade", "__all");
+  const [fGrupo, setFGrupo] = usePersistentState("viagens.fGrupo", "__all");
   const ativosQ = useQuery({ queryKey: ["projetos-ativos"], queryFn: fetchProjetosAtivos });
   const ativos = ativosQ.data ?? [];
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
+  const empresaEstacaoQ = useQuery({ queryKey: ["empresa-estacao"], queryFn: fetchEmpresaEstacao });
+  const linhas = linhasQ.data ?? [];
+  const empresaEstacao = empresaEstacaoQ.data ?? [];
+  const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
+  const empresaOverrideMap = useMemo(() => buildEmpresaOverrideMap(empresaEstacao), [empresaEstacao]);
+  const opts = useMemo(() => ({
+    unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
+    grupo: Array.from(new Set([
+      ...linhas.map((l) => l.ordem).filter(Boolean) as string[],
+      ...empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[],
+    ])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
+  }), [linhas, empresaEstacao]);
 
   // Valores distintos de Versão e Arquivo direto da tabela (não têm cadastro
   // próprio, então precisam vir dos dados já importados).
@@ -114,14 +130,17 @@ function ViagensPage() {
   }, [ativos]);
 
   const clientFilter = useMemo(() => {
-    if (!somenteAtivos || !ativos.length) return undefined;
     return (r: any) => {
-      const key = `${r.linha}||${r.tipo_operacao ?? ""}`;
-      const v = ativosKey.get(key);
-      if (!v) return true;
-      return r.versao_programacao === v;
+      if (somenteAtivos && ativos.length) {
+        const key = `${r.linha}||${r.tipo_operacao ?? ""}`;
+        const v = ativosKey.get(key);
+        if (v && r.versao_programacao !== v) return false;
+      }
+      if (fUnidade !== "__all" && linhaMap.get(r.linha)?.unidade !== fUnidade) return false;
+      if (fGrupo !== "__all" && resolveGrupoViagem(r, linhaMap, empresaOverrideMap) !== fGrupo) return false;
+      return true;
     };
-  }, [somenteAtivos, ativos.length, ativosKey]);
+  }, [somenteAtivos, ativos.length, ativosKey, fUnidade, fGrupo, linhaMap, empresaOverrideMap]);
 
   return (
     <div className="space-y-4">
@@ -141,6 +160,20 @@ function ViagensPage() {
               <Checkbox checked={somenteAtivos} onCheckedChange={(v) => setSomenteAtivos(!!v)} />
               Somente ativas
             </label>
+            <Select value={fUnidade} onValueChange={setFUnidade}>
+              <SelectTrigger className="h-8 w-36 text-xs"><SelectValue placeholder="Unidade" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all">Unidade: Todas</SelectItem>
+                {opts.unidade.map((u) => <SelectItem key={u} value={u}>{u}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Select value={fGrupo} onValueChange={setFGrupo}>
+              <SelectTrigger className="h-8 w-36 text-xs"><SelectValue placeholder="Grupo" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__all">Grupo: Todos</SelectItem>
+                {opts.grupo.map((g) => <SelectItem key={g} value={g}>{g}</SelectItem>)}
+              </SelectContent>
+            </Select>
             <Button variant="outline" size="sm" onClick={() => { exportXLSX(filteredRows); void logAudit({ action: "export", entity: "viagens", details: { format: "xlsx", count: filteredRows.length } }); }} disabled={!filteredRows.length}>
               <FileSpreadsheet className="h-4 w-4 mr-1" /> Excel
             </Button>

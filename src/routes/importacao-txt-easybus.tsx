@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
-import { Upload, FileUp, CheckCircle2, AlertCircle, Loader2, ArrowRight, FolderOpen, Pencil, Trash2, Settings2 } from "lucide-react";
+import { Upload, FileUp, CheckCircle2, AlertCircle, Loader2, ArrowRight, FolderOpen, Pencil, Trash2, Settings2, X } from "lucide-react";
 import { useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -124,6 +124,7 @@ function ImportTxtEasyBusPage() {
   const qc = useQueryClient();
   const [busy, setBusy] = useState(false);
   const [reports, setReports] = useState<FileReport[]>([]);
+  const [pastasSelecionadas, setPastasSelecionadas] = useState<{ nome: string; arquivos: File[] }[]>([]);
   const [diaTipo, setDiaTipo] = useState<string>("");
   const [novoDiaTipo, setNovoDiaTipo] = useState<string>("");
   const [criandoNovo, setCriandoNovo] = useState(false);
@@ -262,15 +263,33 @@ function ImportTxtEasyBusPage() {
       const rel = (f as any).webkitRelativePath || f.name;
       return rel.split("/").length === 2 && /\.txt$/i.test(f.name);
     });
+    const nomePasta = ((todos[0] as any)?.webkitRelativePath || "").split("/")[0] || "Pasta";
+    if (folderRef.current) folderRef.current.value = ""; // libera escolher a próxima pasta
     if (!somenteRaiz.length) {
       toast.error("Nenhum .txt direto nessa pasta (só em subpastas, que são ignoradas de propósito).");
-      if (folderRef.current) folderRef.current.value = "";
       return;
     }
     if (somenteRaiz.length < todos.length) {
       toast.info(`${somenteRaiz.length} de ${todos.length} arquivo(s): subpastas foram ignoradas.`);
     }
-    void handleFiles(somenteRaiz);
+    setPastasSelecionadas((prev) => {
+      // Escolher a mesma pasta de novo substitui a entrada anterior dela,
+      // em vez de duplicar.
+      const semEssa = prev.filter((p) => p.nome !== nomePasta);
+      return [...semEssa, { nome: nomePasta, arquivos: somenteRaiz }];
+    });
+    toast.success(`"${nomePasta}" adicionada (${somenteRaiz.length} arquivo(s)). Escolha mais pastas ou clique em Importar.`);
+  }
+
+  function removerPasta(nome: string) {
+    setPastasSelecionadas((prev) => prev.filter((p) => p.nome !== nome));
+  }
+
+  async function importarPastasSelecionadas() {
+    const arquivos = pastasSelecionadas.flatMap((p) => p.arquivos);
+    if (!arquivos.length) return;
+    await handleFiles(arquivos);
+    setPastasSelecionadas([]);
   }
 
   const diasCustomizados = diasCadastrados.filter((d) => !DIAS_TIPO_BASE.includes(d));
@@ -393,6 +412,31 @@ function ImportTxtEasyBusPage() {
               Marcar como <strong>ativo</strong> após importar (substitui a versão anterior das mesmas combinações linha/dia, propagando para as linhas do mesmo grupo cadastrado)
             </label>
           </div>
+
+          {pastasSelecionadas.length > 0 && (
+            <div className="rounded-md border border-border p-3 space-y-2">
+              <p className="text-xs font-medium text-muted-foreground">
+                {pastasSelecionadas.length} pasta(s) selecionada(s), {pastasSelecionadas.reduce((s, p) => s + p.arquivos.length, 0)} arquivo(s) no total.
+                Clique em "Selecionar pasta" de novo pra adicionar outra, ou importe já.
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {pastasSelecionadas.map((p) => (
+                  <Badge key={p.nome} variant="secondary" className="gap-1.5 pr-1">
+                    {p.nome} · {p.arquivos.length}
+                    <button type="button" onClick={() => removerPasta(p.nome)} className="hover:text-destructive" aria-label={`Remover ${p.nome}`}>
+                      <X className="h-3 w-3" />
+                    </button>
+                  </Badge>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" onClick={importarPastasSelecionadas} disabled={busy || !diaTipoEfetivo}>
+                  {busy ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Importando...</> : <><Upload className="h-4 w-4 mr-2" />Importar {pastasSelecionadas.length} pasta(s)</>}
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setPastasSelecionadas([])} disabled={busy}>Limpar seleção</Button>
+              </div>
+            </div>
+          )}
           <p className="text-xs text-muted-foreground">
             "Tipo Serv." (TU/DIR) é calculado automaticamente por serviço/turno: se qualquer viagem do
             grupo tiver "Intra-jorn", o grupo inteiro vira TU, senão DIR. "Versão" vem do texto entre
