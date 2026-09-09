@@ -120,6 +120,13 @@ function JornadaPage() {
   }, [applied, filtered, linhas]);
 
   const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">("jornada.ordenarPor", "padrao");
+
+  // Resumo Gerencial por Empresa / Grupo / Unidade — precisa vir antes de
+  // jornadasOrdenadas, que usa unidadePorServico pra ordenar.
+  const empresaPorServico = useMemo(() => buildEmpresaPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
+  const unidadePorServico = useMemo(() => buildUnidadePorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
+  const grupoPorServico = useMemo(() => buildGrupoPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
+
   const jornadasOrdenadas = useMemo(() => {
     if (ordenarPor !== "unidade") return jornadas;
     return [...jornadas].sort((a, b) => {
@@ -139,10 +146,6 @@ function JornadaPage() {
     [jornadas, paginaAtual, pageSize],
   );
   useEffect(() => setPage(0), [applied, pageSize]);
-
-  // Resumo Gerencial por Empresa / Grupo de Linha / Unidade
-  const empresaPorServico = useMemo(() => buildEmpresaPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
-  const unidadePorServico = useMemo(() => buildUnidadePorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
 
   function resumoPorChave(chaveFn: (j: JornadaServico) => string) {
     const m = new Map<string, { jornadas: number; frota: Set<string>; minutosTotal: number; horasExtras: number }>();
@@ -168,7 +171,6 @@ function JornadaPage() {
     () => resumoPorChave((j) => unidadePorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.unidade || "Sem unidade"),
     [jornadas, linhaMap, unidadePorServico],
   );
-  const grupoPorServico = useMemo(() => buildGrupoPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
   const resumoGrupo = useMemo(
     () => resumoPorChave((j) => grupoPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.ordem || "Sem grupo"),
     [jornadas, grupoPorServico, linhaMap],
