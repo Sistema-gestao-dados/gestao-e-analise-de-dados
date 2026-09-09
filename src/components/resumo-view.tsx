@@ -199,21 +199,34 @@ export function ResumoView({ mode }: { mode: Mode }) {
       if (!k.descricao?.trim()) continue;
       descTrecho.set(`${normKey(k.linha)}|${normKey(k.origem)}|${normKey(k.destino)}`, k.descricao.trim());
     }
+    // Prioriza o trecho de viagens Comercial+Ida (é o mais "correto"
+    // pra descrever a linha), mas se a linha não tiver nenhuma viagem
+    // assim, não desiste — usa o trecho mais comum entre TODAS as
+    // viagens dela, senão linha nenhuma ficaria sem descrição à toa.
     const tally = new Map<string, Map<string, number>>();
     for (const v of filtered) {
-      if ((v.tipo_movimento ?? "").trim().toUpperCase() !== "COMERCIAL") continue;
-      if ((v.sentido ?? "").trim().toUpperCase() !== "IDA") continue;
       const trechoKey = `${normKey(v.origem)}|${normKey(v.destino)}`;
+      const ehComercialIda = (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL"
+        && (v.sentido ?? "").trim().toUpperCase() === "IDA";
+      const peso = ehComercialIda ? 1000 : 1; // garante prioridade sem descartar o resto
       const m = tally.get(v.linha) ?? new Map<string, number>();
-      m.set(trechoKey, (m.get(trechoKey) ?? 0) + 1);
+      m.set(trechoKey, (m.get(trechoKey) ?? 0) + peso);
       tally.set(v.linha, m);
+    }
+    // Índice auxiliar: qualquer descrição já cadastrada pra essa linha em
+    // KM, não importa o trecho — usado como último recurso.
+    const descQualquerPorLinha = new Map<string, string>();
+    for (const k of km) {
+      if (!k.descricao?.trim()) continue;
+      const l = normKey(k.linha);
+      if (!descQualquerPorLinha.has(l)) descQualquerPorLinha.set(l, k.descricao.trim());
     }
     const out = new Map<string, string>();
     for (const [linha, m] of tally) {
       let bestTrecho: string | null = null, bestN = -1;
       for (const [trecho, n] of m) if (n > bestN) { bestTrecho = trecho; bestN = n; }
       if (!bestTrecho) continue;
-      const desc = descTrecho.get(`${normKey(linha)}|${bestTrecho}`);
+      const desc = descTrecho.get(`${normKey(linha)}|${bestTrecho}`) ?? descQualquerPorLinha.get(normKey(linha));
       if (desc) out.set(linha, desc);
     }
     return out;
@@ -415,27 +428,33 @@ const totals = useMemo(() => {
 
   function exportXLSX() {
     const wb = XLSX.utils.book_new();
+    const comDescricao = mode === "linha" && mostrarDescricao;
+    const headersXlsx = comDescricao ? [firstColLabel, "Descrição", ...headers.slice(1)] : headers;
     // Aba principal
     const aoa: (string | number)[][] = [
       [title.toUpperCase()],
       [`Gerado em ${new Date().toLocaleString("pt-BR")} — ${rows.length} ${mode === "linha" ? "linha(s)" : "grupo(s)"}`],
       [],
-      headers,
+      headersXlsx,
       ...displayRows.map((r) => [
-        r.groupLabel, r.dir1, r.dir2, r.aprov, r.tu, r.totalServico, r.frota, r.partidas,
+        r.groupLabel,
+        ...(comDescricao ? [descricaoPorLinha.get(r.groupKey) ?? ""] : []),
+        r.dir1, r.dir2, r.aprov, r.tu, r.totalServico, r.frota, r.partidas,
         Number(r.km.toFixed(1)),
       ]),
-      ["TOTAL", totals.dir1, totals.dir2, totals.aprov, totals.tu, totals.totalServico, totals.frota, totals.partidas, Number(totals.km.toFixed(1))],
+      [
+        "TOTAL", ...(comDescricao ? [""] : []),
+        totals.dir1, totals.dir2, totals.aprov, totals.tu, totals.totalServico, totals.frota, totals.partidas, Number(totals.km.toFixed(1)),
+      ],
     ];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     ws["!merges"] = [
-      { s: { r: 0, c: 0 }, e: { r: 0, c: headers.length - 1 } },
-      { s: { r: 1, c: 0 }, e: { r: 1, c: headers.length - 1 } },
+      { s: { r: 0, c: 0 }, e: { r: 0, c: headersXlsx.length - 1 } },
+      { s: { r: 1, c: 0 }, e: { r: 1, c: headersXlsx.length - 1 } },
     ];
-    ws["!cols"] = [
-      { wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 },
-      { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 },
-    ];
+    ws["!cols"] = comDescricao
+      ? [{ wch: 26 }, { wch: 30 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }]
+      : [{ wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }];
     XLSX.utils.book_append_sheet(wb, ws, title.slice(0, 31));
 
     // Aba Empresa
@@ -473,12 +492,19 @@ const totals = useMemo(() => {
         d.setTextColor(20);
       }
 
+      const comDescricaoPdf = mode === "linha" && mostrarDescricao;
+      const headersPdf = comDescricaoPdf ? [firstColLabel, "Descrição", "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas", "KM Total"] : headers;
       const mainBody = displayRows.map((r) => [
-        r.groupLabel, fmtInt(r.dir1), fmtInt(r.dir2), fmtInt(r.aprov), fmtInt(r.tu),
+        r.groupLabel,
+        ...(comDescricaoPdf ? [descricaoPorLinha.get(r.groupKey) ?? ""] : []),
+        fmtInt(r.dir1), fmtInt(r.dir2), fmtInt(r.aprov), fmtInt(r.tu),
         fmtInt(r.totalServico), fmtInt(r.frota), fmtInt(r.partidas), fmtKm(r.km),
       ]);
-      const mainFoot = ["TOTAL", fmtInt(totals.dir1), fmtInt(totals.dir2), fmtInt(totals.aprov), fmtInt(totals.tu),
-        fmtInt(totals.totalServico), fmtInt(totals.frota), fmtInt(totals.partidas), fmtKm(totals.km)];
+      const mainFoot = [
+        "TOTAL", ...(comDescricaoPdf ? [""] : []),
+        fmtInt(totals.dir1), fmtInt(totals.dir2), fmtInt(totals.aprov), fmtInt(totals.tu),
+        fmtInt(totals.totalServico), fmtInt(totals.frota), fmtInt(totals.partidas), fmtKm(totals.km),
+      ];
       const empBody = resumoEmpresa.map((e) => [e.empresa, fmtInt(e.servicos), fmtInt(e.frota), fmtInt(e.partidas), fmtKm(e.km)]);
       const empHeaders = ["Empresa", "Serviços", "Frota", "Partidas", "KM"];
       const empFoot = ["TOTAL",
@@ -522,7 +548,7 @@ const totals = useMemo(() => {
         return total;
       }
       function naturalWidth(fontSize: number) {
-        const mainW = tableNaturalWidth(fontSize, headers, mainBody, mainFoot);
+        const mainW = tableNaturalWidth(fontSize, headersPdf, mainBody, mainFoot);
         const empW = tableNaturalWidth(fontSize - 0.3, empHeaders, empBody, empFoot);
         return Math.max(mainW, empW);
       }
@@ -533,15 +559,13 @@ const totals = useMemo(() => {
         const padY = 1.5 * zoom;
         autoTable(d, {
           startY: HEADER_H + 3,
-          head: [headers],
+          head: [headersPdf],
           body: mainBody,
           foot: [mainFoot],
           styles: { fontSize, cellPadding: { top: padY, right: 2 * zoom, bottom: padY, left: 2 * zoom }, halign: "right", valign: "middle", overflow: "linebreak", lineColor: [180, 180, 180], lineWidth: 0.18 },
-          columnStyles: {
-            0: { halign: "left", fontStyle: "bold" },
-            5: { fontStyle: "bold" },
-            6: { fontStyle: "bold" },
-          },
+          columnStyles: comDescricaoPdf
+            ? { 0: { halign: "left", fontStyle: "bold" }, 1: { halign: "left" }, 6: { fontStyle: "bold" }, 7: { fontStyle: "bold" } }
+            : { 0: { halign: "left", fontStyle: "bold" }, 5: { fontStyle: "bold" }, 6: { fontStyle: "bold" } },
           headStyles: { fillColor: [37, 99, 235], textColor: 255, fontSize: fontSize + 0.5, halign: "center", fontStyle: "bold", cellPadding: padY + 0.4 * zoom },
           footStyles: { fillColor: [219, 234, 254], textColor: 20, fontStyle: "bold", halign: "right" },
           alternateRowStyles: { fillColor: [249, 250, 251] },
