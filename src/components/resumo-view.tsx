@@ -99,36 +99,6 @@ export function ResumoView({ mode }: { mode: Mode }) {
   const ordemMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l.ordem])), [linhas]);
   const kmMaps = useMemo(() => buildKmMaps(km), [km]);
 
-  // Descrição da linha (ex.: "ALCÂNTARA X MÉIER"), só faz sentido no modo
-  // "Resumo por Linha". Pega o trecho mais comum entre as viagens
-  // Comercial + Ida daquela linha, e busca a descrição cadastrada em KM
-  // pra esse trecho específico.
-  const descricaoPorLinha = useMemo(() => {
-    if (mode !== "linha" || !mostrarDescricao) return new Map<string, string>();
-    const descTrecho = new Map<string, string>();
-    for (const k of km) {
-      if (!k.descricao?.trim()) continue;
-      descTrecho.set(`${normKey(k.linha)}|${normKey(k.origem)}|${normKey(k.destino)}`, k.descricao.trim());
-    }
-    const tally = new Map<string, Map<string, number>>();
-    for (const v of filtered) {
-      if ((v.tipo_movimento ?? "").trim().toUpperCase() !== "COMERCIAL") continue;
-      if ((v.sentido ?? "").trim().toUpperCase() !== "IDA") continue;
-      const trechoKey = `${normKey(v.origem)}|${normKey(v.destino)}`;
-      const m = tally.get(v.linha) ?? new Map<string, number>();
-      m.set(trechoKey, (m.get(trechoKey) ?? 0) + 1);
-      tally.set(v.linha, m);
-    }
-    const out = new Map<string, string>();
-    for (const [linha, m] of tally) {
-      let bestTrecho: string | null = null, bestN = -1;
-      for (const [trecho, n] of m) if (n > bestN) { bestTrecho = trecho; bestN = n; }
-      if (!bestTrecho) continue;
-      const desc = descTrecho.get(`${normKey(linha)}|${bestTrecho}`);
-      if (desc) out.set(linha, desc);
-    }
-    return out;
-  }, [mode, mostrarDescricao, km, filtered]);
   const grupoMap = useMemo(() => {
     const m = new Map<string, string>();
     multi.forEach((mu) => m.set(`${mu.linha}|${mu.tipo_dia}`.toLowerCase(), mu.grupo_du));
@@ -217,6 +187,37 @@ export function ResumoView({ mode }: { mode: Mode }) {
       return passesExceptLinha(v);
     });
   }, [viagens, applied, linhaSet, passesExceptLinha]);
+
+  // Descrição da linha (ex.: "ALCÂNTARA X MÉIER"), só faz sentido no modo
+  // "Resumo por Linha". Pega o trecho mais comum entre as viagens
+  // Comercial + Ida daquela linha, e busca a descrição cadastrada em KM
+  // pra esse trecho específico.
+  const descricaoPorLinha = useMemo(() => {
+    if (mode !== "linha" || !mostrarDescricao) return new Map<string, string>();
+    const descTrecho = new Map<string, string>();
+    for (const k of km) {
+      if (!k.descricao?.trim()) continue;
+      descTrecho.set(`${normKey(k.linha)}|${normKey(k.origem)}|${normKey(k.destino)}`, k.descricao.trim());
+    }
+    const tally = new Map<string, Map<string, number>>();
+    for (const v of filtered) {
+      if ((v.tipo_movimento ?? "").trim().toUpperCase() !== "COMERCIAL") continue;
+      if ((v.sentido ?? "").trim().toUpperCase() !== "IDA") continue;
+      const trechoKey = `${normKey(v.origem)}|${normKey(v.destino)}`;
+      const m = tally.get(v.linha) ?? new Map<string, number>();
+      m.set(trechoKey, (m.get(trechoKey) ?? 0) + 1);
+      tally.set(v.linha, m);
+    }
+    const out = new Map<string, string>();
+    for (const [linha, m] of tally) {
+      let bestTrecho: string | null = null, bestN = -1;
+      for (const [trecho, n] of m) if (n > bestN) { bestTrecho = trecho; bestN = n; }
+      if (!bestTrecho) continue;
+      const desc = descTrecho.get(`${normKey(linha)}|${bestTrecho}`);
+      if (desc) out.set(linha, desc);
+    }
+    return out;
+  }, [mode, mostrarDescricao, km, filtered]);
 
   // Universo para cálculo de origem (frota): mesmos filtros SEM o de linha.
   const viagensParaOrigem = useMemo(() => {
