@@ -23,7 +23,7 @@ type AuthCtx = {
 const Ctx = createContext<AuthCtx | null>(null);
 
 // Modules that require admin role
-const ADMIN_ONLY = new Set(["usuarios", "auditoria", "verificacao_integridade"]);
+const ADMIN_ONLY = new Set(["usuarios", "auditoria", "verificacao_integridade", "parametros_custo"]);
 
 async function fetchUserContext(userId: string, email: string): Promise<AppUser> {
   const [profileRes, rolesRes, permsRes] = await Promise.all([

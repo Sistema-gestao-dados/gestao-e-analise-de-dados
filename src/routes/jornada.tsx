@@ -7,6 +7,8 @@ import { fetchAllViagens } from "@/lib/viagens";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import { buildJornadas, jornadaTotais, fmtDur, LIMITE_DIR_MIN, LIMITE_TU_MIN, type JornadaServico } from "@/lib/jornada";
 import { buildEmpresaOverrideMap, resolveGrupoViagem, resolveEmpresaViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
+import { custoServico, fmtMoeda } from "@/lib/custo";
+import { useParametrosCusto, SalarioMotoristaButton } from "@/components/salario-motorista";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -147,33 +149,38 @@ function JornadaPage() {
   );
   useEffect(() => setPage(0), [applied, pageSize]);
 
+  const { params: custoParams } = useParametrosCusto();
+  const comCustoTabela = !!custoParams && custoParams.salarioMotoristaMensal > 0;
+  const colSpanTabela = comCustoTabela ? 8 : 7;
+
   function resumoPorChave(chaveFn: (j: JornadaServico) => string) {
-    const m = new Map<string, { jornadas: number; frota: Set<string>; minutosTotal: number; horasExtras: number }>();
+    const m = new Map<string, { jornadas: number; frota: Set<string>; minutosTotal: number; horasExtras: number; custo: number }>();
     for (const j of jornadas) {
       const k = chaveFn(j);
-      const cur = m.get(k) ?? { jornadas: 0, frota: new Set<string>(), minutosTotal: 0, horasExtras: 0 };
+      const cur = m.get(k) ?? { jornadas: 0, frota: new Set<string>(), minutosTotal: 0, horasExtras: 0, custo: 0 };
       cur.jornadas++;
       cur.frota.add(j.vehicleKey);
       cur.minutosTotal += j.minutosTotal;
       cur.horasExtras += j.horasExtras;
+      if (custoParams) cur.custo += custoServico(j, custoParams);
       m.set(k, cur);
     }
     return Array.from(m, ([chave, x]) => ({
-      chave, jornadas: x.jornadas, frota: x.frota.size, minutosTotal: x.minutosTotal, horasExtras: x.horasExtras,
+      chave, jornadas: x.jornadas, frota: x.frota.size, minutosTotal: x.minutosTotal, horasExtras: x.horasExtras, custo: x.custo,
     })).sort((a, b) => a.chave.localeCompare(b.chave));
   }
 
   const resumoEmpresa = useMemo(
     () => resumoPorChave((j) => empresaPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.empresa || "Sem empresa"),
-    [jornadas, empresaPorServico, linhaMap],
+    [jornadas, empresaPorServico, linhaMap, custoParams],
   );
   const resumoUnidade = useMemo(
     () => resumoPorChave((j) => unidadePorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.unidade || "Sem unidade"),
-    [jornadas, linhaMap, unidadePorServico],
+    [jornadas, linhaMap, unidadePorServico, custoParams],
   );
   const resumoGrupo = useMemo(
     () => resumoPorChave((j) => grupoPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.ordem || "Sem grupo"),
-    [jornadas, grupoPorServico, linhaMap],
+    [jornadas, grupoPorServico, linhaMap, custoParams],
   );
 
   const listaModal = useMemo((): JornadaServico[] => {
@@ -350,6 +357,7 @@ function JornadaPage() {
               <SelectItem value="unidade">Ordenar por Unidade</SelectItem>
             </SelectContent>
           </Select>
+          <SalarioMotoristaButton />
           <Button variant="outline" size="sm" onClick={exportXLSX} disabled={!jornadas.length}>
             <FileSpreadsheet className="h-4 w-4 mr-1" /> Excel
           </Button>
@@ -503,12 +511,13 @@ function JornadaPage() {
                   <TableHead>Turnos</TableHead>
                   <TableHead className="text-right">Jornada</TableHead>
                   <TableHead className="text-right">HE</TableHead>
+                  {comCustoTabela && <TableHead className="text-right">Custo M.O.</TableHead>}
                   <TableHead className="text-center">Alerta</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {!applied && <TableRow><TableCell colSpan={7} className="text-center py-6 text-muted-foreground">Aplique os filtros e clique em <strong>Consultar</strong>.</TableCell></TableRow>}
-                {applied && loading && <TableRow><TableCell colSpan={7} className="text-center py-6 text-muted-foreground">Carregando...</TableCell></TableRow>}
+                {!applied && <TableRow><TableCell colSpan={colSpanTabela} className="text-center py-6 text-muted-foreground">Aplique os filtros e clique em <strong>Consultar</strong>.</TableCell></TableRow>}
+                {applied && loading && <TableRow><TableCell colSpan={colSpanTabela} className="text-center py-6 text-muted-foreground">Carregando...</TableCell></TableRow>}
                 {!loading && jornadasPagina.map((j) => (
                   <TableRow key={`${j.vehicleKey}||${j.bucket}`}>
                     <TableCell className="font-medium">{j.linha}</TableCell>
@@ -517,6 +526,9 @@ function JornadaPage() {
                     <TableCell className="text-xs">{j.turnos.map((t) => `T${t.turno} ${t.primeiraPartida}→${t.ultimaChegada}`).join(" · ")}</TableCell>
                     <TableCell className="text-right tabular-nums font-semibold">{fmtDur(j.minutosTotal)}</TableCell>
                     <TableCell className="text-right tabular-nums">{j.horasExtras > 0 ? fmtDur(j.horasExtras) : "—"}</TableCell>
+                    {comCustoTabela && custoParams && (
+                      <TableCell className="text-right tabular-nums">{fmtMoeda(custoServico(j, custoParams))}</TableCell>
+                    )}
                     <TableCell className="text-center">
                       {j.acimaDe9h ? <Badge variant="destructive">&gt;10h</Badge>
                         : j.acimaDe7h ? <Badge className="bg-warning text-warning-foreground">&gt;9h</Badge>
@@ -524,7 +536,7 @@ function JornadaPage() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {!loading && !jornadas.length && <TableRow><TableCell colSpan={7} className="text-center py-6 text-muted-foreground">Sem jornadas para os filtros atuais.</TableCell></TableRow>}
+                {!loading && !jornadas.length && <TableRow><TableCell colSpan={colSpanTabela} className="text-center py-6 text-muted-foreground">Sem jornadas para os filtros atuais.</TableCell></TableRow>}
               </TableBody>
             </Table>
           </div>
@@ -602,10 +614,11 @@ function JornadaPage() {
   );
 }
 
-type ResumoJornadaRow = { chave: string; jornadas: number; frota: number; minutosTotal: number; horasExtras: number };
+type ResumoJornadaRow = { chave: string; jornadas: number; frota: number; minutosTotal: number; horasExtras: number; custo: number };
 function ResumoJornadaTable({ titulo, rows }: { titulo: string; rows: ResumoJornadaRow[] }) {
   if (rows.length === 0) return null;
-  const tot = rows.reduce((s, r) => ({ jornadas: s.jornadas + r.jornadas, frota: s.frota + r.frota, minutosTotal: s.minutosTotal + r.minutosTotal, horasExtras: s.horasExtras + r.horasExtras }), { jornadas: 0, frota: 0, minutosTotal: 0, horasExtras: 0 });
+  const comCusto = rows.some((r) => r.custo > 0);
+  const tot = rows.reduce((s, r) => ({ jornadas: s.jornadas + r.jornadas, frota: s.frota + r.frota, minutosTotal: s.minutosTotal + r.minutosTotal, horasExtras: s.horasExtras + r.horasExtras, custo: s.custo + r.custo }), { jornadas: 0, frota: 0, minutosTotal: 0, horasExtras: 0, custo: 0 });
   return (
     <Card className="shadow-[var(--shadow-card)]">
       <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">{titulo}</CardTitle></CardHeader>
@@ -619,6 +632,7 @@ function ResumoJornadaTable({ titulo, rows }: { titulo: string; rows: ResumoJorn
                 <TableHead className="px-2 py-1 text-right">Frota</TableHead>
                 <TableHead className="px-2 py-1 text-right">Jornada Total</TableHead>
                 <TableHead className="px-2 py-1 text-right">Horas Extras</TableHead>
+                {comCusto && <TableHead className="px-2 py-1 text-right">Custo M.O.</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -629,6 +643,7 @@ function ResumoJornadaTable({ titulo, rows }: { titulo: string; rows: ResumoJorn
                   <TableCell className="px-2 py-1 text-right tabular-nums">{r.frota}</TableCell>
                   <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(r.minutosTotal)}</TableCell>
                   <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(r.horasExtras)}</TableCell>
+                  {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(r.custo)}</TableCell>}
                 </TableRow>
               ))}
               <TableRow className="bg-muted/50 font-bold h-9">
@@ -637,6 +652,7 @@ function ResumoJornadaTable({ titulo, rows }: { titulo: string; rows: ResumoJorn
                 <TableCell className="px-2 py-1 text-right tabular-nums">{tot.frota}</TableCell>
                 <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(tot.minutosTotal)}</TableCell>
                 <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(tot.horasExtras)}</TableCell>
+                {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(tot.custo)}</TableCell>}
               </TableRow>
             </TableBody>
           </Table>

@@ -32,6 +32,8 @@ import { logAudit } from "@/lib/audit";
 import { buildJornadas, fmtDur } from "@/lib/jornada";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
+import { custoServico, fmtMoeda } from "@/lib/custo";
+import { useSalarioMotorista, SalarioMotoristaButton } from "@/components/salario-motorista";
 
 function parseHHMM(s: string | null): number | null {
   if (!s) return null;
@@ -291,6 +293,7 @@ export function ComparativoView() {
   const visibleMetrics = useMemo(() => new Set(visibleMetricsArr), [visibleMetricsArr]);
   const [showPct, setShowPct] = usePersistentState("comparativo.showPct", true);
   const [onlyDiff, setOnlyDiff] = usePersistentState("comparativo.onlyDiff", false);
+  const { params: custoParams } = useSalarioMotorista();
 
   const atualRows = useMemo(() => {
     if (!applied) return [] as AggRow[];
@@ -333,6 +336,7 @@ export function ComparativoView() {
     viagens: ViagemLite[],
     chaveViagem: (v: ViagemLite) => string,
     chaveUnit: (u: ServiceUnit) => string,
+    chaveJornada: (j: ReturnType<typeof buildJornadas>[number]) => string,
   ) {
     const units = buildServiceUnits(viagens, kmFn);
     const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
@@ -348,14 +352,22 @@ export function ComparativoView() {
       if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(k)!.partidas += 1;
       m.get(k)!.km += kmFn(v);
     }
-    const out = new Map<string, { servicos: number; frota: number; partidas: number; km: number }>();
-    for (const [k, x] of m) out.set(k, { servicos: x.servicos.size, frota: x.veiculos.size, partidas: x.partidas, km: x.km });
+    const custoPorChave = new Map<string, number>();
+    if (custoParams) {
+      const jornadas = buildJornadas(viagens, linhas);
+      for (const j of jornadas) {
+        const k = chaveJornada(j);
+        custoPorChave.set(k, (custoPorChave.get(k) ?? 0) + custoServico(j, custoParams));
+      }
+    }
+    const out = new Map<string, BreakdownVal>();
+    for (const [k, x] of m) out.set(k, { servicos: x.servicos.size, frota: x.veiculos.size, partidas: x.partidas, km: x.km, custo: custoPorChave.get(k) ?? 0 });
     return out;
   }
 
-  function mergeBreakdown(a: Map<string, { servicos: number; frota: number; partidas: number; km: number }>, p: Map<string, { servicos: number; frota: number; partidas: number; km: number }>) {
+  function mergeBreakdown(a: Map<string, BreakdownVal>, p: Map<string, BreakdownVal>) {
     const chaves = new Set([...a.keys(), ...p.keys()]);
-    const zero = { servicos: 0, frota: 0, partidas: 0, km: 0 };
+    const zero: BreakdownVal = { servicos: 0, frota: 0, partidas: 0, km: 0, custo: 0 };
     return Array.from(chaves, (chave) => ({
       chave, atual: a.get(chave) ?? zero, proposta: p.get(chave) ?? zero,
     })).sort((x, y) => x.chave.localeCompare(y.chave));
@@ -365,28 +377,31 @@ export function ComparativoView() {
     if (!applied) return [];
     const empA = buildEmpresaPorServico(basesAplicadas.atual, linhaMap, empresaOverrideMap);
     const empP = buildEmpresaPorServico(basesAplicadas.proposta, linhaMap, empresaOverrideMap);
-    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa", (u) => empA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.empresa || "Sem empresa");
-    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa", (u) => empP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.empresa || "Sem empresa");
+    const chaveJ = (j: ReturnType<typeof buildJornadas>[number], mapa: Map<string, string>) => mapa.get(j.vehicleKey) || linhaMap.get(j.linha)?.empresa || "Sem empresa";
+    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa", (u) => empA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.empresa || "Sem empresa", (j) => chaveJ(j, empA));
+    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa", (u) => empP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.empresa || "Sem empresa", (j) => chaveJ(j, empP));
     return mergeBreakdown(a, p);
-  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn]);
+  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn, linhas, custoParams]);
 
   const resumoPorUnidade = useMemo(() => {
     if (!applied) return [];
     const uniA = buildUnidadePorServico(basesAplicadas.atual, linhaMap, empresaOverrideMap);
     const uniP = buildUnidadePorServico(basesAplicadas.proposta, linhaMap, empresaOverrideMap);
-    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade", (u) => uniA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.unidade || "Sem unidade");
-    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade", (u) => uniP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.unidade || "Sem unidade");
+    const chaveJ = (j: ReturnType<typeof buildJornadas>[number], mapa: Map<string, string>) => mapa.get(j.vehicleKey) || linhaMap.get(j.linha)?.unidade || "Sem unidade";
+    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade", (u) => uniA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.unidade || "Sem unidade", (j) => chaveJ(j, uniA));
+    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade", (u) => uniP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.unidade || "Sem unidade", (j) => chaveJ(j, uniP));
     return mergeBreakdown(a, p);
-  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn]);
+  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn, linhas, custoParams]);
 
   const resumoPorGrupo = useMemo(() => {
     if (!applied) return [];
     const grpA = buildGrupoPorServico(basesAplicadas.atual, linhaMap, empresaOverrideMap);
     const grpP = buildGrupoPorServico(basesAplicadas.proposta, linhaMap, empresaOverrideMap);
-    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo", (u) => grpA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.ordem || "Sem grupo");
-    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo", (u) => grpP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.ordem || "Sem grupo");
+    const chaveJ = (j: ReturnType<typeof buildJornadas>[number], mapa: Map<string, string>) => mapa.get(j.vehicleKey) || linhaMap.get(j.linha)?.ordem || "Sem grupo";
+    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo", (u) => grpA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.ordem || "Sem grupo", (j) => chaveJ(j, grpA));
+    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo", (u) => grpP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.ordem || "Sem grupo", (j) => chaveJ(j, grpP));
     return mergeBreakdown(a, p);
-  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn]);
+  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn, linhas, custoParams]);
 
   const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">("comparativo.ordenarPor", "padrao");
 
@@ -655,6 +670,7 @@ export function ComparativoView() {
             Consultar
           </Button>
           {applied && <Button variant="outline" size="sm" onClick={() => setApplied(null)}>Limpar</Button>}
+          <SalarioMotoristaButton />
           <Button variant="outline" size="sm" onClick={exportXLSX} disabled={!merged.length}>
             <FileSpreadsheet className="h-4 w-4 mr-1" /> Excel
           </Button>
@@ -853,11 +869,12 @@ export function ComparativoView() {
   );
 }
 
-type BreakdownVal = { servicos: number; frota: number; partidas: number; km: number };
+type BreakdownVal = { servicos: number; frota: number; partidas: number; km: number; custo: number };
 function ResumoComparativoTable({ titulo, rows }: { titulo: string; rows: { chave: string; atual: BreakdownVal; proposta: BreakdownVal }[] }) {
   if (rows.length === 0) return null;
-  const totA = rows.reduce((s, r) => ({ servicos: s.servicos + r.atual.servicos, frota: s.frota + r.atual.frota, partidas: s.partidas + r.atual.partidas, km: s.km + r.atual.km }), { servicos: 0, frota: 0, partidas: 0, km: 0 });
-  const totP = rows.reduce((s, r) => ({ servicos: s.servicos + r.proposta.servicos, frota: s.frota + r.proposta.frota, partidas: s.partidas + r.proposta.partidas, km: s.km + r.proposta.km }), { servicos: 0, frota: 0, partidas: 0, km: 0 });
+  const comCusto = rows.some((r) => r.atual.custo > 0 || r.proposta.custo > 0);
+  const totA = rows.reduce((s, r) => ({ servicos: s.servicos + r.atual.servicos, frota: s.frota + r.atual.frota, partidas: s.partidas + r.atual.partidas, km: s.km + r.atual.km, custo: s.custo + r.atual.custo }), { servicos: 0, frota: 0, partidas: 0, km: 0, custo: 0 });
+  const totP = rows.reduce((s, r) => ({ servicos: s.servicos + r.proposta.servicos, frota: s.frota + r.proposta.frota, partidas: s.partidas + r.proposta.partidas, km: s.km + r.proposta.km, custo: s.custo + r.proposta.custo }), { servicos: 0, frota: 0, partidas: 0, km: 0, custo: 0 });
   return (
     <Card className="shadow-[var(--shadow-card)]">
       <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">{titulo}</CardTitle></CardHeader>
@@ -871,9 +888,10 @@ function ResumoComparativoTable({ titulo, rows }: { titulo: string; rows: { chav
                 <TableHead className="px-2 py-1 text-center border-l" colSpan={2}>Frota</TableHead>
                 <TableHead className="px-2 py-1 text-center border-l" colSpan={2}>Partidas</TableHead>
                 <TableHead className="px-2 py-1 text-center border-l" colSpan={2}>KM</TableHead>
+                {comCusto && <TableHead className="px-2 py-1 text-center border-l" colSpan={2}>Custo M.O.</TableHead>}
               </TableRow>
               <TableRow className="h-7">
-                {["Atual", "Proposta", "Atual", "Proposta", "Atual", "Proposta", "Atual", "Proposta"].map((l, i) => (
+                {["Atual", "Proposta", "Atual", "Proposta", "Atual", "Proposta", "Atual", "Proposta", ...(comCusto ? ["Atual", "Proposta"] : [])].map((l, i) => (
                   <TableHead key={i} className={`px-2 py-1 text-right text-[10px] ${i % 2 === 0 ? "border-l" : ""}`}>{l}</TableHead>
                 ))}
               </TableRow>
@@ -890,6 +908,8 @@ function ResumoComparativoTable({ titulo, rows }: { titulo: string; rows: { chav
                   <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(r.proposta.partidas)}</TableCell>
                   <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtKm(r.atual.km)}</TableCell>
                   <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(r.proposta.km)}</TableCell>
+                  {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtMoeda(r.atual.custo)}</TableCell>}
+                  {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(r.proposta.custo)}</TableCell>}
                 </TableRow>
               ))}
               <TableRow className="bg-muted/50 font-bold h-9">
@@ -902,6 +922,8 @@ function ResumoComparativoTable({ titulo, rows }: { titulo: string; rows: { chav
                 <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(totP.partidas)}</TableCell>
                 <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtKm(totA.km)}</TableCell>
                 <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(totP.km)}</TableCell>
+                {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtMoeda(totA.custo)}</TableCell>}
+                {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(totP.custo)}</TableCell>}
               </TableRow>
             </TableBody>
           </Table>

@@ -15,7 +15,9 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Bus, Route as RouteIcon, Building2, Activity, Download, RefreshCw, Layers, MapPinned, Truck, AlertTriangle as AlertTriangleIcon } from "lucide-react";
+import { Bus, Route as RouteIcon, Building2, Activity, Download, RefreshCw, Layers, MapPinned, Truck, AlertTriangle as AlertTriangleIcon, DollarSign } from "lucide-react";
+import { custoServico, fmtMoeda } from "@/lib/custo";
+import { useSalarioMotorista, SalarioMotoristaButton } from "@/components/salario-motorista";
 import { MultiSelect } from "@/components/multi-select";
 import {
   BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, PieChart, Pie, Cell, Legend, CartesianGrid, LabelList,
@@ -345,8 +347,19 @@ function DashOperacional() {
     [filtered, linhaMap, empresaOverrideMap],
   );
 
+  const { params: custoParams } = useSalarioMotorista();
+  const jornadasParaCusto = useMemo(() => buildJornadas(filtered, linhas), [filtered, linhas]);
+  const custoTotalDashboard = useMemo(
+    () => (custoParams ? jornadasParaCusto.reduce((s, j) => s + custoServico(j, custoParams), 0) : 0),
+    [jornadasParaCusto, custoParams],
+  );
+
   // Resumo Gerencial por Empresa / Unidade / Grupo de Linha (mesmo padrão dos demais relatórios)
-  function resumoPorChave(chaveViagem: (v: ViagemLite) => string, chaveUnit: (u: ReturnType<typeof buildServiceUnits> extends Map<string, infer U> ? U : never) => string) {
+  function resumoPorChave(
+    chaveViagem: (v: ViagemLite) => string,
+    chaveUnit: (u: ReturnType<typeof buildServiceUnits> extends Map<string, infer U> ? U : never) => string,
+    chaveJornada: (j: ReturnType<typeof buildJornadas>[number]) => string,
+  ) {
     const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
     for (const u of units.values()) {
       const k = chaveUnit(u as any);
@@ -360,8 +373,15 @@ function DashOperacional() {
       if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(k)!.partidas += 1;
       m.get(k)!.km += viagemKm(v, kmMaps);
     }
+    const custoPorChave = new Map<string, number>();
+    if (custoParams) {
+      for (const j of jornadasParaCusto) {
+        const k = chaveJornada(j);
+        custoPorChave.set(k, (custoPorChave.get(k) ?? 0) + custoServico(j, custoParams));
+      }
+    }
     return Array.from(m, ([chave, x]) => ({
-      chave, partidas: x.partidas, km: x.km, servicos: x.servicos.size, frota: x.veiculos.size,
+      chave, partidas: x.partidas, km: x.km, servicos: x.servicos.size, frota: x.veiculos.size, custo: custoPorChave.get(chave) ?? 0,
     })).sort((a, b) => a.chave.localeCompare(b.chave));
   }
 
@@ -369,23 +389,26 @@ function DashOperacional() {
     () => resumoPorChave(
       (v) => empresaPorServico.get(`${v.versao_programacao ?? ""}||${v.tipo_operacao ?? ""}||${v.servico ?? ""}`) || linhaMap.get(v.linha)?.empresa || resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa",
       (u: any) => empresaPorServico.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, "predominancia"))?.empresa || "Sem empresa",
+      (j) => empresaPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.empresa || "Sem empresa",
     ),
-    [units, filtered, empresaPorServico, linhaMap, empresaOverrideMap, kmMaps],
+    [units, filtered, empresaPorServico, linhaMap, empresaOverrideMap, kmMaps, jornadasParaCusto, custoParams],
   );
   const resumoUnidade = useMemo(
     () => resumoPorChave(
       (v) => resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade",
       (u: any) => unidadePorServico.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, "predominancia"))?.unidade || "Sem unidade",
+      (j) => unidadePorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.unidade || "Sem unidade",
     ),
-    [units, filtered, linhaMap, empresaOverrideMap, unidadePorServico, kmMaps],
+    [units, filtered, linhaMap, empresaOverrideMap, unidadePorServico, kmMaps, jornadasParaCusto, custoParams],
   );
   const grupoPorServico = useMemo(() => buildGrupoPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
   const resumoGrupoLinha = useMemo(() => {
     return resumoPorChave(
       (v) => resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo",
       (u: any) => grupoPorServico.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, "predominancia"))?.ordem || "Sem grupo",
+      (j) => grupoPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.ordem || "Sem grupo",
     );
-  }, [units, filtered, grupoPorServico, linhaMap, empresaOverrideMap, kmMaps]);
+  }, [units, filtered, grupoPorServico, linhaMap, empresaOverrideMap, kmMaps, jornadasParaCusto, custoParams]);
 
   // versão de programação -> dia tipo (cada versão pertence a um único dia tipo)
   const versaoParaDia = useMemo(() => {
@@ -399,6 +422,7 @@ function DashOperacional() {
   }, [filtered]);
 
   // KPIs
+
   const kpis = useMemo(() => {
     const linhasUnicas = new Set(comerciais.map((v) => v.linha));
     const empresasUnicas = new Set(comerciais.map((v) => resolveEmpresaViagem(v, linhaMap, empresaOverrideMap)).filter(Boolean));
@@ -641,6 +665,7 @@ function DashOperacional() {
           <Button variant="outline" size="sm" onClick={refresh} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 mr-1.5 ${isLoading ? "animate-spin" : ""}`} /> Atualizar
           </Button>
+          <SalarioMotoristaButton />
           <Badge variant="secondary" className="gap-1.5 h-9 px-3">
             <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse" /> {viagens.length.toLocaleString("pt-BR")} registros
           </Badge>
@@ -688,6 +713,9 @@ function DashOperacional() {
 
         <StatCard label="Partidas" value={kpis.partidas.toLocaleString("pt-BR")} icon={Activity} tone="primary" />
         <StatCard label="Serviços" value={kpis.servicos.toLocaleString("pt-BR")} icon={Layers} tone="primary" />
+        {custoParams && custoParams.salarioMotoristaMensal > 0 && (
+          <StatCard label="Custo M.O." value={fmtMoeda(custoTotalDashboard)} icon={DollarSign} tone="warning" />
+        )}
         <StatCard label="Frota" value={kpis.frota.toLocaleString("pt-BR")} icon={Truck} tone="warning" />
         <StatCard label="Linhas" value={kpis.linhas.toLocaleString("pt-BR")} icon={RouteIcon} tone="success" />
         <StatCard label="Empresas" value={kpis.empresas.toLocaleString("pt-BR")} icon={Building2} tone="success" />
@@ -1004,8 +1032,9 @@ function DashOperacional() {
   );
 }
 
-function ResumoGerencialDashTable({ titulo, rows }: { titulo: string; rows: { chave: string; servicos: number; frota: number; partidas: number; km: number }[] }) {
+function ResumoGerencialDashTable({ titulo, rows }: { titulo: string; rows: { chave: string; servicos: number; frota: number; partidas: number; km: number; custo: number }[] }) {
   if (rows.length === 0) return null;
+  const comCusto = rows.some((r) => r.custo > 0);
   return (
     <Card className="shadow-[var(--shadow-card)]">
       <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">{titulo}</CardTitle></CardHeader>
@@ -1019,6 +1048,7 @@ function ResumoGerencialDashTable({ titulo, rows }: { titulo: string; rows: { ch
                 <TableHead className="px-2 py-1 text-right">Frota</TableHead>
                 <TableHead className="px-2 py-1 text-right">Partidas</TableHead>
                 <TableHead className="px-2 py-1 text-right">KM</TableHead>
+                {comCusto && <TableHead className="px-2 py-1 text-right">Custo M.O.</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1029,6 +1059,7 @@ function ResumoGerencialDashTable({ titulo, rows }: { titulo: string; rows: { ch
                   <TableCell className="px-2 py-1 text-right tabular-nums">{r.frota}</TableCell>
                   <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(r.partidas)}</TableCell>
                   <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(r.km)}</TableCell>
+                  {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(r.custo)}</TableCell>}
                 </TableRow>
               ))}
               <TableRow className="bg-muted/50 font-bold h-9">
@@ -1037,6 +1068,7 @@ function ResumoGerencialDashTable({ titulo, rows }: { titulo: string; rows: { ch
                 <TableCell className="px-2 py-1 text-right tabular-nums">{rows.reduce((s, r) => s + r.frota, 0)}</TableCell>
                 <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(rows.reduce((s, r) => s + r.partidas, 0))}</TableCell>
                 <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(rows.reduce((s, r) => s + r.km, 0))}</TableCell>
+                {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(rows.reduce((s, r) => s + r.custo, 0))}</TableCell>}
               </TableRow>
             </TableBody>
           </Table>

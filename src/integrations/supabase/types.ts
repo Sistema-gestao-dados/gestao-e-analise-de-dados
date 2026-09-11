@@ -401,6 +401,48 @@ export type Database = {
         }
         Relationships: []
       }
+      parametros_custo: {
+        Row: {
+          id: number
+          salario_motorista_mensal: number
+          encargos_percentual: number
+          adicional_noturno_percentual: number
+          hora_extra_percentual: number
+          horas_mensais_referencia: number
+          noturno_inicio_min: number
+          noturno_fim_min: number
+          tu_inicio_minimo_min: number
+          tu_fim_maximo_min: number
+          updated_at: string
+        }
+        Insert: {
+          id?: number
+          salario_motorista_mensal?: number
+          encargos_percentual?: number
+          adicional_noturno_percentual?: number
+          hora_extra_percentual?: number
+          horas_mensais_referencia?: number
+          noturno_inicio_min?: number
+          noturno_fim_min?: number
+          tu_inicio_minimo_min?: number
+          tu_fim_maximo_min?: number
+          updated_at?: string
+        }
+        Update: {
+          id?: number
+          salario_motorista_mensal?: number
+          encargos_percentual?: number
+          adicional_noturno_percentual?: number
+          hora_extra_percentual?: number
+          horas_mensais_referencia?: number
+          noturno_inicio_min?: number
+          noturno_fim_min?: number
+          tu_inicio_minimo_min?: number
+          tu_fim_maximo_min?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
       linha_empresa_estacao: {
         Row: {
           created_at: string

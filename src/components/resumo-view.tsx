@@ -9,6 +9,9 @@ import {
   type ViagemLite, type AggRow, type ServiceUnit, type CriterioLinha,
 } from "@/lib/resumo";
 import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
+import { buildJornadas } from "@/lib/jornada";
+import { custoServico, fmtMoeda } from "@/lib/custo";
+import { useSalarioMotorista, SalarioMotoristaButton } from "@/components/salario-motorista";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt, normKey } from "@/lib/km";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -372,6 +375,20 @@ const totals = useMemo(() => {
   }, [filtered, kmMaps]);
 
   // Resumo por empresa (rodapé gerencial)
+  // Jornadas de verdade (com HE/noturno) só pra calcular custo de mão de
+  // obra certo nos resumos — não é usado pra mais nada nessa tela.
+  const { params: custoParams } = useSalarioMotorista();
+  const jornadasParaCusto = useMemo(() => buildJornadas(filtered, linhas), [filtered, linhas]);
+  function custoPorChave(chaveFn: (j: ReturnType<typeof buildJornadas>[number]) => string): Map<string, number> {
+    const m = new Map<string, number>();
+    if (!custoParams) return m;
+    for (const j of jornadasParaCusto) {
+      const k = chaveFn(j);
+      m.set(k, (m.get(k) ?? 0) + custoServico(j, custoParams));
+    }
+    return m;
+  }
+
   const resumoEmpresa = useMemo(() => {
     const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
     for (const u of units.values()) {
@@ -386,10 +403,12 @@ const totals = useMemo(() => {
       if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(e)!.partidas += 1;
       m.get(e)!.km += kmFn(v);
     }
+    const custoMap = custoPorChave((j) => empresaPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.empresa || "Sem empresa");
     return Array.from(m, ([empresa, x]) => ({
       empresa, partidas: x.partidas, km: x.km, servicos: x.servicos.size, frota: x.veiculos.size,
+      custo: custoMap.get(empresa) ?? 0,
     })).sort((a, b) => a.empresa.localeCompare(b.empresa));
-  }, [units, filtered, linhaMap, kmFn, S.criterio, empresaPorServico, empresaOverrideMap]);
+  }, [units, filtered, linhaMap, kmFn, S.criterio, empresaPorServico, empresaOverrideMap, jornadasParaCusto, custoParams]);
 
   // Resumo por Unidade (rodapé gerencial)
   const resumoUnidade = useMemo(() => {
@@ -406,10 +425,12 @@ const totals = useMemo(() => {
       if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(un)!.partidas += 1;
       m.get(un)!.km += kmFn(v);
     }
+    const custoMap = custoPorChave((j) => unidadePorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.unidade || "Sem unidade");
     return Array.from(m, ([unidade, x]) => ({
       unidade, partidas: x.partidas, km: x.km, servicos: x.servicos.size, frota: x.veiculos.size,
+      custo: custoMap.get(unidade) ?? 0,
     })).sort((a, b) => a.unidade.localeCompare(b.unidade));
-  }, [units, filtered, linhaMap, kmFn, S.criterio, unidadePorServico, empresaOverrideMap]);
+  }, [units, filtered, linhaMap, kmFn, S.criterio, unidadePorServico, empresaOverrideMap, jornadasParaCusto, custoParams]);
 
   // Resumo por Grupo (rodapé gerencial) — campo "Grupo" (ex-Ordem, com
   // exceção por estação tipo Grupo Rio Ita/Grupo Maua), NÃO é "Grupo de
@@ -432,10 +453,12 @@ const totals = useMemo(() => {
       if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(grupo)!.partidas += 1;
       m.get(grupo)!.km += kmFn(v);
     }
+    const custoMap = custoPorChave((j) => grupoPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.ordem || "Sem grupo");
     return Array.from(m, ([grupo, x]) => ({
       grupo, partidas: x.partidas, km: x.km, servicos: x.servicos.size, frota: x.veiculos.size,
+      custo: custoMap.get(grupo) ?? 0,
     })).sort((a, b) => a.grupo.localeCompare(b.grupo));
-  }, [units, filtered, linhaMap, kmFn, S.criterio, grupoPorServico, empresaOverrideMap]);
+  }, [units, filtered, linhaMap, kmFn, S.criterio, grupoPorServico, empresaOverrideMap, jornadasParaCusto, custoParams]);
 
   const title = mode === "linha" ? "Resumo por Linha" : "Resumo Operacional";
   const firstColLabel = mode === "linha" ? "Linha" : (groupBy === "grupo" ? "Grupo de Linha" : "Projeto / Versão");
@@ -826,6 +849,7 @@ const totals = useMemo(() => {
               </SelectContent>
             </Select>
           )}
+          <SalarioMotoristaButton />
           <Button variant="outline" size="sm" onClick={exportXLSX} disabled={!rows.length}>
             <FileSpreadsheet className="h-4 w-4 mr-1" /> Excel
           </Button>
@@ -1137,6 +1161,7 @@ function appendResumoSheet(wb: XLSX.WorkBook, nomeAba: string, keyField: string,
 
 function ResumoGerencialTable({ titulo, rows, keyField, loading }: { titulo: string; rows: ResumoGerencialRow[]; keyField: string; loading: boolean }) {
   if (loading || rows.length === 0) return null;
+  const comCusto = rows.some((r) => Number(r.custo ?? 0) > 0);
   return (
     <Card className="shadow-[var(--shadow-card)]">
       <CardHeader className="pb-2">
@@ -1152,6 +1177,7 @@ function ResumoGerencialTable({ titulo, rows, keyField, loading }: { titulo: str
                 <TableHead className="px-2 py-1 text-right">Frota</TableHead>
                 <TableHead className="px-2 py-1 text-right">Partidas</TableHead>
                 <TableHead className="px-2 py-1 text-right">KM</TableHead>
+                {comCusto && <TableHead className="px-2 py-1 text-right">Custo M.O.</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -1162,6 +1188,7 @@ function ResumoGerencialTable({ titulo, rows, keyField, loading }: { titulo: str
                   <TableCell className="px-2 py-1 text-right tabular-nums">{r.frota}</TableCell>
                   <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(r.partidas)}</TableCell>
                   <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(r.km)}</TableCell>
+                  {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(Number(r.custo ?? 0))}</TableCell>}
                 </TableRow>
               ))}
               <TableRow className="bg-muted/50 font-bold h-9">
@@ -1170,6 +1197,7 @@ function ResumoGerencialTable({ titulo, rows, keyField, loading }: { titulo: str
                 <TableCell className="px-2 py-1 text-right tabular-nums">{rows.reduce((s, r) => s + r.frota, 0)}</TableCell>
                 <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(rows.reduce((s, r) => s + r.partidas, 0))}</TableCell>
                 <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(rows.reduce((s, r) => s + r.km, 0))}</TableCell>
+                {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(rows.reduce((s, r) => s + Number(r.custo ?? 0), 0))}</TableCell>}
               </TableRow>
             </TableBody>
           </Table>

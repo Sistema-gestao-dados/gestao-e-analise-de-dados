@@ -9,6 +9,8 @@ import {
   INTRA_MINIMO_MIN, INTRA_CRITICO_MIN, type JornadaServico, type ClassificacaoIntra,
 } from "@/lib/jornada";
 import { buildEmpresaOverrideMap, resolveGrupoViagem, resolveEmpresaViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
+import { custoServico, tuForaDaJanela, fmtMoeda } from "@/lib/custo";
+import { useParametrosCusto, SalarioMotoristaButton } from "@/components/salario-motorista";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -64,6 +66,7 @@ function IntraJornadaPage() {
   const [fUnidade, setFUnidade] = usePersistentState("intra.fUnidade", "__all");
   const [fGrupoOrdem, setFGrupoOrdem] = usePersistentState("intra.fGrupoOrdem", "__all");
   const [fClasse, setFClasse] = usePersistentState("intra.fClasse", "__all");
+  const [fJanela, setFJanela] = usePersistentState<"__all" | "fora">("intra.fJanela", "__all");
   const [pageSize, setPageSize] = usePersistentState("intra.pageSize", 50);
   const [page, setPage] = useState(0);
   const [somenteAtivos, setSomenteAtivos] = usePersistentState("intra.somenteAtivos", true);
@@ -111,25 +114,34 @@ function IntraJornadaPage() {
   }, [viagens, applied, linhaMap, empresaOverrideMap]);
 
   // Só serviços TU completos (T1 e T2), com o intervalo real calculado.
+  const { params: custoParams } = useParametrosCusto();
   const intras = useMemo(() => {
     if (!applied) return [];
     const jornadas = buildJornadas(filtered, linhas).filter((j) => j.tipoServico === "TU" && !j.incompleto);
     return jornadas
       .map((j) => ({ jornada: j, intraMin: intraJornadaMin(j) }))
       .filter((x): x is { jornada: JornadaServico; intraMin: number } => x.intraMin != null)
-      .map((x) => ({ ...x, classe: classificarIntra(x.intraMin) }));
-  }, [applied, filtered, linhas]);
+      .map((x) => ({
+        ...x,
+        classe: classificarIntra(x.intraMin),
+        foraJanela: custoParams ? tuForaDaJanela(x.jornada, custoParams) : false,
+        custo: custoParams ? custoServico(x.jornada, custoParams) : 0,
+      }));
+  }, [applied, filtered, linhas, custoParams]);
 
   const intrasFiltradas = useMemo(() => {
-    if (fClasse === "__all") return intras;
-    return intras.filter((x) => x.classe === fClasse);
-  }, [intras, fClasse]);
+    let arr = intras;
+    if (fClasse !== "__all") arr = arr.filter((x) => x.classe === fClasse);
+    if (fJanela === "fora") arr = arr.filter((x) => x.foraJanela);
+    return arr;
+  }, [intras, fClasse, fJanela]);
 
   const totais = useMemo(() => ({
     total: intras.length,
     critico: intras.filter((x) => x.classe === "critico").length,
     foraRegra: intras.filter((x) => x.classe === "fora_regra").length,
     ok: intras.filter((x) => x.classe === "ok").length,
+    foraJanela: intras.filter((x) => x.foraJanela).length,
   }), [intras]);
 
   const totalPaginas = Math.max(1, Math.ceil(intrasFiltradas.length / pageSize));
@@ -138,7 +150,7 @@ function IntraJornadaPage() {
     () => intrasFiltradas.slice(paginaAtual * pageSize, paginaAtual * pageSize + pageSize),
     [intrasFiltradas, paginaAtual, pageSize],
   );
-  useEffect(() => setPage(0), [applied, pageSize, fClasse]);
+  useEffect(() => setPage(0), [applied, pageSize, fClasse, fJanela]);
 
   // Resumo Gerencial por Empresa / Unidade / Grupo
   const empresaPorServico = useMemo(() => buildEmpresaPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
@@ -146,14 +158,16 @@ function IntraJornadaPage() {
   const grupoPorServico = useMemo(() => buildGrupoPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
 
   function resumoPorChave(chaveFn: (x: typeof intras[number]) => string) {
-    const m = new Map<string, { total: number; critico: number; foraRegra: number; ok: number }>();
+    const m = new Map<string, { total: number; critico: number; foraRegra: number; ok: number; foraJanela: number; custo: number }>();
     for (const x of intras) {
       const k = chaveFn(x);
-      const cur = m.get(k) ?? { total: 0, critico: 0, foraRegra: 0, ok: 0 };
+      const cur = m.get(k) ?? { total: 0, critico: 0, foraRegra: 0, ok: 0, foraJanela: 0, custo: 0 };
       cur.total++;
       if (x.classe === "critico") cur.critico++;
       else if (x.classe === "fora_regra") cur.foraRegra++;
       else cur.ok++;
+      if (x.foraJanela) cur.foraJanela++;
+      cur.custo += x.custo;
       m.set(k, cur);
     }
     return Array.from(m, ([chave, v]) => ({ chave, ...v })).sort((a, b) => a.chave.localeCompare(b.chave, "pt-BR"));
@@ -207,11 +221,12 @@ function IntraJornadaPage() {
         <Card><CardContent className="p-8 text-center text-sm text-muted-foreground">Carregando...</CardContent></Card>
       ) : (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             <Kpi label="Serviços TU (completos)" value={totais.total} icon={Timer} tone="primary" />
             <Kpi label="Críticos (< 2h)" value={totais.critico} icon={AlertTriangle} tone="danger" />
             <Kpi label="Fora da regra (2h–3h)" value={totais.foraRegra} icon={AlertCircle} tone="warning" />
             <Kpi label="Dentro da regra (≥ 3h)" value={totais.ok} icon={CheckCircle2} tone="success" />
+            <Kpi label="Fora da janela (04h–21h)" value={totais.foraJanela} icon={AlertTriangle} tone="warning" />
           </div>
 
           <Card className="shadow-[var(--shadow-card)]">
@@ -222,6 +237,10 @@ function IntraJornadaPage() {
                   {c === "__all" ? "Todos" : CLASS_CFG[c].label}
                 </Button>
               ))}
+              <span className="text-xs text-muted-foreground ml-3">Janela do TU:</span>
+              <Button size="sm" variant={fJanela === "__all" ? "default" : "outline"} onClick={() => setFJanela("__all")}>Todos</Button>
+              <Button size="sm" variant={fJanela === "fora" ? "default" : "outline"} onClick={() => setFJanela("fora")}>Só fora da janela (04h–21h)</Button>
+              <div className="ml-auto"><SalarioMotoristaButton /></div>
             </CardContent>
           </Card>
 
@@ -241,6 +260,8 @@ function IntraJornadaPage() {
                         <TableHead>Início T2 (c/ antecipação)</TableHead>
                         <TableHead>Intervalo</TableHead>
                         <TableHead>Classificação</TableHead>
+                        <TableHead>Janela TU</TableHead>
+                        {custoParams && custoParams.salarioMotoristaMensal > 0 && <TableHead className="text-right">Custo M.O.</TableHead>}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -260,6 +281,14 @@ function IntraJornadaPage() {
                             <TableCell>
                               <Badge className={`gap-1 ring-1 ${cfg.tone}`} variant="outline"><Icon className="h-3 w-3" />{cfg.label}</Badge>
                             </TableCell>
+                            <TableCell>
+                              {x.foraJanela
+                                ? <Badge variant="outline" className="gap-1 ring-1 bg-warning/10 text-warning ring-warning/20"><AlertTriangle className="h-3 w-3" />Fora</Badge>
+                                : <span className="text-xs text-muted-foreground">OK</span>}
+                            </TableCell>
+                            {custoParams && custoParams.salarioMotoristaMensal > 0 && (
+                              <TableCell className="text-right tabular-nums">{fmtMoeda(x.custo)}</TableCell>
+                            )}
                           </TableRow>
                         );
                       })}
@@ -311,10 +340,11 @@ function FiltroSelect({ label, value, onChange, options }: { label: string; valu
   );
 }
 
-type ResumoIntraRow = { chave: string; total: number; critico: number; foraRegra: number; ok: number };
+type ResumoIntraRow = { chave: string; total: number; critico: number; foraRegra: number; ok: number; foraJanela: number; custo: number };
 function ResumoIntraTable({ titulo, rows }: { titulo: string; rows: ResumoIntraRow[] }) {
   if (rows.length === 0) return null;
-  const tot = rows.reduce((s, r) => ({ total: s.total + r.total, critico: s.critico + r.critico, foraRegra: s.foraRegra + r.foraRegra, ok: s.ok + r.ok }), { total: 0, critico: 0, foraRegra: 0, ok: 0 });
+  const comCusto = rows.some((r) => r.custo > 0);
+  const tot = rows.reduce((s, r) => ({ total: s.total + r.total, critico: s.critico + r.critico, foraRegra: s.foraRegra + r.foraRegra, ok: s.ok + r.ok, foraJanela: s.foraJanela + r.foraJanela, custo: s.custo + r.custo }), { total: 0, critico: 0, foraRegra: 0, ok: 0, foraJanela: 0, custo: 0 });
   return (
     <Card className="shadow-[var(--shadow-card)]">
       <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">{titulo}</CardTitle></CardHeader>
@@ -328,6 +358,8 @@ function ResumoIntraTable({ titulo, rows }: { titulo: string; rows: ResumoIntraR
                 <TableHead className="px-2 py-1 text-right text-destructive">Crítico</TableHead>
                 <TableHead className="px-2 py-1 text-right text-warning">Fora da regra</TableHead>
                 <TableHead className="px-2 py-1 text-right text-success">Dentro da regra</TableHead>
+                <TableHead className="px-2 py-1 text-right text-warning">Fora da janela</TableHead>
+                {comCusto && <TableHead className="px-2 py-1 text-right">Custo M.O.</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -338,6 +370,8 @@ function ResumoIntraTable({ titulo, rows }: { titulo: string; rows: ResumoIntraR
                   <TableCell className="px-2 py-1 text-right tabular-nums">{r.critico}</TableCell>
                   <TableCell className="px-2 py-1 text-right tabular-nums">{r.foraRegra}</TableCell>
                   <TableCell className="px-2 py-1 text-right tabular-nums">{r.ok}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.foraJanela}</TableCell>
+                  {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(r.custo)}</TableCell>}
                 </TableRow>
               ))}
               <TableRow className="bg-muted/50 font-bold h-9">
@@ -346,6 +380,8 @@ function ResumoIntraTable({ titulo, rows }: { titulo: string; rows: ResumoIntraR
                 <TableCell className="px-2 py-1 text-right tabular-nums">{tot.critico}</TableCell>
                 <TableCell className="px-2 py-1 text-right tabular-nums">{tot.foraRegra}</TableCell>
                 <TableCell className="px-2 py-1 text-right tabular-nums">{tot.ok}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{tot.foraJanela}</TableCell>
+                {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(tot.custo)}</TableCell>}
               </TableRow>
             </TableBody>
           </Table>
