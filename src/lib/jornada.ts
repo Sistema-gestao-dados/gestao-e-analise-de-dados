@@ -24,6 +24,31 @@ export const LIMITE_TU_MIN = 504;     // 8h24 — motorista TU
 export const ALERTA_MIN = 9 * 60;     // 9h — atenção
 export const CRITICO_MIN = 10 * 60;   // 10h — crítico
 
+// Intra-jornada do TU: descanso mínimo exigido entre o fim do 1º turno
+// (já contando a prestação de contas) e o início do 2º turno (já contando
+// a antecipação) — é o mesmo motorista, então isso é o tempo de folga de
+// verdade que ele teve no meio do dia.
+export const INTRA_MINIMO_MIN = 180;  // 3h — mínimo exigido
+export const INTRA_CRITICO_MIN = 120; // 2h — abaixo disso é crítico
+
+export type ClassificacaoIntra = "critico" | "fora_regra" | "ok";
+
+export function classificarIntra(min: number): ClassificacaoIntra {
+  if (min < INTRA_CRITICO_MIN) return "critico";
+  if (min < INTRA_MINIMO_MIN) return "fora_regra";
+  return "ok";
+}
+
+/** Intervalo real de descanso entre T1 e T2 de um serviço TU, em minutos.
+ * null se não for TU, ou se faltar T1 ou T2 (jornada incompleta). */
+export function intraJornadaMin(j: JornadaServico): number | null {
+  if (j.tipoServico !== "TU") return null;
+  const t1 = j.turnos.find((t) => t.turno === "1");
+  const t2 = j.turnos.find((t) => t.turno === "2");
+  if (!t1 || !t2) return null;
+  return t2.inicioMin - t1.fimMin;
+}
+
 export function limiteJornada(tipo: string): number {
   return (tipo ?? "").toUpperCase() === "TU" ? LIMITE_TU_MIN : LIMITE_DIR_MIN;
 }

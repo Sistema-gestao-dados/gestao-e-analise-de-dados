@@ -15,6 +15,7 @@ export const MODULE_GROUPS: ModuleGroup[] = [
       { key: "resumo_linha", label: "Resumo por Linha" },
       { key: "relatorio_comparativo", label: "Relatório Comparativo" },
       { key: "jornada", label: "Jornada de Trabalho" },
+      { key: "intra_jornada", label: "Intra Jornada (TU)" },
       { key: "pesquisa", label: "Pesquisa" },
     ],
   },
