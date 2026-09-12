@@ -11,7 +11,7 @@ import {
 import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
 import { buildJornadas } from "@/lib/jornada";
 import { custoServico, fmtMoeda } from "@/lib/custo";
-import { useSalarioMotorista, SalarioMotoristaButton } from "@/components/salario-motorista";
+import { useSalarioMotorista } from "@/components/salario-motorista";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt, normKey } from "@/lib/km";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -112,6 +112,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
   // FLAG: regra de contagem de serviço/frota por linha
   const [criterio, setCriterio] = usePersistentState<CriterioLinha>(`resumo.${mode}.criterio`, "predominancia");
   const [mostrarDescricao, setMostrarDescricao] = usePersistentState(`resumo.${mode}.mostrarDescricao`, false);
+  const [mostrarCusto, setMostrarCusto] = usePersistentState(`resumo.${mode}.mostrarCusto`, false);
 
   const [fDia, setFDia] = usePersistentState(`resumo.${mode}.fDia`, "__all");
   const [fLinha, setFLinha] = usePersistentState<string[]>(`resumo.${mode}.fLinha`, []);
@@ -389,6 +390,30 @@ const totals = useMemo(() => {
     return m;
   }
 
+  // Custo por linha do resumo principal (mesmo groupKey usado em "rows",
+  // pra mostrar a coluna "Custo M.O." junto de Partidas/KM na tabela).
+  const vehicleKeyParaGroupKey = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const u of units.values()) {
+      let key: string;
+      if (mode === "linha") {
+        key = dominantLinha(u, S.criterio);
+      } else if (S.groupBy === "grupo") {
+        const linha = dominantLinha(u, S.criterio);
+        const td = S.dia !== "__all" ? S.dia : u.tipo_operacao;
+        key = grupoMap.get(`${linha}|${td}`.toLowerCase()) ?? `(sem grupo) ${linha}`;
+      } else {
+        key = u.versao;
+      }
+      m.set(u.vehicleKey, key);
+    }
+    return m;
+  }, [units, mode, S.groupBy, S.criterio, S.dia, grupoMap]);
+  const custoPorGroupKey = useMemo(
+    () => custoPorChave((j) => vehicleKeyParaGroupKey.get(j.vehicleKey) ?? "?"),
+    [jornadasParaCusto, custoParams, vehicleKeyParaGroupKey],
+  );
+
   const resumoEmpresa = useMemo(() => {
     const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
     for (const u of units.values()) {
@@ -462,7 +487,8 @@ const totals = useMemo(() => {
 
   const title = mode === "linha" ? "Resumo por Linha" : "Resumo Operacional";
   const firstColLabel = mode === "linha" ? "Linha" : (groupBy === "grupo" ? "Grupo de Linha" : "Projeto / Versão");
-  const headers = [firstColLabel, "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas", "KM Total"];
+  const comCustoTabela = mostrarCusto && !!custoParams && custoParams.salarioMotoristaMensal > 0;
+  const headers = [firstColLabel, "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas", "KM Total", ...(comCustoTabela ? ["Custo M.O."] : [])];
 
   function exportXLSX() {
     const wb = XLSX.utils.book_new();
@@ -471,7 +497,7 @@ const totals = useMemo(() => {
     if (mode === "linha") {
       // Layout agrupado por Unidade: cada unidade em bloco próprio, com
       // cabeçalho, TOTAL por unidade, e um mini-resumo no rodapé.
-      const nCols = comDescricao ? 10 : 9; // A..J ou A..I
+      const nCols = 9 + (comDescricao ? 1 : 0) + (comCustoTabela ? 1 : 0);
       const aoa: (string | number)[][] = [];
       const merges: { s: { r: number; c: number }; e: { r: number; c: number } }[] = [];
       const tituloGrupo = S.grupo !== "__all" ? ` - ${S.grupo.toUpperCase()}` : "";
@@ -479,7 +505,7 @@ const totals = useMemo(() => {
       aoa[0] = ["", `RESUMO POR LINHA${tituloGrupo}`, ...Array(nCols - 2).fill("")];
       aoa.push(Array(nCols).fill(""));
 
-      const headerRow = ["", "Linha", ...(comDescricao ? ["Descrição"] : []), "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas"];
+      const headerRow = ["", "Linha", ...(comDescricao ? ["Descrição"] : []), "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas", ...(comCustoTabela ? ["Custo M.O."] : [])];
 
       for (const grupo of linhasPorUnidadeExport) {
         aoa.push(headerRow);
@@ -490,14 +516,16 @@ const totals = useMemo(() => {
             r.groupLabel,
             ...(comDescricao ? [descricaoPorLinha.get(r.groupKey) ?? ""] : []),
             r.dir1, r.dir2, r.aprov, r.tu, r.totalServico, r.frota, r.partidas,
+            ...(comCustoTabela ? [fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)] : []),
           ]);
         }
         if (grupo.rows.length > 1) merges.push({ s: { r: unidadeRowStart, c: 0 }, e: { r: aoa.length - 1, c: 0 } });
         const tot = grupo.rows.reduce((s, r) => ({
           dir1: s.dir1 + r.dir1, dir2: s.dir2 + r.dir2, aprov: s.aprov + r.aprov, tu: s.tu + r.tu,
           totalServico: s.totalServico + r.totalServico, frota: s.frota + r.frota, partidas: s.partidas + r.partidas,
-        }), { dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0 });
-        aoa.push(["", "TOTAL", ...(comDescricao ? [""] : []), tot.dir1, tot.dir2, tot.aprov, tot.tu, tot.totalServico, tot.frota, tot.partidas]);
+          custo: s.custo + (custoPorGroupKey.get(r.groupKey) ?? 0),
+        }), { dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0, custo: 0 });
+        aoa.push(["", "TOTAL", ...(comDescricao ? [""] : []), tot.dir1, tot.dir2, tot.aprov, tot.tu, tot.totalServico, tot.frota, tot.partidas, ...(comCustoTabela ? [fmtMoeda(tot.custo)] : [])]);
         merges.push({ s: { r: aoa.length - 1, c: 1 }, e: { r: aoa.length - 1, c: comDescricao ? 2 : 1 } });
         aoa.push(Array(nCols).fill(""));
       }
@@ -518,9 +546,10 @@ const totals = useMemo(() => {
 
       const ws = XLSX.utils.aoa_to_sheet(aoa);
       ws["!merges"] = merges;
-      ws["!cols"] = comDescricao
-        ? [{ wch: 20 }, { wch: 10 }, { wch: 30 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 12 }]
-        : [{ wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 12 }];
+      const colsBase = [{ wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 12 }];
+      const colsComDescricao = [{ wch: 20 }, { wch: 10 }, { wch: 30 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 12 }];
+      const colsFinal = comDescricao ? colsComDescricao : colsBase;
+      ws["!cols"] = comCustoTabela ? [...colsFinal, { wch: 14 }] : colsFinal;
       XLSX.utils.book_append_sheet(wb, ws, title.slice(0, 31));
     } else {
       // Resumo Operacional: layout de tabela única, como sempre foi.
@@ -530,15 +559,21 @@ const totals = useMemo(() => {
         [`Gerado em ${new Date().toLocaleString("pt-BR")} — ${rows.length} grupo(s)`],
         [],
         headersXlsx,
-        ...displayRows.map((r) => [r.groupLabel, r.dir1, r.dir2, r.aprov, r.tu, r.totalServico, r.frota, r.partidas, Number(r.km.toFixed(1))]),
-        ["TOTAL", totals.dir1, totals.dir2, totals.aprov, totals.tu, totals.totalServico, totals.frota, totals.partidas, Number(totals.km.toFixed(1))],
+        ...displayRows.map((r) => [
+          r.groupLabel, r.dir1, r.dir2, r.aprov, r.tu, r.totalServico, r.frota, r.partidas, Number(r.km.toFixed(1)),
+          ...(comCustoTabela ? [fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)] : []),
+        ]),
+        [
+          "TOTAL", totals.dir1, totals.dir2, totals.aprov, totals.tu, totals.totalServico, totals.frota, totals.partidas, Number(totals.km.toFixed(1)),
+          ...(comCustoTabela ? [fmtMoeda(Array.from(custoPorGroupKey.values()).reduce((s, v) => s + v, 0))] : []),
+        ],
       ];
       const ws = XLSX.utils.aoa_to_sheet(aoa);
       ws["!merges"] = [
         { s: { r: 0, c: 0 }, e: { r: 0, c: headersXlsx.length - 1 } },
         { s: { r: 1, c: 0 }, e: { r: 1, c: headersXlsx.length - 1 } },
       ];
-      ws["!cols"] = [{ wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }];
+      ws["!cols"] = [{ wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, ...(comCustoTabela ? [{ wch: 14 }] : [])];
       XLSX.utils.book_append_sheet(wb, ws, title.slice(0, 31));
     }
 
@@ -578,17 +613,21 @@ const totals = useMemo(() => {
       }
 
       const comDescricaoPdf = mode === "linha" && mostrarDescricao;
-      const headersPdf = comDescricaoPdf ? [firstColLabel, "Descrição", "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas", "KM Total"] : headers;
+      const headersPdf = comDescricaoPdf
+        ? [firstColLabel, "Descrição", "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas", "KM Total", ...(comCustoTabela ? ["Custo M.O."] : [])]
+        : headers;
       const mainBody = displayRows.map((r) => [
         r.groupLabel,
         ...(comDescricaoPdf ? [descricaoPorLinha.get(r.groupKey) ?? ""] : []),
         fmtInt(r.dir1), fmtInt(r.dir2), fmtInt(r.aprov), fmtInt(r.tu),
         fmtInt(r.totalServico), fmtInt(r.frota), fmtInt(r.partidas), fmtKm(r.km),
+        ...(comCustoTabela ? [fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)] : []),
       ]);
       const mainFoot = [
         "TOTAL", ...(comDescricaoPdf ? [""] : []),
         fmtInt(totals.dir1), fmtInt(totals.dir2), fmtInt(totals.aprov), fmtInt(totals.tu),
         fmtInt(totals.totalServico), fmtInt(totals.frota), fmtInt(totals.partidas), fmtKm(totals.km),
+        ...(comCustoTabela ? [fmtMoeda(Array.from(custoPorGroupKey.values()).reduce((s, v) => s + v, 0))] : []),
       ];
       const empBody = resumoEmpresa.map((e) => [e.empresa, fmtInt(e.servicos), fmtInt(e.frota), fmtInt(e.partidas), fmtKm(e.km)]);
       const empHeaders = ["Empresa", "Serviços", "Frota", "Partidas", "KM"];
@@ -658,12 +697,14 @@ const totals = useMemo(() => {
               r.groupLabel,
               ...(comDescricaoPdf ? [descricaoPorLinha.get(r.groupKey) ?? ""] : []),
               fmtInt(r.dir1), fmtInt(r.dir2), fmtInt(r.aprov), fmtInt(r.tu), fmtInt(r.totalServico), fmtInt(r.frota), fmtInt(r.partidas),
+              ...(comCustoTabela ? [fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)] : []),
             ]);
             const tot = grupo.rows.reduce((s, r) => ({
               dir1: s.dir1 + r.dir1, dir2: s.dir2 + r.dir2, aprov: s.aprov + r.aprov, tu: s.tu + r.tu,
               totalServico: s.totalServico + r.totalServico, frota: s.frota + r.frota, partidas: s.partidas + r.partidas,
-            }), { dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0 });
-            const groupFoot = ["TOTAL", ...(comDescricaoPdf ? [""] : []), fmtInt(tot.dir1), fmtInt(tot.dir2), fmtInt(tot.aprov), fmtInt(tot.tu), fmtInt(tot.totalServico), fmtInt(tot.frota), fmtInt(tot.partidas)];
+              custo: s.custo + (custoPorGroupKey.get(r.groupKey) ?? 0),
+            }), { dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0, custo: 0 });
+            const groupFoot = ["TOTAL", ...(comDescricaoPdf ? [""] : []), fmtInt(tot.dir1), fmtInt(tot.dir2), fmtInt(tot.aprov), fmtInt(tot.tu), fmtInt(tot.totalServico), fmtInt(tot.frota), fmtInt(tot.partidas), ...(comCustoTabela ? [fmtMoeda(tot.custo)] : [])];
             autoTable(d, {
               startY: y + 5 * zoom,
               head: [headersPdf],
@@ -849,7 +890,10 @@ const totals = useMemo(() => {
               </SelectContent>
             </Select>
           )}
-          <SalarioMotoristaButton />
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none px-2">
+            <Switch checked={mostrarCusto} onCheckedChange={setMostrarCusto} className="scale-90" />
+            Mostrar custo de mão de obra
+          </label>
           <Button variant="outline" size="sm" onClick={exportXLSX} disabled={!rows.length}>
             <FileSpreadsheet className="h-4 w-4 mr-1" /> Excel
           </Button>
@@ -891,6 +935,7 @@ const totals = useMemo(() => {
                 <td style={{ fontWeight: 600 }}>{fmtInt(r.frota)}</td>
                 <td>{fmtInt(r.partidas)}</td>
                 <td>{fmtKm(r.km)}</td>
+                {comCustoTabela && <td>{fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)}</td>}
               </tr>
             ))}
           </tbody>
@@ -1109,6 +1154,7 @@ const totals = useMemo(() => {
                       <TableCell className="px-2 py-1 text-right tabular-nums font-semibold">{r.frota}</TableCell>
                       <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(r.partidas)}</TableCell>
                       <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(r.km)}</TableCell>
+                      {comCustoTabela && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)}</TableCell>}
                     </TableRow>
                   ))}
                   <TableRow className="bg-muted/50 font-bold h-9">
@@ -1121,6 +1167,7 @@ const totals = useMemo(() => {
                     <TableCell className="px-2 py-1 text-right tabular-nums">{totals.frota}</TableCell>
                     <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(totals.partidas)}</TableCell>
                     <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(totals.km)}</TableCell>
+                    {comCustoTabela && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(Array.from(custoPorGroupKey.values()).reduce((s, v) => s + v, 0))}</TableCell>}
                   </TableRow>
                 </TableBody>
               </Table>

@@ -8,7 +8,8 @@ import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import { buildJornadas, jornadaTotais, fmtDur, LIMITE_DIR_MIN, LIMITE_TU_MIN, type JornadaServico } from "@/lib/jornada";
 import { buildEmpresaOverrideMap, resolveGrupoViagem, resolveEmpresaViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
 import { custoServico, fmtMoeda } from "@/lib/custo";
-import { useParametrosCusto, SalarioMotoristaButton } from "@/components/salario-motorista";
+import { useParametrosCusto } from "@/components/salario-motorista";
+import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -150,7 +151,8 @@ function JornadaPage() {
   useEffect(() => setPage(0), [applied, pageSize]);
 
   const { params: custoParams } = useParametrosCusto();
-  const comCustoTabela = !!custoParams && custoParams.salarioMotoristaMensal > 0;
+  const [mostrarCusto, setMostrarCusto] = usePersistentState("jornada.mostrarCusto", false);
+  const comCustoTabela = mostrarCusto && !!custoParams && custoParams.salarioMotoristaMensal > 0;
   const colSpanTabela = comCustoTabela ? 8 : 7;
 
   function resumoPorChave(chaveFn: (j: JornadaServico) => string) {
@@ -357,7 +359,10 @@ function JornadaPage() {
               <SelectItem value="unidade">Ordenar por Unidade</SelectItem>
             </SelectContent>
           </Select>
-          <SalarioMotoristaButton />
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none px-2">
+            <Switch checked={mostrarCusto} onCheckedChange={setMostrarCusto} className="scale-90" />
+            Mostrar custo de mão de obra
+          </label>
           <Button variant="outline" size="sm" onClick={exportXLSX} disabled={!jornadas.length}>
             <FileSpreadsheet className="h-4 w-4 mr-1" /> Excel
           </Button>
@@ -562,9 +567,9 @@ function JornadaPage() {
         </CardContent>
       </Card>
 
-      <ResumoJornadaTable titulo="Resumo Gerencial por Empresa" rows={resumoEmpresa} />
-      <ResumoJornadaTable titulo="Resumo Gerencial por Grupo" rows={resumoGrupo} />
-      <ResumoJornadaTable titulo="Resumo Gerencial por Unidade" rows={resumoUnidade} />
+      <ResumoJornadaTable titulo="Resumo Gerencial por Empresa" rows={resumoEmpresa} mostrarCusto={comCustoTabela} />
+      <ResumoJornadaTable titulo="Resumo Gerencial por Grupo" rows={resumoGrupo} mostrarCusto={comCustoTabela} />
+      <ResumoJornadaTable titulo="Resumo Gerencial por Unidade" rows={resumoUnidade} mostrarCusto={comCustoTabela} />
       </div>
 
       <Dialog open={!!modal} onOpenChange={(o) => !o && setModal(null)}>
@@ -615,9 +620,9 @@ function JornadaPage() {
 }
 
 type ResumoJornadaRow = { chave: string; jornadas: number; frota: number; minutosTotal: number; horasExtras: number; custo: number };
-function ResumoJornadaTable({ titulo, rows }: { titulo: string; rows: ResumoJornadaRow[] }) {
+function ResumoJornadaTable({ titulo, rows, mostrarCusto }: { titulo: string; rows: ResumoJornadaRow[]; mostrarCusto?: boolean }) {
   if (rows.length === 0) return null;
-  const comCusto = rows.some((r) => r.custo > 0);
+  const comCusto = !!mostrarCusto && rows.some((r) => r.custo > 0);
   const tot = rows.reduce((s, r) => ({ jornadas: s.jornadas + r.jornadas, frota: s.frota + r.frota, minutosTotal: s.minutosTotal + r.minutosTotal, horasExtras: s.horasExtras + r.horasExtras, custo: s.custo + r.custo }), { jornadas: 0, frota: 0, minutosTotal: 0, horasExtras: 0, custo: 0 });
   return (
     <Card className="shadow-[var(--shadow-card)]">

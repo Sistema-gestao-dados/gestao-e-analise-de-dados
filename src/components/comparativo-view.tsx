@@ -33,7 +33,7 @@ import { buildJornadas, fmtDur } from "@/lib/jornada";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
 import { custoServico, fmtMoeda } from "@/lib/custo";
-import { useSalarioMotorista, SalarioMotoristaButton } from "@/components/salario-motorista";
+import { useSalarioMotorista } from "@/components/salario-motorista";
 
 function parseHHMM(s: string | null): number | null {
   if (!s) return null;
@@ -425,6 +425,19 @@ export function ComparativoView() {
     return out;
   }, [basesAplicadas, linhaMap, empresaOverrideMap]);
 
+  // Custo por linha (Atual x Proposta) pra tabela principal — aqui sempre é
+  // por linha, então a chave é direto j.linha, sem precisar do mapeamento
+  // mais complexo usado nos resumos por Empresa/Grupo/Unidade.
+  const custoPorLinha = useMemo(() => {
+    const atual = new Map<string, number>();
+    const proposta = new Map<string, number>();
+    if (custoParams) {
+      for (const j of buildJornadas(basesAplicadas.atual, linhas)) atual.set(j.linha, (atual.get(j.linha) ?? 0) + custoServico(j, custoParams));
+      for (const j of buildJornadas(basesAplicadas.proposta, linhas)) proposta.set(j.linha, (proposta.get(j.linha) ?? 0) + custoServico(j, custoParams));
+    }
+    return { atual, proposta };
+  }, [basesAplicadas, linhas, custoParams]);
+
   const merged = useMemo(() => {
     const map = new Map<string, { linha: string; order: string; a: AggRow | null; p: AggRow | null }>();
     for (const r of atualRows) {
@@ -469,6 +482,7 @@ export function ComparativoView() {
   const shownMetrics = METRICS.filter((m) => visibleMetrics.has(m.key as string));
   const colsPerMetric = showPct ? 4 : 3;
   const totalCols = 1 + shownMetrics.length * colsPerMetric;
+  const mostrarCustoTabela = visibleMetrics.has("custo") && !!custoParams && custoParams.salarioMotoristaMensal > 0;
 
   function toggleMetric(k: string) {
     const next = new Set(visibleMetrics);
@@ -670,7 +684,6 @@ export function ComparativoView() {
             Consultar
           </Button>
           {applied && <Button variant="outline" size="sm" onClick={() => setApplied(null)}>Limpar</Button>}
-          <SalarioMotoristaButton />
           <Button variant="outline" size="sm" onClick={exportXLSX} disabled={!merged.length}>
             <FileSpreadsheet className="h-4 w-4 mr-1" /> Excel
           </Button>
@@ -744,6 +757,16 @@ export function ComparativoView() {
               {m.label}
             </label>
           ))}
+          {custoParams && custoParams.salarioMotoristaMensal > 0 && (
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <Checkbox
+                checked={visibleMetrics.has("custo")}
+                onCheckedChange={() => toggleMetric("custo")}
+                className="h-3.5 w-3.5"
+              />
+              Custo M.O.
+            </label>
+          )}
           <div className="ml-auto flex items-center gap-3">
             <label className="flex items-center gap-1.5 text-xs cursor-pointer">
               <Checkbox checked={showPct} onCheckedChange={(v) => setShowPct(!!v)} className="h-3.5 w-3.5" />
@@ -797,6 +820,9 @@ export function ComparativoView() {
                         {m.label}
                       </TableHead>
                     ))}
+                    {mostrarCustoTabela && (
+                      <TableHead colSpan={colsPerMetric} className="px-2 py-1 text-center border-l">Custo M.O.</TableHead>
+                    )}
                   </TableRow>
                   <TableRow className="h-7">
                     {shownMetrics.map((m) => (
@@ -809,6 +835,14 @@ export function ComparativoView() {
                         )}
                       </Fragment>
                     ))}
+                    {mostrarCustoTabela && (
+                      <Fragment>
+                        <TableHead className="px-2 py-1 text-right border-l text-[10px] uppercase tracking-wider text-blue-600">Atual</TableHead>
+                        <TableHead className="px-2 py-1 text-right text-[10px] uppercase tracking-wider text-emerald-600">Prop.</TableHead>
+                        <TableHead className="px-2 py-1 text-right text-[10px] uppercase tracking-wider">Δ</TableHead>
+                        {showPct && <TableHead className="px-2 py-1 text-right text-[10px] uppercase tracking-wider">Δ%</TableHead>}
+                      </Fragment>
+                    )}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -832,6 +866,21 @@ export function ComparativoView() {
                           </Fragment>
                         );
                       })}
+                      {mostrarCustoTabela && (() => {
+                        const av = custoPorLinha.atual.get(linha) ?? 0;
+                        const pv = custoPorLinha.proposta.get(linha) ?? 0;
+                        const d = pv - av;
+                        const pct = diffPct(av, pv);
+                        const dCls = d > 0 ? "text-emerald-600" : d < 0 ? "text-red-600" : "text-muted-foreground";
+                        return (
+                          <Fragment>
+                            <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtMoeda(av)}</TableCell>
+                            <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(pv)}</TableCell>
+                            <TableCell className={`px-2 py-1 text-right tabular-nums font-semibold ${dCls}`}>{d >= 0 ? "+" : ""}{fmtMoeda(d)}</TableCell>
+                            {showPct && <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{fmtPct(pct)}</TableCell>}
+                          </Fragment>
+                        );
+                      })()}
                     </TableRow>
                   ))}
                   <TableRow className="bg-muted/50 font-bold h-9">
@@ -853,6 +902,21 @@ export function ComparativoView() {
                         </Fragment>
                       );
                     })}
+                    {mostrarCustoTabela && (() => {
+                      const av = Array.from(custoPorLinha.atual.values()).reduce((s, v) => s + v, 0);
+                      const pv = Array.from(custoPorLinha.proposta.values()).reduce((s, v) => s + v, 0);
+                      const d = pv - av;
+                      const pct = diffPct(av, pv);
+                      const dCls = d > 0 ? "text-emerald-600" : d < 0 ? "text-red-600" : "";
+                      return (
+                        <Fragment>
+                          <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtMoeda(av)}</TableCell>
+                          <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(pv)}</TableCell>
+                          <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{d >= 0 ? "+" : ""}{fmtMoeda(d)}</TableCell>
+                          {showPct && <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{fmtPct(pct)}</TableCell>}
+                        </Fragment>
+                      );
+                    })()}
                   </TableRow>
                 </TableBody>
               </Table>

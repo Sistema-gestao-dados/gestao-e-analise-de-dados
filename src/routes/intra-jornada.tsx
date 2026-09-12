@@ -10,8 +10,9 @@ import {
 } from "@/lib/jornada";
 import { buildEmpresaOverrideMap, resolveGrupoViagem, resolveEmpresaViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
 import { custoServico, tuForaDaJanela, fmtMoeda } from "@/lib/custo";
-import { useParametrosCusto, SalarioMotoristaButton } from "@/components/salario-motorista";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useParametrosCusto } from "@/components/salario-motorista";
+import { Switch } from "@/components/ui/switch";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -58,6 +59,11 @@ function Kpi({ label, value, icon: Icon, tone = "primary" }: any) {
   );
 }
 
+function minToHHMM(min: number): string {
+  const m = ((Math.round(min) % 1440) + 1440) % 1440;
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+
 function IntraJornadaPage() {
   useAuditView("intra_jornada");
   const [fDia, setFDia] = usePersistentState("intra.fDia", "__all");
@@ -67,6 +73,7 @@ function IntraJornadaPage() {
   const [fGrupoOrdem, setFGrupoOrdem] = usePersistentState("intra.fGrupoOrdem", "__all");
   const [fClasse, setFClasse] = usePersistentState("intra.fClasse", "__all");
   const [fJanela, setFJanela] = usePersistentState<"__all" | "fora">("intra.fJanela", "__all");
+  const [mostrarCusto, setMostrarCusto] = usePersistentState("intra.mostrarCusto", false);
   const [pageSize, setPageSize] = usePersistentState("intra.pageSize", 50);
   const [page, setPage] = useState(0);
   const [somenteAtivos, setSomenteAtivos] = usePersistentState("intra.somenteAtivos", true);
@@ -240,11 +247,20 @@ function IntraJornadaPage() {
               <span className="text-xs text-muted-foreground ml-3">Janela do TU:</span>
               <Button size="sm" variant={fJanela === "__all" ? "default" : "outline"} onClick={() => setFJanela("__all")}>Todos</Button>
               <Button size="sm" variant={fJanela === "fora" ? "default" : "outline"} onClick={() => setFJanela("fora")}>Só fora da janela (04h–21h)</Button>
-              <div className="ml-auto"><SalarioMotoristaButton /></div>
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none ml-auto">
+                <Switch checked={mostrarCusto} onCheckedChange={setMostrarCusto} className="scale-90" />
+                Mostrar custo de mão de obra
+              </label>
             </CardContent>
           </Card>
 
+          {/* Bloco 1 de 2: DESCANSO — quanto tempo de folga real o motorista
+              teve entre o T1 e o T2 (mínimo exigido: 3h). */}
           <Card className="shadow-[var(--shadow-card)]">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold">Descanso entre Turnos (Intra-Jornada)</CardTitle>
+              <CardDescription className="text-xs">Tempo de folga real do motorista entre o fim do 1º turno e o início do 2º — mínimo exigido de 3h.</CardDescription>
+            </CardHeader>
             <CardContent className="p-0">
               {intrasFiltradas.length === 0 ? (
                 <div className="p-8 text-center text-sm text-muted-foreground">Nenhum serviço TU completo encontrado com esses filtros.</div>
@@ -260,8 +276,7 @@ function IntraJornadaPage() {
                         <TableHead>Início T2 (c/ antecipação)</TableHead>
                         <TableHead>Intervalo</TableHead>
                         <TableHead>Classificação</TableHead>
-                        <TableHead>Janela TU</TableHead>
-                        {custoParams && custoParams.salarioMotoristaMensal > 0 && <TableHead className="text-right">Custo M.O.</TableHead>}
+                        {mostrarCusto && custoParams && custoParams.salarioMotoristaMensal > 0 && <TableHead className="text-right">Custo M.O.</TableHead>}
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -281,14 +296,64 @@ function IntraJornadaPage() {
                             <TableCell>
                               <Badge className={`gap-1 ring-1 ${cfg.tone}`} variant="outline"><Icon className="h-3 w-3" />{cfg.label}</Badge>
                             </TableCell>
-                            <TableCell>
-                              {x.foraJanela
-                                ? <Badge variant="outline" className="gap-1 ring-1 bg-warning/10 text-warning ring-warning/20"><AlertTriangle className="h-3 w-3" />Fora</Badge>
-                                : <span className="text-xs text-muted-foreground">OK</span>}
-                            </TableCell>
-                            {custoParams && custoParams.salarioMotoristaMensal > 0 && (
+                            {mostrarCusto && custoParams && custoParams.salarioMotoristaMensal > 0 && (
                               <TableCell className="text-right tabular-nums">{fmtMoeda(x.custo)}</TableCell>
                             )}
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Bloco 2 de 2: PEGADA E LARGADA — horário real de início/fim do
+              regime de TU, comparado com a janela permitida (04h–21h). É
+              uma pergunta diferente da anterior: aqui o que importa é O
+              HORÁRIO em si, não o descanso no meio. */}
+          <Card className="shadow-[var(--shadow-card)]">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-semibold">Pegada e Largada (Janela do TU)</CardTitle>
+              <CardDescription className="text-xs">Horário em que o motorista pega e larga o carro — o TU não pode começar antes de {minToHHMM(custoParams?.tuInicioMinimoMin ?? 240)} nem terminar depois de {minToHHMM(custoParams?.tuFimMaximoMin ?? 1260)}.</CardDescription>
+            </CardHeader>
+            <CardContent className="p-0">
+              {intrasFiltradas.length === 0 ? (
+                <div className="p-8 text-center text-sm text-muted-foreground">Nenhum serviço TU completo encontrado com esses filtros.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Linha</TableHead>
+                        <TableHead>Serviço</TableHead>
+                        <TableHead>Versão</TableHead>
+                        <TableHead>Pegada (início)</TableHead>
+                        <TableHead>Largada (fim)</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {pagina.map((x) => {
+                        const t1 = x.jornada.turnos.find((t) => t.turno === "1")!;
+                        const t2 = x.jornada.turnos.find((t) => t.turno === "2")!;
+                        const inicioMin = Math.min(...x.jornada.turnos.map((t) => t.inicioMin));
+                        const fimMin = Math.max(...x.jornada.turnos.map((t) => t.fimMin));
+                        const inicioForaDaJanela = custoParams ? inicioMin < custoParams.tuInicioMinimoMin : false;
+                        const fimForaDaJanela = custoParams ? fimMin > custoParams.tuFimMaximoMin : false;
+                        return (
+                          <TableRow key={x.jornada.vehicleKey}>
+                            <TableCell className="font-medium">{x.jornada.linha}</TableCell>
+                            <TableCell>{x.jornada.servico}</TableCell>
+                            <TableCell>{x.jornada.versao}</TableCell>
+                            <TableCell className={`tabular-nums font-medium ${inicioForaDaJanela ? "text-warning" : ""}`}>{minToHHMM(inicioMin)}</TableCell>
+                            <TableCell className={`tabular-nums font-medium ${fimForaDaJanela ? "text-warning" : ""}`}>{minToHHMM(fimMin)}</TableCell>
+                            <TableCell>
+                              {x.foraJanela
+                                ? <Badge variant="outline" className="gap-1 ring-1 bg-warning/10 text-warning ring-warning/20"><AlertTriangle className="h-3 w-3" />Fora da janela</Badge>
+                                : <Badge variant="outline" className="gap-1 ring-1 bg-success/10 text-success ring-success/20"><CheckCircle2 className="h-3 w-3" />Dentro da janela</Badge>}
+                            </TableCell>
                           </TableRow>
                         );
                       })}
@@ -316,9 +381,9 @@ function IntraJornadaPage() {
             </CardContent>
           </Card>
 
-          <ResumoIntraTable titulo="Resumo Gerencial por Empresa" rows={resumoEmpresa} />
-          <ResumoIntraTable titulo="Resumo Gerencial por Grupo" rows={resumoGrupo} />
-          <ResumoIntraTable titulo="Resumo Gerencial por Unidade" rows={resumoUnidade} />
+          <ResumoIntraTable titulo="Resumo Gerencial por Empresa" rows={resumoEmpresa} mostrarCusto={mostrarCusto} />
+          <ResumoIntraTable titulo="Resumo Gerencial por Grupo" rows={resumoGrupo} mostrarCusto={mostrarCusto} />
+          <ResumoIntraTable titulo="Resumo Gerencial por Unidade" rows={resumoUnidade} mostrarCusto={mostrarCusto} />
         </>
       )}
     </div>
@@ -341,9 +406,9 @@ function FiltroSelect({ label, value, onChange, options }: { label: string; valu
 }
 
 type ResumoIntraRow = { chave: string; total: number; critico: number; foraRegra: number; ok: number; foraJanela: number; custo: number };
-function ResumoIntraTable({ titulo, rows }: { titulo: string; rows: ResumoIntraRow[] }) {
+function ResumoIntraTable({ titulo, rows, mostrarCusto }: { titulo: string; rows: ResumoIntraRow[]; mostrarCusto?: boolean }) {
   if (rows.length === 0) return null;
-  const comCusto = rows.some((r) => r.custo > 0);
+  const comCusto = !!mostrarCusto && rows.some((r) => r.custo > 0);
   const tot = rows.reduce((s, r) => ({ total: s.total + r.total, critico: s.critico + r.critico, foraRegra: s.foraRegra + r.foraRegra, ok: s.ok + r.ok, foraJanela: s.foraJanela + r.foraJanela, custo: s.custo + r.custo }), { total: 0, critico: 0, foraRegra: 0, ok: 0, foraJanela: 0, custo: 0 });
   return (
     <Card className="shadow-[var(--shadow-card)]">

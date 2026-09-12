@@ -17,7 +17,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Bus, Route as RouteIcon, Building2, Activity, Download, RefreshCw, Layers, MapPinned, Truck, AlertTriangle as AlertTriangleIcon, DollarSign } from "lucide-react";
 import { custoServico, fmtMoeda } from "@/lib/custo";
-import { useSalarioMotorista, SalarioMotoristaButton } from "@/components/salario-motorista";
+import { useSalarioMotorista } from "@/components/salario-motorista";
 import { MultiSelect } from "@/components/multi-select";
 import {
   BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, PieChart, Pie, Cell, Legend, CartesianGrid, LabelList,
@@ -665,7 +665,6 @@ function DashOperacional() {
           <Button variant="outline" size="sm" onClick={refresh} disabled={isLoading}>
             <RefreshCw className={`h-4 w-4 mr-1.5 ${isLoading ? "animate-spin" : ""}`} /> Atualizar
           </Button>
-          <SalarioMotoristaButton />
           <Badge variant="secondary" className="gap-1.5 h-9 px-3">
             <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse" /> {viagens.length.toLocaleString("pt-BR")} registros
           </Badge>
