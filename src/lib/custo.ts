@@ -115,16 +115,24 @@ export function minutosNoturnos(inicioMin: number, fimMin: number, p: Parametros
 /** Custo de mão de obra de UM serviço (JornadaServico). Encargos incidem
  * só no salário das horas normais — hora extra, noturno e hora refeição
  * entram como valores à parte, sem encargos (confirmado batendo com o
- * InputBus em 14/09/2026). */
+ * InputBus em 14/09/2026).
+ *
+ * IMPORTANTE: horas normais são LIMITADAS no teto do tipo de serviço (7h
+ * DIR / 8h24 TU) — o que passa do teto NÃO entra no cálculo do salário
+ * normal, só na hora extra. Antes disso estava contando a hora extra
+ * duas vezes (uma dentro do "salário" inteiro sem limite, outra como
+ * bônus) — corrigido depois de comparar com o InputBus e ver que a hora
+ * extra deveria ser paga na taxa CHEIA de 150%, não um adicional de 50%
+ * em cima de uma hora que já tinha sido contada no salário normal. */
 export function custoServico(j: JornadaServico, p: ParametrosCusto): number {
   const vh = valorHora(p);
   if (vh <= 0 && p.valorHoraRefeicao <= 0) return 0;
-  const horasTotais = j.minutosTotal / 60;
+  const horasNormais = Math.min(j.minutosTotal, j.limiteMin) / 60;
   const horasExtra = Math.max(0, j.minutosTotal - j.limiteMin) / 60;
   const minNoturnos = j.turnos.reduce((s, t) => s + minutosNoturnos(t.inicioMin, t.fimMin, p), 0);
   const horasNoturnas = minNoturnos / 60;
-  const salarioComEncargos = vh * horasTotais * (1 + p.encargosPercentual / 100);
-  const valorHoraExtra = vh * horasExtra * (p.horaExtraPercentual / 100);
+  const salarioComEncargos = vh * horasNormais * (1 + p.encargosPercentual / 100);
+  const valorHoraExtra = vh * horasExtra * (1 + p.horaExtraPercentual / 100);
   const valorNoturno = vh * horasNoturnas * (p.adicionalNoturnoPercentual / 100);
   return salarioComEncargos + valorHoraExtra + valorNoturno + p.valorHoraRefeicao;
 }
