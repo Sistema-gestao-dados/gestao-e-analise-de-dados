@@ -409,6 +409,7 @@ export type Database = {
           adicional_noturno_percentual: number
           hora_extra_percentual: number
           horas_mensais_referencia: number
+          valor_hora_refeicao: number
           noturno_inicio_min: number
           noturno_fim_min: number
           tu_inicio_minimo_min: number
@@ -422,6 +423,7 @@ export type Database = {
           adicional_noturno_percentual?: number
           hora_extra_percentual?: number
           horas_mensais_referencia?: number
+          valor_hora_refeicao?: number
           noturno_inicio_min?: number
           noturno_fim_min?: number
           tu_inicio_minimo_min?: number
@@ -435,6 +437,7 @@ export type Database = {
           adicional_noturno_percentual?: number
           hora_extra_percentual?: number
           horas_mensais_referencia?: number
+          valor_hora_refeicao?: number
           noturno_inicio_min?: number
           noturno_fim_min?: number
           tu_inicio_minimo_min?: number

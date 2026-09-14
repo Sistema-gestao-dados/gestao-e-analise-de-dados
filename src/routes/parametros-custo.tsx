@@ -92,6 +92,10 @@ function ParametrosCustoPage() {
             <Label>Encargos sociais (%)</Label>
             <Input type="number" step="0.01" value={form.encargosPercentual} onChange={(e) => setForm({ ...form, encargosPercentual: Number(e.target.value) })} />
           </div>
+          <div>
+            <Label>Hora refeição (R$/serviço/dia)</Label>
+            <Input type="number" step="0.01" value={form.valorHoraRefeicao} onChange={(e) => setForm({ ...form, valorHoraRefeicao: Number(e.target.value) })} />
+          </div>
         </CardContent>
       </Card>
 

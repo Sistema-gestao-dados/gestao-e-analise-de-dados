@@ -1,16 +1,24 @@
 // Custo de mão de obra por serviço, seguindo o acordo coletivo do
-// motorista (confirmado com o usuário em 11/09/2026):
+// motorista (confirmado com o usuário em 11-14/09/2026):
 //
 //   valor_hora = salário mensal ÷ horas mensais de referência (210h)
 //
 //   Por serviço:
-//     - horas normais = até o limite do tipo (7h DIR / 8h24 TU)
-//     - horas extras   = o que passar do limite  → +50%
+//     - horas normais = todas as horas trabalhadas (minutosTotal)
+//     - horas extras   = o que passar do limite do tipo (7h DIR / 8h24 TU) → +50%
 //     - horas noturnas = minutos do turno dentro de 22h-5h → +20%
-//     (os dois adicionais SOMAM quando coincidem, não se substituem)
+//     - hora refeição  = valor FIXO por serviço/dia (não por hora
+//       trabalhada, apesar do nome) — vale pra DIR e TU igual
 //
-//   custo = valor_hora × [horas totais + horas_extra×%he + horas_noturnas×%noturno]
-//           × (1 + %encargos)
+//   IMPORTANTE (corrigido em 14/09/2026, confirmado batendo com o
+//   InputBus): os encargos sociais incidem SÓ no salário das horas
+//   normais — NÃO incidem sobre hora extra, noturno nem hora refeição,
+//   que entram como valores "crus", somados por fora:
+//
+//   custo = valor_hora × horas_totais × (1 + %encargos)
+//         + valor_hora × horas_extra × %he
+//         + valor_hora × horas_noturnas × %noturno
+//         + valor_hora_refeicao
 //
 // TU só pode começar não antes de 04:00 e terminar não depois de 21:00
 // (parâmetro configurável, usado no alerta da tela Intra Jornada).
@@ -24,6 +32,7 @@ export type ParametrosCusto = {
   adicionalNoturnoPercentual: number;
   horaExtraPercentual: number;
   horasMensaisReferencia: number;
+  valorHoraRefeicao: number;
   noturnoInicioMin: number; // minutos desde 00:00 (ex.: 22:00 = 1320)
   noturnoFimMin: number;    // minutos desde 00:00 (ex.: 05:00 = 300)
   tuInicioMinimoMin: number; // 04:00 = 240
@@ -36,6 +45,7 @@ const PADRAO: ParametrosCusto = {
   adicionalNoturnoPercentual: 20,
   horaExtraPercentual: 50,
   horasMensaisReferencia: 210,
+  valorHoraRefeicao: 0,
   noturnoInicioMin: 22 * 60,
   noturnoFimMin: 5 * 60,
   tuInicioMinimoMin: 4 * 60,
@@ -52,6 +62,7 @@ export async function fetchParametrosCusto(): Promise<ParametrosCusto> {
     adicionalNoturnoPercentual: Number(data.adicional_noturno_percentual ?? PADRAO.adicionalNoturnoPercentual),
     horaExtraPercentual: Number(data.hora_extra_percentual ?? PADRAO.horaExtraPercentual),
     horasMensaisReferencia: Number(data.horas_mensais_referencia ?? PADRAO.horasMensaisReferencia),
+    valorHoraRefeicao: Number(data.valor_hora_refeicao ?? PADRAO.valorHoraRefeicao),
     noturnoInicioMin: Number(data.noturno_inicio_min ?? PADRAO.noturnoInicioMin),
     noturnoFimMin: Number(data.noturno_fim_min ?? PADRAO.noturnoFimMin),
     tuInicioMinimoMin: Number(data.tu_inicio_minimo_min ?? PADRAO.tuInicioMinimoMin),
@@ -60,17 +71,23 @@ export async function fetchParametrosCusto(): Promise<ParametrosCusto> {
 }
 
 export async function salvarParametrosCusto(p: ParametrosCusto): Promise<void> {
-  const { error } = await supabase.from("parametros_custo").update({
+  // upsert em vez de update: garante que a linha id=1 sempre existe depois
+  // de salvar, mesmo que por algum motivo ela não existisse antes (um
+  // UPDATE simples, nesse caso, "funcionaria" sem erro mas não salvaria
+  // nada — foi exatamente o bug do salário voltando a zero em outro local).
+  const { error } = await supabase.from("parametros_custo").upsert({
+    id: 1,
     salario_motorista_mensal: p.salarioMotoristaMensal,
     encargos_percentual: p.encargosPercentual,
     adicional_noturno_percentual: p.adicionalNoturnoPercentual,
     hora_extra_percentual: p.horaExtraPercentual,
     horas_mensais_referencia: p.horasMensaisReferencia,
+    valor_hora_refeicao: p.valorHoraRefeicao,
     noturno_inicio_min: p.noturnoInicioMin,
     noturno_fim_min: p.noturnoFimMin,
     tu_inicio_minimo_min: p.tuInicioMinimoMin,
     tu_fim_maximo_min: p.tuFimMaximoMin,
-  }).eq("id", 1);
+  });
   if (error) throw error;
 }
 
@@ -95,17 +112,21 @@ export function minutosNoturnos(inicioMin: number, fimMin: number, p: Parametros
   return total;
 }
 
-/** Custo de mão de obra de UM serviço (JornadaServico), já com hora extra,
- * adicional noturno e encargos aplicados. */
+/** Custo de mão de obra de UM serviço (JornadaServico). Encargos incidem
+ * só no salário das horas normais — hora extra, noturno e hora refeição
+ * entram como valores à parte, sem encargos (confirmado batendo com o
+ * InputBus em 14/09/2026). */
 export function custoServico(j: JornadaServico, p: ParametrosCusto): number {
   const vh = valorHora(p);
-  if (vh <= 0) return 0;
+  if (vh <= 0 && p.valorHoraRefeicao <= 0) return 0;
   const horasTotais = j.minutosTotal / 60;
   const horasExtra = Math.max(0, j.minutosTotal - j.limiteMin) / 60;
   const minNoturnos = j.turnos.reduce((s, t) => s + minutosNoturnos(t.inicioMin, t.fimMin, p), 0);
   const horasNoturnas = minNoturnos / 60;
-  const base = horasTotais + horasExtra * (p.horaExtraPercentual / 100) + horasNoturnas * (p.adicionalNoturnoPercentual / 100);
-  return vh * base * (1 + p.encargosPercentual / 100);
+  const salarioComEncargos = vh * horasTotais * (1 + p.encargosPercentual / 100);
+  const valorHoraExtra = vh * horasExtra * (p.horaExtraPercentual / 100);
+  const valorNoturno = vh * horasNoturnas * (p.adicionalNoturnoPercentual / 100);
+  return salarioComEncargos + valorHoraExtra + valorNoturno + p.valorHoraRefeicao;
 }
 
 /** Verifica se o serviço TU respeita a janela permitida (ex.: não começar
