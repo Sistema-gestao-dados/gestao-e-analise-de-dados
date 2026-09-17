@@ -293,32 +293,53 @@ export function ComparativoView() {
   const visibleMetrics = useMemo(() => new Set(visibleMetricsArr), [visibleMetricsArr]);
   const [showPct, setShowPct] = usePersistentState("comparativo.showPct", true);
   const [onlyDiff, setOnlyDiff] = usePersistentState("comparativo.onlyDiff", false);
+  const [repetirSeVazio, setRepetirSeVazio] = usePersistentState("comparativo.repetirSeVazio", false);
   const { params: custoParams } = useSalarioMotorista();
+
+  // Linhas que existem na Proposta 1 (Atual) mas não têm NENHUM dado na
+  // Proposta 2 — nesse caso, se o flag estiver ligado, a linha roda com a
+  // programação normal (Atual) nesse dia também, então preenchemos com os
+  // dados de Atual pra não subestimar o total real da Proposta 2.
+  const atualFiltradoBase = useMemo(() => {
+    if (!applied) return [] as ViagemLite[];
+    return applyFilters(baseFor(applied.a), applied.a, linhaMap, grupoMap, empresaOverrideMap);
+  }, [baseFor, applied, linhaMap, grupoMap, empresaOverrideMap]);
+
+  const propostaFiltradoBase = useMemo(() => {
+    if (!applied) return [] as ViagemLite[];
+    return applyFilters(baseFor(applied.p), applied.p, linhaMap, grupoMap, empresaOverrideMap);
+  }, [baseFor, applied, linhaMap, grupoMap, empresaOverrideMap]);
+
+  const { propostaPreenchida, linhasRepetidas } = useMemo(() => {
+    if (!repetirSeVazio) return { propostaPreenchida: propostaFiltradoBase, linhasRepetidas: new Set<string>() };
+    const linhasNaProposta = new Set(propostaFiltradoBase.map((v) => v.linha));
+    const faltando = atualFiltradoBase.filter((v) => !linhasNaProposta.has(v.linha));
+    const linhas = new Set(faltando.map((v) => v.linha));
+    return { propostaPreenchida: [...propostaFiltradoBase, ...faltando], linhasRepetidas: linhas };
+  }, [repetirSeVazio, atualFiltradoBase, propostaFiltradoBase]);
 
   const atualRows = useMemo(() => {
     if (!applied) return [] as AggRow[];
-    const base = baseFor(applied.a);
-    const f = applyFilters(base, applied.a, linhaMap, grupoMap, empresaOverrideMap);
-    const fOrigem = applyFiltersSemLinha(base, applied.a, linhaMap, grupoMap, empresaOverrideMap);
+    const f = atualFiltradoBase;
+    const fOrigem = applyFiltersSemLinha(baseFor(applied.a), applied.a, linhaMap, grupoMap, empresaOverrideMap);
     return withHE(aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio), f, linhas);
-  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap]);
+  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap, atualFiltradoBase]);
 
   const propostaRows = useMemo(() => {
     if (!applied) return [] as AggRow[];
-    const base = baseFor(applied.p);
-    const f = applyFilters(base, applied.p, linhaMap, grupoMap, empresaOverrideMap);
-    const fOrigem = applyFiltersSemLinha(base, applied.p, linhaMap, grupoMap, empresaOverrideMap);
+    const f = propostaPreenchida;
+    const fOrigem = applyFiltersSemLinha(baseFor(applied.p), applied.p, linhaMap, grupoMap, empresaOverrideMap);
     return withHE(aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio), f, linhas);
-  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap]);
+  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap, propostaPreenchida]);
 
 
   const basesAplicadas = useMemo(() => {
     if (!applied) return { atual: [] as ViagemLite[], proposta: [] as ViagemLite[] };
     return {
-      atual: applyFilters(baseFor(applied.a), applied.a, linhaMap, grupoMap, empresaOverrideMap),
-      proposta: applyFilters(baseFor(applied.p), applied.p, linhaMap, grupoMap, empresaOverrideMap),
+      atual: atualFiltradoBase,
+      proposta: propostaPreenchida,
     };
-  }, [baseFor, applied, linhaMap, grupoMap, empresaOverrideMap]);
+  }, [applied, atualFiltradoBase, propostaPreenchida]);
 
 
   const totalFrotaUnica = useMemo(() => ({
@@ -776,6 +797,10 @@ export function ComparativoView() {
               <Checkbox checked={onlyDiff} onCheckedChange={(v) => setOnlyDiff(!!v)} className="h-3.5 w-3.5" />
               Somente com diferença
             </label>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <Checkbox checked={repetirSeVazio} onCheckedChange={(v) => setRepetirSeVazio(!!v)} className="h-3.5 w-3.5" />
+              Repetir Proposta 1 nas linhas sem dado na Proposta 2
+            </label>
           </div>
         </CardContent>
       </Card>
@@ -848,7 +873,12 @@ export function ComparativoView() {
                 <TableBody>
                   {merged.map(({ linha, a, p }) => (
                     <TableRow key={linha} className="h-8">
-                      <TableCell className="px-2 py-1 font-medium">{linha}</TableCell>
+                      <TableCell className="px-2 py-1 font-medium">
+                        {linha}
+                        {linhasRepetidas.has(linha) && (
+                          <Badge variant="outline" className="ml-1.5 text-[9px] px-1 py-0 h-4 align-middle bg-amber-500/10 text-amber-700 border-amber-500/30">repetido</Badge>
+                        )}
+                      </TableCell>
                       {shownMetrics.map((m) => {
                         const av = (a?.[m.key] as number) ?? 0;
                         const pv = (p?.[m.key] as number) ?? 0;
