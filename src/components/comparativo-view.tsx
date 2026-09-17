@@ -293,13 +293,9 @@ export function ComparativoView() {
   const visibleMetrics = useMemo(() => new Set(visibleMetricsArr), [visibleMetricsArr]);
   const [showPct, setShowPct] = usePersistentState("comparativo.showPct", true);
   const [onlyDiff, setOnlyDiff] = usePersistentState("comparativo.onlyDiff", false);
-  const [repetirSeVazio, setRepetirSeVazio] = usePersistentState("comparativo.repetirSeVazio", false);
+  const [linhasParaRepetir, setLinhasParaRepetir] = usePersistentState<string[]>("comparativo.linhasParaRepetir", []);
   const { params: custoParams } = useSalarioMotorista();
 
-  // Linhas que existem na Proposta 1 (Atual) mas não têm NENHUM dado na
-  // Proposta 2 — nesse caso, se o flag estiver ligado, a linha roda com a
-  // programação normal (Atual) nesse dia também, então preenchemos com os
-  // dados de Atual pra não subestimar o total real da Proposta 2.
   const atualFiltradoBase = useMemo(() => {
     if (!applied) return [] as ViagemLite[];
     return applyFilters(baseFor(applied.a), applied.a, linhaMap, grupoMap, empresaOverrideMap);
@@ -310,13 +306,40 @@ export function ComparativoView() {
     return applyFilters(baseFor(applied.p), applied.p, linhaMap, grupoMap, empresaOverrideMap);
   }, [baseFor, applied, linhaMap, grupoMap, empresaOverrideMap]);
 
-  const { propostaPreenchida, linhasRepetidas } = useMemo(() => {
-    if (!repetirSeVazio) return { propostaPreenchida: propostaFiltradoBase, linhasRepetidas: new Set<string>() };
+  // Linhas que existem na Proposta 1 (Atual) mas não têm NENHUM dado na
+  // Proposta 2 — não dá pra saber sozinho se é porque "esqueceram de
+  // importar" (deveria repetir a programação normal) ou porque a linha
+  // foi ZERADA de propósito (ex.: 37A não roda no feriado, mesmo a 37
+  // rodando) — por isso a escolha é manual, linha por linha, não um
+  // "tudo ou nada".
+  const linhasFaltandoNaProposta = useMemo(() => {
+    if (!applied) return [] as string[];
     const linhasNaProposta = new Set(propostaFiltradoBase.map((v) => v.linha));
-    const faltando = atualFiltradoBase.filter((v) => !linhasNaProposta.has(v.linha));
-    const linhas = new Set(faltando.map((v) => v.linha));
-    return { propostaPreenchida: [...propostaFiltradoBase, ...faltando], linhasRepetidas: linhas };
-  }, [repetirSeVazio, atualFiltradoBase, propostaFiltradoBase]);
+    const faltando = new Set<string>();
+    for (const v of atualFiltradoBase) if (!linhasNaProposta.has(v.linha)) faltando.add(v.linha);
+    return Array.from(faltando).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true }));
+  }, [applied, atualFiltradoBase, propostaFiltradoBase]);
+
+  const linhasRepetidas = useMemo(
+    () => new Set(linhasParaRepetir.filter((l) => linhasFaltandoNaProposta.includes(l))),
+    [linhasParaRepetir, linhasFaltandoNaProposta],
+  );
+
+  function toggleLinhaRepetir(linha: string) {
+    setLinhasParaRepetir((prev) => (prev.includes(linha) ? prev.filter((l) => l !== linha) : [...prev, linha]));
+  }
+
+  // Usado nos resumos por Empresa/Grupo/Unidade e no custo — esses somam
+  // várias linhas juntas, então preenchemos com as viagens de verdade do
+  // Atual pras linhas escolhidas. A tabela principal (por linha) NÃO usa
+  // isso — pra evitar misturar viagens de linhas diferentes no mesmo
+  // cálculo de frota/serviço (o que causava frota errada), ela copia a
+  // linha inteira do Atual diretamente, mais abaixo.
+  const propostaPreenchida = useMemo(() => {
+    if (!linhasRepetidas.size) return propostaFiltradoBase;
+    const extra = atualFiltradoBase.filter((v) => linhasRepetidas.has(v.linha));
+    return [...propostaFiltradoBase, ...extra];
+  }, [propostaFiltradoBase, atualFiltradoBase, linhasRepetidas]);
 
   const atualRows = useMemo(() => {
     if (!applied) return [] as AggRow[];
@@ -327,10 +350,10 @@ export function ComparativoView() {
 
   const propostaRows = useMemo(() => {
     if (!applied) return [] as AggRow[];
-    const f = propostaPreenchida;
+    const f = propostaFiltradoBase;
     const fOrigem = applyFiltersSemLinha(baseFor(applied.p), applied.p, linhaMap, grupoMap, empresaOverrideMap);
     return withHE(aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio), f, linhas);
-  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap, propostaPreenchida]);
+  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap, propostaFiltradoBase]);
 
 
   const basesAplicadas = useMemo(() => {
@@ -469,6 +492,14 @@ export function ComparativoView() {
       if (cur) cur.p = r;
       else map.set(r.groupKey, { linha: r.groupLabel, order: r.groupOrder, a: null, p: r });
     }
+    // Linha marcada pra "repetir": copia a linha inteira do Atual pra
+    // Proposta (em vez de recalcular misturando viagens de linhas
+    // diferentes, o que já causou frota errada antes) — os dois lados
+    // ficam com os MESMOS números, ponto a ponto.
+    for (const chave of linhasRepetidas) {
+      const cur = map.get(chave);
+      if (cur && cur.a) cur.p = cur.a;
+    }
     let arr = Array.from(map.values()).sort((a, b) => {
       if (ordenarPor === "unidade") {
         const ua = unidadePorLinha.get(a.linha) ?? "";
@@ -484,21 +515,21 @@ export function ComparativoView() {
       );
     }
     return arr;
-  }, [atualRows, propostaRows, onlyDiff, ordenarPor, unidadePorLinha]);
+  }, [atualRows, propostaRows, onlyDiff, ordenarPor, unidadePorLinha, linhasRepetidas]);
 
   const totals = useMemo(() => {
     const base = { a: {} as Record<string, number>, p: {} as Record<string, number> };
     for (const m of METRICS) { base.a[m.key as string] = 0; base.p[m.key as string] = 0; }
-    for (const r of atualRows) {
-      for (const m of METRICS) base.a[m.key as string] += (r[m.key] as number) ?? 0;
-    }
-    for (const r of propostaRows) {
-      for (const m of METRICS) base.p[m.key as string] += (r[m.key] as number) ?? 0;
+    for (const { a, p } of merged) {
+      for (const m of METRICS) {
+        base.a[m.key as string] += (a?.[m.key] as number) ?? 0;
+        base.p[m.key as string] += (p?.[m.key] as number) ?? 0;
+      }
     }
     base.a.frota = totalFrotaUnica.a;
     base.p.frota = totalFrotaUnica.p;
     return base;
-  }, [atualRows, propostaRows, totalFrotaUnica]);
+  }, [merged, totalFrotaUnica]);
 
   const shownMetrics = METRICS.filter((m) => visibleMetrics.has(m.key as string));
   const colsPerMetric = showPct ? 4 : 3;
@@ -797,13 +828,32 @@ export function ComparativoView() {
               <Checkbox checked={onlyDiff} onCheckedChange={(v) => setOnlyDiff(!!v)} className="h-3.5 w-3.5" />
               Somente com diferença
             </label>
-            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
-              <Checkbox checked={repetirSeVazio} onCheckedChange={(v) => setRepetirSeVazio(!!v)} className="h-3.5 w-3.5" />
-              Repetir Proposta 1 nas linhas sem dado na Proposta 2
-            </label>
           </div>
         </CardContent>
       </Card>
+
+      {applied && linhasFaltandoNaProposta.length > 0 && (
+        <Card className="shadow-[var(--shadow-card)] border-amber-500/30">
+          <CardContent className="p-3">
+            <p className="text-xs font-semibold text-amber-700 mb-1">
+              {linhasFaltandoNaProposta.length} linha(s) sem nenhum dado na Proposta 2
+            </p>
+            <p className="text-[11px] text-muted-foreground mb-2">
+              Marque só as que devem <strong>repetir a programação normal (Proposta 1)</strong> — ex.: quando ninguém criou
+              uma programação especial pra ela e ela roda igual ao dia normal. Deixe desmarcada quem foi
+              <strong> zerada de propósito</strong> (ex.: uma linha-filha que não circula no feriado).
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {linhasFaltandoNaProposta.map((l) => (
+                <label key={l} className="flex items-center gap-1.5 text-xs cursor-pointer border rounded-md px-2 py-1 bg-muted/30">
+                  <Checkbox checked={linhasRepetidas.has(l)} onCheckedChange={() => toggleLinhaRepetir(l)} className="h-3.5 w-3.5" />
+                  {l}
+                </label>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {applied && (kmSemCadastro.atual > 0 || kmSemCadastro.proposta > 0) && (
         <div className="w-full rounded-md border border-warning/40 bg-warning/10 px-3 py-2 flex items-start gap-2">
