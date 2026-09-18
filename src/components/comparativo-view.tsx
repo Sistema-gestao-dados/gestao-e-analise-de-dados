@@ -8,6 +8,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
+import { fetchDiaTipoHeranca } from "@/components/dia-tipo-mapper";
 import { fetchLinhas, fetchKm, fetchMulti, fetchEmpresaEstacao, type Linha, type ParametroMulti } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import {
@@ -293,8 +294,10 @@ export function ComparativoView() {
   const visibleMetrics = useMemo(() => new Set(visibleMetricsArr), [visibleMetricsArr]);
   const [showPct, setShowPct] = usePersistentState("comparativo.showPct", true);
   const [onlyDiff, setOnlyDiff] = usePersistentState("comparativo.onlyDiff", false);
-  const [linhasParaRepetir, setLinhasParaRepetir] = usePersistentState<string[]>("comparativo.linhasParaRepetir", []);
+  const [repetirSeVazio, setRepetirSeVazio] = usePersistentState("comparativo.repetirSeVazio", false);
   const { params: custoParams } = useSalarioMotorista();
+  const herancaQ = useQuery({ queryKey: ["dia-tipo-heranca"], queryFn: fetchDiaTipoHeranca });
+  const diaTipoHeranca = herancaQ.data ?? new Map<string, string>();
 
   const atualFiltradoBase = useMemo(() => {
     if (!applied) return [] as ViagemLite[];
@@ -306,40 +309,64 @@ export function ComparativoView() {
     return applyFilters(baseFor(applied.p), applied.p, linhaMap, grupoMap, empresaOverrideMap);
   }, [baseFor, applied, linhaMap, grupoMap, empresaOverrideMap]);
 
-  // Linhas que existem na Proposta 1 (Atual) mas não têm NENHUM dado na
-  // Proposta 2 — não dá pra saber sozinho se é porque "esqueceram de
-  // importar" (deveria repetir a programação normal) ou porque a linha
-  // foi ZERADA de propósito (ex.: 37A não roda no feriado, mesmo a 37
-  // rodando) — por isso a escolha é manual, linha por linha, não um
-  // "tudo ou nada".
-  const linhasFaltandoNaProposta = useMemo(() => {
-    if (!applied) return [] as string[];
-    const linhasNaProposta = new Set(propostaFiltradoBase.map((v) => v.linha));
-    const faltando = new Set<string>();
-    for (const v of atualFiltradoBase) if (!linhasNaProposta.has(v.linha)) faltando.add(v.linha);
-    return Array.from(faltando).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true }));
-  }, [applied, atualFiltradoBase, propostaFiltradoBase]);
+  // Dia tipo "pai" que a Proposta 2 herdou na importação (ex.: "Feriado SG
+  // 22-09-26" → "Dias úteis") — é isso que decide de onde vem o que for
+  // repetido, não o que está selecionado em "Atual" nesse comparativo
+  // (podem ser coisas diferentes).
+  const paiDaProposta = applied && applied.p.dia !== "__all" ? diaTipoHeranca.get(applied.p.dia) : undefined;
 
-  const linhasRepetidas = useMemo(
-    () => new Set(linhasParaRepetir.filter((l) => linhasFaltandoNaProposta.includes(l))),
-    [linhasParaRepetir, linhasFaltandoNaProposta],
-  );
+  // Viagens do dia "pai", respeitando os OUTROS filtros da Proposta 2
+  // (empresa, unidade, grupo, linha, etc.) — só troca o dia.
+  const paiFiltroSet = useMemo(() => {
+    if (!applied || !paiDaProposta) return null;
+    return { ...applied.p, dia: paiDaProposta };
+  }, [applied, paiDaProposta]);
 
-  function toggleLinhaRepetir(linha: string) {
-    setLinhasParaRepetir((prev) => (prev.includes(linha) ? prev.filter((l) => l !== linha) : [...prev, linha]));
+  const paiViagens = useMemo(() => {
+    if (!paiFiltroSet) return [] as ViagemLite[];
+    return applyFilters(baseFor(paiFiltroSet), paiFiltroSet, linhaMap, grupoMap, empresaOverrideMap);
+  }, [baseFor, paiFiltroSet, linhaMap, grupoMap, empresaOverrideMap]);
+
+  function grupoDaLinha(linha: string, tipoDia: string): string {
+    return grupoMap.get(`${linha}|${tipoDia}`.toLowerCase()) ?? `__sem_grupo__${linha}`;
   }
+
+  // Decide, por GRUPO DE LINHA (não linha isolada): se o grupo inteiro não
+  // teve NENHUMA viagem na Proposta 2 (Feriado), assume que ninguém criou
+  // programação especial pra ele e repete o pai inteiro. Se o grupo TEVE
+  // alguma viagem na Proposta 2 (mesmo que só em 1 das linhas dele), quem
+  // ficou sem dado nesse grupo foi ZERADO DE PROPÓSITO — não repete.
+  const { linhasRepetidas, gruposRepetidos } = useMemo(() => {
+    if (!repetirSeVazio || !paiFiltroSet || !applied) return { linhasRepetidas: new Set<string>(), gruposRepetidos: new Set<string>() };
+    const gruposComDadoNoFilho = new Set<string>();
+    for (const v of propostaFiltradoBase) gruposComDadoNoFilho.add(grupoDaLinha(v.linha, applied.p.dia));
+    const linhas = new Set<string>();
+    const grupos = new Set<string>();
+    for (const v of paiViagens) {
+      const g = grupoDaLinha(v.linha, paiDaProposta!);
+      if (!gruposComDadoNoFilho.has(g)) { linhas.add(v.linha); grupos.add(g); }
+    }
+    return { linhasRepetidas: linhas, gruposRepetidos: grupos };
+  }, [repetirSeVazio, paiFiltroSet, applied, propostaFiltradoBase, paiViagens, paiDaProposta, grupoMap]);
 
   // Usado nos resumos por Empresa/Grupo/Unidade e no custo — esses somam
   // várias linhas juntas, então preenchemos com as viagens de verdade do
-  // Atual pras linhas escolhidas. A tabela principal (por linha) NÃO usa
-  // isso — pra evitar misturar viagens de linhas diferentes no mesmo
-  // cálculo de frota/serviço (o que causava frota errada), ela copia a
-  // linha inteira do Atual diretamente, mais abaixo.
+  // pai pras linhas decididas acima.
   const propostaPreenchida = useMemo(() => {
     if (!linhasRepetidas.size) return propostaFiltradoBase;
-    const extra = atualFiltradoBase.filter((v) => linhasRepetidas.has(v.linha));
+    const extra = paiViagens.filter((v) => linhasRepetidas.has(v.linha));
     return [...propostaFiltradoBase, ...extra];
-  }, [propostaFiltradoBase, atualFiltradoBase, linhasRepetidas]);
+  }, [propostaFiltradoBase, paiViagens, linhasRepetidas]);
+
+  // Linhas do pai, agregadas — usado pra "copiar a linha inteira" na
+  // tabela principal (evita misturar viagens de linhas diferentes no
+  // mesmo cálculo de frota/serviço, que já causou frota errada antes).
+  const paiRows = useMemo(() => {
+    if (!applied || !linhasRepetidas.size || !paiFiltroSet) return [] as AggRow[];
+    const f = paiViagens;
+    const fOrigem = applyFiltersSemLinha(baseFor(paiFiltroSet), paiFiltroSet, linhaMap, grupoMap, empresaOverrideMap);
+    return withHE(aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio), f, linhas);
+  }, [applied, linhasRepetidas, paiFiltroSet, paiViagens, baseFor, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap]);
 
   const atualRows = useMemo(() => {
     if (!applied) return [] as AggRow[];
@@ -492,13 +519,18 @@ export function ComparativoView() {
       if (cur) cur.p = r;
       else map.set(r.groupKey, { linha: r.groupLabel, order: r.groupOrder, a: null, p: r });
     }
-    // Linha marcada pra "repetir": copia a linha inteira do Atual pra
-    // Proposta (em vez de recalcular misturando viagens de linhas
-    // diferentes, o que já causou frota errada antes) — os dois lados
-    // ficam com os MESMOS números, ponto a ponto.
+    // Linha decidida pra "repetir" (grupo de linha inteiro sem dado na
+    // Proposta 2): usa a linha calculada a partir do PAI registrado na
+    // importação (não da seleção de "Atual" na tela, que pode ser outra
+    // coisa) — evita misturar viagens de linhas diferentes no mesmo
+    // cálculo de frota/serviço (o que já causou frota errada antes).
+    const paiPorLinha = new Map(paiRows.map((r) => [r.groupKey, r]));
     for (const chave of linhasRepetidas) {
+      const paiRow = paiPorLinha.get(chave);
+      if (!paiRow) continue;
       const cur = map.get(chave);
-      if (cur && cur.a) cur.p = cur.a;
+      if (cur) cur.p = paiRow;
+      else map.set(chave, { linha: paiRow.groupLabel, order: paiRow.groupOrder, a: null, p: paiRow });
     }
     let arr = Array.from(map.values()).sort((a, b) => {
       if (ordenarPor === "unidade") {
@@ -515,7 +547,7 @@ export function ComparativoView() {
       );
     }
     return arr;
-  }, [atualRows, propostaRows, onlyDiff, ordenarPor, unidadePorLinha, linhasRepetidas]);
+  }, [atualRows, propostaRows, onlyDiff, ordenarPor, unidadePorLinha, linhasRepetidas, paiRows]);
 
   const totals = useMemo(() => {
     const base = { a: {} as Record<string, number>, p: {} as Record<string, number> };
@@ -828,29 +860,44 @@ export function ComparativoView() {
               <Checkbox checked={onlyDiff} onCheckedChange={(v) => setOnlyDiff(!!v)} className="h-3.5 w-3.5" />
               Somente com diferença
             </label>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <Checkbox checked={repetirSeVazio} onCheckedChange={(v) => setRepetirSeVazio(!!v)} className="h-3.5 w-3.5" />
+              Repetir Proposta 1 nas linhas sem dado na Proposta 2
+            </label>
           </div>
         </CardContent>
       </Card>
 
-      {applied && linhasFaltandoNaProposta.length > 0 && (
+      {applied && repetirSeVazio && applied.p.dia !== "__all" && !paiDaProposta && (
+        <Card className="shadow-[var(--shadow-card)] border-amber-500/30">
+          <CardContent className="p-3 text-xs text-amber-700">
+            O dia tipo "{applied.p.dia}" da Proposta 2 não tem um dia "pai" registrado (Dias úteis/Sábado/Domingo) —
+            isso é definido na hora da importação, quando o sistema pergunta de qual dia tipo herdar o comportamento.
+            Sem essa associação, não dá pra saber o que repetir, então nada foi preenchido.
+          </CardContent>
+        </Card>
+      )}
+
+      {applied && repetirSeVazio && paiDaProposta && (
         <Card className="shadow-[var(--shadow-card)] border-amber-500/30">
           <CardContent className="p-3">
             <p className="text-xs font-semibold text-amber-700 mb-1">
-              {linhasFaltandoNaProposta.length} linha(s) sem nenhum dado na Proposta 2
+              {linhasRepetidas.size > 0
+                ? `${linhasRepetidas.size} linha(s) repetindo "${paiDaProposta}" (grupo de linha sem nenhum dado na Proposta 2)`
+                : `Nenhuma linha precisou repetir "${paiDaProposta}" — todo grupo de linha teve algum dado na Proposta 2`}
             </p>
             <p className="text-[11px] text-muted-foreground mb-2">
-              Marque só as que devem <strong>repetir a programação normal (Proposta 1)</strong> — ex.: quando ninguém criou
-              uma programação especial pra ela e ela roda igual ao dia normal. Deixe desmarcada quem foi
-              <strong> zerada de propósito</strong> (ex.: uma linha-filha que não circula no feriado).
+              Decidido automaticamente pelo <strong>Grupo de Linha</strong>: se o grupo inteiro (ex.: 07 + 07A) não teve
+              nenhuma viagem na Proposta 2, repete "{paiDaProposta}" pra ele. Se o grupo teve alguma viagem (em qualquer
+              linha dele), assume que foi decisão de propósito e não repete o resto — mesmo que fique zerado.
             </p>
-            <div className="flex flex-wrap gap-2">
-              {linhasFaltandoNaProposta.map((l) => (
-                <label key={l} className="flex items-center gap-1.5 text-xs cursor-pointer border rounded-md px-2 py-1 bg-muted/30">
-                  <Checkbox checked={linhasRepetidas.has(l)} onCheckedChange={() => toggleLinhaRepetir(l)} className="h-3.5 w-3.5" />
-                  {l}
-                </label>
-              ))}
-            </div>
+            {linhasRepetidas.size > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {Array.from(linhasRepetidas).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })).map((l) => (
+                  <Badge key={l} variant="outline" className="text-[10px] px-1.5 py-0 h-5 bg-amber-500/10 text-amber-700 border-amber-500/30">{l}</Badge>
+                ))}
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

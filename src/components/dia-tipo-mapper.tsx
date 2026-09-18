@@ -2,10 +2,13 @@
 // e permite ao usuário mapear cada novo dia tipo para HERDAR o comportamento
 // de um dia tipo já existente (Dias úteis, Sábado, Domingo).
 //
-// A herança é persistida em `parametro_multilinha` — para cada linha que
-// já possui mapeamento no dia tipo "pai", copiamos o mesmo `grupo_du` para
-// o novo dia tipo. Assim os relatórios que agrupam por (linha, tipo_dia)
-// funcionam automaticamente para os feriados / datas especiais.
+// A herança é persistida em DOIS lugares:
+//  1. `parametro_multilinha` — para cada linha que já possui mapeamento no
+//     dia tipo "pai", copiamos o mesmo `grupo_du` para o novo dia tipo.
+//  2. `dia_tipo_heranca` — guarda QUAL foi o pai escolhido (ex.: "Feriado
+//     SG 22-09-26" → "Dias úteis"), pra uso posterior no Comparativo (pra
+//     decidir se uma linha sem dado deve repetir o pai, olhando o Grupo
+//     de Linha inteiro dela, não só a linha isolada).
 
 import { useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -17,6 +20,14 @@ import { toast } from "sonner";
 const PARENTS = ["Dias úteis", "Sábado", "Domingo"] as const;
 
 export type DiaTipoNovo = { nome: string; linhas: string[] };
+
+/** Busca o mapa dia_tipo -> dia_tipo_pai já registrado (usado no Comparativo
+ * pra saber de qual dia tipo uma linha sem dado deveria repetir). */
+export async function fetchDiaTipoHeranca(): Promise<Map<string, string>> {
+  const { data, error } = await supabase.from("dia_tipo_heranca").select("tipo_dia,tipo_dia_pai");
+  if (error) throw error;
+  return new Map((data ?? []).map((r) => [r.tipo_dia, r.tipo_dia_pai]));
+}
 
 export function DiaTipoMapper({
   novos, open, onClose,
@@ -43,15 +54,21 @@ export function DiaTipoMapper({
         const payload = (data ?? []).map((r: any) => ({
           linha: r.linha, grupo_du: r.grupo_du, tipo_dia: nv.nome,
         }));
-        if (!payload.length) continue;
-        // insert com ignoreDuplicates (unique = linha, grupo_du, tipo_dia)
-        const size = 200;
-        for (let i = 0; i < payload.length; i += size) {
-          const { error } = await supabase
-            .from("parametro_multilinha")
-            .upsert(payload.slice(i, i + size), { onConflict: "linha,grupo_du,tipo_dia", ignoreDuplicates: true });
-          if (error) throw error;
+        if (payload.length) {
+          // insert com ignoreDuplicates (unique = linha, grupo_du, tipo_dia)
+          const size = 200;
+          for (let i = 0; i < payload.length; i += size) {
+            const { error } = await supabase
+              .from("parametro_multilinha")
+              .upsert(payload.slice(i, i + size), { onConflict: "linha,grupo_du,tipo_dia", ignoreDuplicates: true });
+            if (error) throw error;
+          }
         }
+        // guarda a associação em si, pra uso posterior (Comparativo)
+        const { error: e2 } = await supabase
+          .from("dia_tipo_heranca")
+          .upsert({ tipo_dia: nv.nome, tipo_dia_pai: parent }, { onConflict: "tipo_dia" });
+        if (e2) throw e2;
       }
       toast.success("Dia(s) tipo mapeado(s) com sucesso");
       onClose();

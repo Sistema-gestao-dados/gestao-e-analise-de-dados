@@ -401,6 +401,12 @@ export type Database = {
         }
         Relationships: []
       }
+      dia_tipo_heranca: {
+        Row: { tipo_dia: string; tipo_dia_pai: string; created_at: string }
+        Insert: { tipo_dia: string; tipo_dia_pai: string; created_at?: string }
+        Update: { tipo_dia?: string; tipo_dia_pai?: string; created_at?: string }
+        Relationships: []
+      }
       parametros_custo: {
         Row: {
           id: number
