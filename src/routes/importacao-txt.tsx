@@ -3,10 +3,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Upload, FileUp, CheckCircle2, AlertCircle, Loader2, ArrowRight } from "lucide-react";
 import { useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { parseTxt } from "@/lib/txt-import";
 import { Link } from "@tanstack/react-router";
@@ -15,6 +17,9 @@ import { DiaTipoMapper, detectarNovosDiasTipo, type DiaTipoNovo } from "@/compon
 import { ativarVersao } from "@/lib/projeto-ativo";
 import { useAuditView } from "@/lib/use-audit-view";
 import { usePersistentState } from "@/hooks/use-persistent-state";
+
+const DIAS_TIPO_BASE = ["Dias úteis", "Sábado", "Domingo"];
+const NOVO_SENTINEL = "__novo__";
 
 export const Route = createFileRoute("/importacao-txt")({
   head: () => ({ meta: [{ title: "Importação TXT GPS — Gestão e Análise de Dados" }] }),
@@ -39,7 +44,42 @@ function ImportTxtPage() {
   const [novosDias, setNovosDias] = useState<DiaTipoNovo[]>([]);
   const [showWizard, setShowWizard] = useState(false);
 
+  // Sobrescrever dia tipo: por padrão essa tela usa o que já vem escrito no
+  // arquivo (coluna "Tipo Op."). Só liga isso quando precisa forçar um dia
+  // tipo específico/novo (ex.: um feriado que o arquivo não rotula sozinho).
+  const [sobrescreverDiaTipo, setSobrescreverDiaTipo] = useState(false);
+  const [diaTipo, setDiaTipo] = useState<string>("");
+  const [novoDiaTipo, setNovoDiaTipo] = useState<string>("");
+  const [criandoNovo, setCriandoNovo] = useState(false);
+  const diaTipoEfetivo = criandoNovo ? novoDiaTipo.trim() : diaTipo;
+
+  const { data: diasCadastrados = DIAS_TIPO_BASE } = useQuery({
+    queryKey: ["dias-tipo-cadastrados"],
+    queryFn: async () => {
+      const { data } = await (supabase as any).from("parametro_multilinha").select("tipo_dia");
+      const existentes = new Set<string>(DIAS_TIPO_BASE);
+      for (const r of (data ?? []) as any[]) if (r.tipo_dia) existentes.add(r.tipo_dia);
+      const extras = Array.from(existentes).filter((d) => !DIAS_TIPO_BASE.includes(d)).sort();
+      return [...DIAS_TIPO_BASE, ...extras];
+    },
+  });
+
+  function onSelectDiaTipo(v: string) {
+    if (v === NOVO_SENTINEL) {
+      setCriandoNovo(true);
+      setDiaTipo("");
+      return;
+    }
+    setCriandoNovo(false);
+    setNovoDiaTipo("");
+    setDiaTipo(v);
+  }
+
   async function handleFiles(files: FileList) {
+    if (sobrescreverDiaTipo && !diaTipoEfetivo) {
+      toast.error(criandoNovo ? "Digite o nome do novo dia tipo" : "Escolha um dia tipo, ou desligue \"Sobrescrever\"");
+      return;
+    }
     setBusy(true);
     const newReports: FileReport[] = [];
     const versoesImportadas = new Set<string>();
@@ -48,6 +88,9 @@ function ImportTxtPage() {
       try {
         const text = await file.text();
         const { rows, errors } = parseTxt(text);
+        if (sobrescreverDiaTipo && diaTipoEfetivo) {
+          for (const r of rows) r.tipo_operacao = diaTipoEfetivo;
+        }
         const payload = rows.map((r) => ({ ...r, arquivo: file.name }));
         parsedAll.push(...rows.map((r) => ({ linha: r.linha, tipo_operacao: r.tipo_operacao })));
         for (const r of rows) if (r.versao_programacao) versoesImportadas.add(r.versao_programacao);
@@ -81,7 +124,7 @@ function ImportTxtPage() {
           registros_atualizados: duplicadas,
           registros_erro: allErrors.length,
         });
-        void logAudit({ action: "import", entity: "viagens", details: { tipo: "TXT GPS", arquivo: file.name, inserted, duplicadas, erros: allErrors.length } });
+        void logAudit({ action: "import", entity: "viagens", details: { tipo: "TXT GPS", arquivo: file.name, inserted, duplicadas, erros: allErrors.length, diaTipoSobrescrito: sobrescreverDiaTipo ? diaTipoEfetivo : null } });
         newReports.push({
           name: file.name,
           rows: rows.length,
@@ -149,6 +192,40 @@ function ImportTxtPage() {
           </div>
         </CardHeader>
         <CardContent className="space-y-3">
+          <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
+            <Checkbox checked={sobrescreverDiaTipo} onCheckedChange={(v) => setSobrescreverDiaTipo(!!v)} />
+            Sobrescrever o Dia Tipo do arquivo (força um dia tipo específico, ou cria um novo)
+          </label>
+          {sobrescreverDiaTipo && (
+            <div className="max-w-xs space-y-1.5 border rounded-md p-3 bg-muted/20">
+              <label className="text-xs font-medium text-muted-foreground">
+                Dia tipo deste arquivo <span className="text-destructive">*</span>
+              </label>
+              <Select value={criandoNovo ? NOVO_SENTINEL : diaTipo} onValueChange={onSelectDiaTipo}>
+                <SelectTrigger className="h-9">
+                  <SelectValue placeholder="Escolha um dia tipo cadastrado" />
+                </SelectTrigger>
+                <SelectContent>
+                  {diasCadastrados.map((d) => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+                  <SelectItem value={NOVO_SENTINEL} className="text-primary">+ Criar novo dia tipo...</SelectItem>
+                </SelectContent>
+              </Select>
+              {criandoNovo && (
+                <Input
+                  autoFocus
+                  placeholder="Ex.: Feriado 7 de Setembro"
+                  value={novoDiaTipo}
+                  onChange={(e) => setNovoDiaTipo(e.target.value)}
+                  className="h-9"
+                />
+              )}
+              <p className="text-[11px] text-muted-foreground">
+                Aplica esse dia tipo em todas as viagens do(s) arquivo(s), ignorando o que estiver na coluna
+                "Tipo Op." do TXT. Um dia tipo novo abre, ao final da importação, a tela pra você dizer de qual
+                dia tipo ele deve herdar os grupos de linha já cadastrados.
+              </p>
+            </div>
+          )}
           <input
             ref={ref}
             type="file"
@@ -158,7 +235,7 @@ function ImportTxtPage() {
             onChange={(e) => e.target.files?.length && handleFiles(e.target.files)}
           />
           <div className="flex items-center gap-2 flex-wrap">
-            <Button onClick={() => ref.current?.click()} disabled={busy} className="w-full sm:w-auto">
+            <Button onClick={() => ref.current?.click()} disabled={busy || (sobrescreverDiaTipo && !diaTipoEfetivo)} className="w-full sm:w-auto">
               {busy ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" />Processando...</> : <><Upload className="h-4 w-4 mr-2" />Selecionar TXT (múltiplos)</>}
             </Button>
             <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
