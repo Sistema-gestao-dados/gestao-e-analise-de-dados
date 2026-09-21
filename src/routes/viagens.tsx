@@ -84,11 +84,14 @@ function ViagensPage() {
     ])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
   }), [linhas, empresaEstacao]);
 
-  // Valores distintos de Versão e Arquivo direto da tabela (não têm cadastro
-  // próprio, então precisam vir dos dados já importados).
+  // Valores distintos de Dia Tipo, Versão e Arquivo direto da tabela (não
+  // têm cadastro próprio, então precisam vir dos dados já importados) — Dia
+  // Tipo em especial não pode ser hardcoded nos 3 básicos, porque inclui
+  // qualquer dia tipo custom criado na importação (feriados etc.).
   const distintosQ = useQuery({
     queryKey: ["viagens-distintos"],
     queryFn: async () => {
+      const diasTipo = new Set<string>();
       const versoes = new Set<string>();
       const arquivos = new Set<string>();
       const pageSize = 1000;
@@ -96,24 +99,25 @@ function ViagensPage() {
       for (;;) {
         const { data, error } = await (supabase as any)
           .from("viagens")
-          .select("versao_programacao, arquivo")
+          .select("tipo_operacao, versao_programacao, arquivo")
           .range(from, from + pageSize - 1);
         if (error) throw error;
-        const chunk = (data ?? []) as { versao_programacao: string | null; arquivo: string | null }[];
+        const chunk = (data ?? []) as { tipo_operacao: string | null; versao_programacao: string | null; arquivo: string | null }[];
         for (const r of chunk) {
+          if (r.tipo_operacao) diasTipo.add(r.tipo_operacao);
           if (r.versao_programacao) versoes.add(r.versao_programacao);
           if (r.arquivo) arquivos.add(r.arquivo);
         }
         if (chunk.length < pageSize) break;
         from += pageSize;
       }
-      return { versoes: Array.from(versoes).sort(), arquivos: Array.from(arquivos).sort() };
+      return { diasTipo: Array.from(diasTipo).sort(), versoes: Array.from(versoes).sort(), arquivos: Array.from(arquivos).sort() };
     },
   });
 
   const filters = useMemo(() => [
     { key: "linha", label: "Linha", options: () => (linhasQ.data ?? []).map((l) => l.linha).sort() },
-    { key: "tipo_operacao", label: "Tipo Op.", options: () => ["Dias úteis", "Sábado", "Domingo"] },
+    { key: "tipo_operacao", label: "Dia Tipo", options: () => distintosQ.data?.diasTipo ?? [] },
     { key: "tipo_servico", label: "Tipo Serv.", options: () => ["TU", "DIR"] },
     { key: "versao_programacao", label: "Versão", options: () => distintosQ.data?.versoes ?? [] },
     { key: "tipo_movimento", label: "Movimento", options: () => ["Soltura", "Comercial", "Recolha", "Deslocamento"] },
