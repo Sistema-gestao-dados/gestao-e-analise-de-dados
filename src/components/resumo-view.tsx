@@ -83,7 +83,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
 
   const viagensRaw = viagensQ.data ?? [];
   const ativos = ativosQ.data ?? [];
-  const [somenteAtivos, setSomenteAtivos] = usePersistentState(`resumo.${mode}.somenteAtivos`, true);
+  const [somenteAtivos, setSomenteAtivos] = usePersistentState(`resumo.${mode}.somenteAtivos`, false);
   const viagens = useMemo(
     () => (somenteAtivos ? filterViagensAtivas(viagensRaw, ativos) : viagensRaw),
     [viagensRaw, ativos, somenteAtivos],

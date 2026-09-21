@@ -14,7 +14,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { parseTxtEasyBus } from "@/lib/txt-import-easybus";
 import { logAudit } from "@/lib/audit";
-import { DiaTipoMapper, detectarNovosDiasTipo, type DiaTipoNovo } from "@/components/dia-tipo-mapper";
+import { DiaTipoMapper, detectarNovosDiasTipo, aplicarHerancaConhecida, type DiaTipoNovo } from "@/components/dia-tipo-mapper";
 import { ativarVersao } from "@/lib/projeto-ativo";
 import { useAuditView } from "@/lib/use-audit-view";
 import { usePersistentState } from "@/hooks/use-persistent-state";
@@ -128,7 +128,7 @@ function ImportTxtEasyBusPage() {
   const [diaTipo, setDiaTipo] = useState<string>("");
   const [novoDiaTipo, setNovoDiaTipo] = useState<string>("");
   const [criandoNovo, setCriandoNovo] = useState(false);
-  const [marcarAtivo, setMarcarAtivo] = usePersistentState("importacaoEasyBus.marcarAtivo", true);
+  const [marcarAtivo, setMarcarAtivo] = usePersistentState("importacaoEasyBus.marcarAtivo", false);
   const [novosDias, setNovosDias] = useState<DiaTipoNovo[]>([]);
   const [showWizard, setShowWizard] = useState(false);
   const [showGerenciar, setShowGerenciar] = useState(false);
@@ -158,6 +158,17 @@ function ImportTxtEasyBusPage() {
   }
 
   const diaTipoEfetivo = criandoNovo ? novoDiaTipo.trim() : diaTipo;
+
+  // Deixa criar/associar o dia tipo a um pai ANTES de importar qualquer
+  // arquivo — abre o mesmo wizard, mas sem lista de linhas (só grava o pai
+  // em dia_tipo_heranca). Toda importação futura desse dia tipo já herda
+  // o grupo de linha automaticamente, sem perguntar de novo.
+  function definirDiaTipoAgora() {
+    if (!diaTipoEfetivo) { toast.error("Digite ou escolha o nome do dia tipo primeiro"); return; }
+    if (DIAS_TIPO_BASE.includes(diaTipoEfetivo)) { toast.error("Dias úteis, Sábado e Domingo já são conhecidos — não precisam desse passo"); return; }
+    setNovosDias([{ nome: diaTipoEfetivo, linhas: [] }]);
+    setShowWizard(true);
+  }
 
   async function handleFiles(files: File[]) {
     if (!diaTipoEfetivo) {
@@ -242,7 +253,8 @@ function ImportTxtEasyBusPage() {
     }
     try {
       const novos = await detectarNovosDiasTipo(parsedAll);
-      if (novos.length) { setNovosDias(novos); setShowWizard(true); }
+      const semPai = await aplicarHerancaConhecida(novos);
+      if (semPai.length) { setNovosDias(semPai); setShowWizard(true); }
     } catch { /* silencioso */ }
     qc.invalidateQueries({ queryKey: ["viagens"] });
     qc.invalidateQueries({ queryKey: ["importacoes"] });
@@ -382,6 +394,11 @@ function ImportTxtEasyBusPage() {
               final da importação, a tela para você dizer de qual dia tipo ele deve herdar os grupos de
               linha já cadastrados.
             </p>
+            {diaTipoEfetivo && !DIAS_TIPO_BASE.includes(diaTipoEfetivo) && (
+              <Button type="button" variant="outline" size="sm" className="h-8 text-xs w-full" onClick={definirDiaTipoAgora}>
+                Definir de qual dia herdar agora, sem importar arquivo
+              </Button>
+            )}
           </div>
 
           <input

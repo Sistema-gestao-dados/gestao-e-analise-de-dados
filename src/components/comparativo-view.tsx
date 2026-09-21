@@ -246,7 +246,7 @@ export function ComparativoView() {
 
   const viagensRaw = viagensQ.data ?? [];
   const ativos = ativosQ.data ?? [];
-  const [somenteAtivos, setSomenteAtivos] = usePersistentState("comparativo.somenteAtivos", true);
+  const [somenteAtivos, setSomenteAtivos] = usePersistentState("comparativo.somenteAtivos", false);
   const viagensAtivas = useMemo(
     () => filterViagensAtivas(viagensRaw, ativos),
     [viagensRaw, ativos],

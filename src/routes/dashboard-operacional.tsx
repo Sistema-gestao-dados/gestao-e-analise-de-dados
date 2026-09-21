@@ -198,7 +198,7 @@ function DashOperacional() {
 
   const viagensRaw = viagensQ.data ?? [];
   const ativos = ativosQ.data ?? [];
-  const [somenteAtivos, setSomenteAtivos] = usePersistentState("dashboard.somenteAtivos", true);
+  const [somenteAtivos, setSomenteAtivos] = usePersistentState("dashboard.somenteAtivos", false);
   const viagens = useMemo(
     () => (somenteAtivos ? filterViagensAtivas(viagensRaw, ativos) : viagensRaw),
     [viagensRaw, ativos, somenteAtivos],

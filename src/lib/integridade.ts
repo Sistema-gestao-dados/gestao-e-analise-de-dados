@@ -3,12 +3,14 @@
 // jornada, frota, partidas). Não altera nada, só diagnostica.
 
 import type { ViagemLite } from "./resumo";
-import type { Linha } from "./data";
+import type { Linha, ParametroMulti } from "./data";
 import type { KmMaps } from "./km";
 import { viagemKmResult } from "./km";
 import { buildJornadas } from "./jornada";
 import type { RealizadoDb } from "./viagens-realizado";
 import type { Importacao } from "./data";
+
+const DIAS_TIPO_BASE = ["Dias úteis", "Sábado", "Domingo"];
 
 export type Severidade = "critico" | "atencao" | "info";
 
@@ -30,8 +32,9 @@ export function runVerificacaoIntegridade(args: {
   kmMaps: KmMaps;
   importacoes: Importacao[];
   realizado?: RealizadoDb[];
+  multi?: ParametroMulti[];
 }): AlertaIntegridade[] {
-  const { viagens, linhas, kmMaps, importacoes, realizado } = args;
+  const { viagens, linhas, kmMaps, importacoes, realizado, multi } = args;
   const linhaMap = new Map(linhas.map((l) => [l.linha, l]));
   const alertas: AlertaIntegridade[] = [];
   const amostra = (items: string[]) => items.slice(0, 20);
@@ -190,6 +193,33 @@ export function runVerificacaoIntegridade(args: {
         descricao: "No período carregado do relatório Previsto x Realizado, essas linhas não batem com nenhuma linha do cadastro.",
         quantidade: total,
         amostra: amostra(Array.from(linhasFaltando, ([linha, n]) => `Linha "${linha}" — ${n} viagem(ns)`)),
+      });
+    }
+  }
+
+  // 9) Linha sem Grupo de Linha (grupo_du) mapeado no dia tipo custom em que aparece
+  if (multi) {
+    const mapeadas = new Set(multi.map((m) => `${m.tipo_dia}||${m.linha}`));
+    const orfas = new Map<string, number>();
+    for (const v of viagens) {
+      const dia = v.tipo_operacao?.trim();
+      if (!dia || DIAS_TIPO_BASE.includes(dia)) continue;
+      const key = `${dia}||${v.linha}`;
+      if (!mapeadas.has(key)) orfas.set(key, (orfas.get(key) ?? 0) + 1);
+    }
+    const total = Array.from(orfas.values()).reduce((s, n) => s + n, 0);
+    if (total > 0) {
+      alertas.push({
+        id: "linha_sem_grupo_dia_tipo",
+        categoria: "Cadastro",
+        severidade: "atencao",
+        titulo: "Linha sem Grupo de Linha mapeado no dia tipo",
+        descricao: "Essa combinação linha + dia tipo não tem grupo_du em Cadastro de Grupos — some/fica incompleta nos relatórios agrupados por Grupo de Linha (Resumo por Grupo, Comparativo). Costuma acontecer quando uma importação posterior do mesmo dia tipo traz linhas que a primeira importação não tinha. Cadastre manualmente em Cadastro de Grupos, ou reimporte um arquivo que contenha essas linhas com esse dia tipo selecionado.",
+        quantidade: total,
+        amostra: amostra(Array.from(orfas, ([key, n]) => {
+          const [dia, linha] = key.split("||");
+          return `Linha ${linha}, dia tipo "${dia}" — ${n} viagem(ns)`;
+        })),
       });
     }
   }

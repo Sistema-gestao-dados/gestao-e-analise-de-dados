@@ -76,7 +76,7 @@ function IntraJornadaPage() {
   const [mostrarCusto, setMostrarCusto] = usePersistentState("intra.mostrarCusto", false);
   const [pageSize, setPageSize] = usePersistentState("intra.pageSize", 50);
   const [page, setPage] = useState(0);
-  const [somenteAtivos, setSomenteAtivos] = usePersistentState("intra.somenteAtivos", true);
+  const [somenteAtivos, setSomenteAtivos] = usePersistentState("intra.somenteAtivos", false);
   type Snap = { dia: string; versao: string; linha: string[]; unidade: string; grupoOrdem: string };
   const [applied, setApplied] = useState<Snap | null>({ dia: "__all", versao: "__all", linha: [], unidade: "__all", grupoOrdem: "__all" });
 

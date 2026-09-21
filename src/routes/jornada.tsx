@@ -68,7 +68,7 @@ function JornadaPage() {
   const [modal, setModal] = useState<null | "7" | "9" | "he" | "sem_param">(null);
   const [pageSize, setPageSize] = usePersistentState("jornada.pageSize", 50);
   const [page, setPage] = useState(0);
-  const [somenteAtivos, setSomenteAtivos] = usePersistentState("jornada.somenteAtivos", true);
+  const [somenteAtivos, setSomenteAtivos] = usePersistentState("jornada.somenteAtivos", false);
   type Snap = { dia: string; versao: string; tipo: string; linha: string[]; unidade: string; grupoOrdem: string };
   // Aplica filtros automaticamente ao abrir (usa cache se houver, sem recarregar)
   const [applied, setApplied] = useState<Snap | null>({ dia: "__all", versao: "__all", tipo: "__all", linha: [], unidade: "__all", grupoOrdem: "__all" });

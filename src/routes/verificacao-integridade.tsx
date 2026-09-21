@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { fetchLinhas, fetchKm, fetchImportacoesComErro } from "@/lib/data";
+import { fetchLinhas, fetchKm, fetchMulti, fetchImportacoesComErro } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import { buildKmMaps } from "@/lib/km";
 import { runVerificacaoIntegridade, type AlertaIntegridade, type Severidade } from "@/lib/integridade";
@@ -34,6 +34,7 @@ function VerificacaoIntegridadePage() {
 
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
   const kmQ = useQuery({ queryKey: ["km"], queryFn: fetchKm });
+  const multiQ = useQuery({ queryKey: ["multi"], queryFn: fetchMulti });
   const viagensQ = useQuery({ queryKey: ["viagens-all"], queryFn: fetchAllViagens, enabled: rodou });
   const importacoesQ = useQuery({ queryKey: ["importacoes-com-erro"], queryFn: fetchImportacoesComErro, enabled: rodou });
   const realizadoQ = useQuery({
@@ -42,7 +43,7 @@ function VerificacaoIntegridadePage() {
     enabled: rodou,
   });
 
-  const carregando = viagensQ.isLoading || importacoesQ.isLoading || realizadoQ.isLoading || linhasQ.isLoading || kmQ.isLoading;
+  const carregando = viagensQ.isLoading || importacoesQ.isLoading || realizadoQ.isLoading || linhasQ.isLoading || kmQ.isLoading || multiQ.isLoading;
 
   const kmMaps = useMemo(() => buildKmMaps(kmQ.data ?? []), [kmQ.data]);
 
@@ -54,8 +55,9 @@ function VerificacaoIntegridadePage() {
       kmMaps,
       importacoes: importacoesQ.data ?? [],
       realizado: realizadoQ.data,
+      multi: multiQ.data ?? [],
     });
-  }, [rodou, carregando, viagensQ.data, linhasQ.data, kmMaps, importacoesQ.data, realizadoQ.data]);
+  }, [rodou, carregando, viagensQ.data, linhasQ.data, kmMaps, importacoesQ.data, realizadoQ.data, multiQ.data]);
 
   function rodar() {
     setRodou(true);
@@ -63,6 +65,7 @@ function VerificacaoIntegridadePage() {
     viagensQ.refetch();
     importacoesQ.refetch();
     realizadoQ.refetch();
+    multiQ.refetch();
   }
 
   function toggle(id: string) {

@@ -65,7 +65,7 @@ function exportPDF(rows: any[]) {
 
 function ViagensPage() {
   useAuditView("viagens");
-  const [somenteAtivos, setSomenteAtivos] = usePersistentState("viagens.somenteAtivos", true);
+  const [somenteAtivos, setSomenteAtivos] = usePersistentState("viagens.somenteAtivos", false);
   const [fUnidade, setFUnidade] = usePersistentState("viagens.fUnidade", "__all");
   const [fGrupo, setFGrupo] = usePersistentState("viagens.fGrupo", "__all");
   const ativosQ = useQuery({ queryKey: ["projetos-ativos"], queryFn: fetchProjetosAtivos });
