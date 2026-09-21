@@ -159,7 +159,26 @@ function RootComponent() {
         queryClient: queryClient as any,
         persister,
         maxAge: 24 * 60 * 60 * 1000, // 24h
-        buster: "v4-dados-completos",
+        // Trocar o buster descarta qualquer cache antigo no localStorage dos
+        // usuários — necessário aqui porque a v4 tinha queries que
+        // persistiam um Map (calendario-categoria-cor, dia-tipo-heranca) e
+        // corrompiam pra "{}" nesse round-trip, quebrando a página inteira
+        // ao reidratar. Sem trocar o buster, o fix no código não some com o
+        // que já está salvo no navegador de quem já usou o sistema.
+        buster: "v5-sem-map-persistido",
+        dehydrateOptions: {
+          // Nunca persiste um Map/Set: o localStorage serializa em JSON, e
+          // JSON.stringify(new Map()) vira "{}" — na próxima carga o dado
+          // volta como objeto comum, sem `.get()`/`.has()`, e quebra a
+          // página inteira (já aconteceu com calendario-categoria-cor e
+          // dia-tipo-heranca). queryFn deve sempre devolver array/objeto
+          // plano; quem precisa de Map monta via useMemo, nunca no cache.
+          shouldDehydrateQuery: (query: any) => {
+            const data = query.state.data;
+            if (data instanceof Map || data instanceof Set) return false;
+            return query.state.status === "success";
+          },
+        },
       });
     })();
     return () => { cancelled = true; };

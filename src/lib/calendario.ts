@@ -88,10 +88,21 @@ export function corCategoria(categoria: string, overrides?: Map<string, string>)
   return overrides?.get(key) ?? CATEGORIA_COR_PADRAO[key] ?? COR_FALLBACK;
 }
 
-export async function fetchCategoriaCores(): Promise<Map<string, string>> {
+export type CategoriaCor = { categoria: string; cor: string };
+
+// Retorna array (não Map) de propósito: isso passa por useQuery/react-query,
+// que persiste o cache no localStorage via JSON — um Map vira `{}` nesse
+// round-trip (perde o protótipo) e quebra `.get()` na primeira carga depois
+// de um reload. Quem consome monta o Map localmente via useMemo (nunca
+// cacheado pelo react-query), igual todo outro mapa derivado do app.
+export async function fetchCategoriaCores(): Promise<CategoriaCor[]> {
   const { data, error } = await db().from("calendario_categoria_cor").select("categoria,cor");
   if (error) throw error;
-  return new Map(((data ?? []) as { categoria: string; cor: string }[]).map((r) => [r.categoria.trim().toLowerCase(), r.cor]));
+  return (data ?? []) as CategoriaCor[];
+}
+
+export function buildCategoriaCorMap(rows: CategoriaCor[]): Map<string, string> {
+  return new Map(rows.map((r) => [r.categoria.trim().toLowerCase(), r.cor]));
 }
 
 export async function salvarCategoriaCor(categoria: string, cor: string): Promise<void> {

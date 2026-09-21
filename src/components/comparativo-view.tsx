@@ -8,7 +8,7 @@
 import { Fragment, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
-import { fetchDiaTipoHeranca } from "@/components/dia-tipo-mapper";
+import { fetchDiaTipoHeranca, buildDiaTipoHerancaMap } from "@/components/dia-tipo-mapper";
 import { fetchLinhas, fetchKm, fetchMulti, fetchEmpresaEstacao, type Linha, type ParametroMulti } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import {
@@ -297,7 +297,7 @@ export function ComparativoView() {
   const [repetirSeVazio, setRepetirSeVazio] = usePersistentState("comparativo.repetirSeVazio", false);
   const { params: custoParams } = useSalarioMotorista();
   const herancaQ = useQuery({ queryKey: ["dia-tipo-heranca"], queryFn: fetchDiaTipoHeranca });
-  const diaTipoHeranca = herancaQ.data ?? new Map<string, string>();
+  const diaTipoHeranca = useMemo(() => buildDiaTipoHerancaMap(herancaQ.data ?? []), [herancaQ.data]);
 
   const atualFiltradoBase = useMemo(() => {
     if (!applied) return [] as ViagemLite[];

@@ -35,12 +35,22 @@ const DIAS_TIPO_BASE = ["Dias úteis", "Sábado", "Domingo"];
 
 export type DiaTipoNovo = { nome: string; linhas: string[] };
 
-/** Busca o mapa dia_tipo -> dia_tipo_pai já registrado (usado no Comparativo
- * pra saber de qual dia tipo uma linha sem dado deveria repetir). */
-export async function fetchDiaTipoHeranca(): Promise<Map<string, string>> {
+export type DiaTipoHerancaRow = { tipo_dia: string; tipo_dia_pai: string };
+
+// Retorna array (não Map) de propósito: isso passa por useQuery/react-query
+// (ver comparativo-view.tsx), que persiste o cache no localStorage via
+// JSON — um Map vira `{}` nesse round-trip (perde o protótipo) e quebra
+// `.get()` na primeira carga depois de um reload. Quem consome monta o Map
+// localmente (useMemo no Comparativo; direto aqui embaixo em
+// aplicarHerancaConhecida, que nunca passa pelo cache do react-query).
+export async function fetchDiaTipoHeranca(): Promise<DiaTipoHerancaRow[]> {
   const { data, error } = await supabase.from("dia_tipo_heranca").select("tipo_dia,tipo_dia_pai");
   if (error) throw error;
-  return new Map((data ?? []).map((r) => [r.tipo_dia, r.tipo_dia_pai]));
+  return (data ?? []) as DiaTipoHerancaRow[];
+}
+
+export function buildDiaTipoHerancaMap(rows: DiaTipoHerancaRow[]): Map<string, string> {
+  return new Map(rows.map((r) => [r.tipo_dia, r.tipo_dia_pai]));
 }
 
 /** Copia (linha, grupo_du) do dia tipo `parent` pra `tipoNovo`, só pras
@@ -72,7 +82,7 @@ async function copiarGrupoDoParent(parent: string, tipoNovo: string, linhas: str
  *  SEM pai conhecido, que ainda precisam do wizard. */
 export async function aplicarHerancaConhecida(novos: DiaTipoNovo[]): Promise<DiaTipoNovo[]> {
   if (!novos.length) return novos;
-  const herancaMap = await fetchDiaTipoHeranca();
+  const herancaMap = buildDiaTipoHerancaMap(await fetchDiaTipoHeranca());
   const semPai: DiaTipoNovo[] = [];
   let algumAplicado = false;
   for (const nv of novos) {

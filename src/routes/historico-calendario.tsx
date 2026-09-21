@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import {
   fetchCalendarioEventos, insertCalendarioEvento, updateCalendarioEvento, deleteCalendarioEvento,
-  fetchCategoriaCores, salvarCategoriaCor,
+  fetchCategoriaCores, salvarCategoriaCor, buildCategoriaCorMap,
   expandirPorDia, corCategoria, CATEGORIAS_BASE, DIA_TIPO_OPTIONS, DIA_TIPO_TODOS, type CalendarioEvento,
 } from "@/lib/calendario";
 import {
@@ -82,7 +82,7 @@ function CalendarioPage() {
   const coresQ = useQuery({ queryKey: ["calendario-categoria-cor"], queryFn: fetchCategoriaCores });
   const eventos = eventosQ.data ?? [];
   const linhas = linhasQ.data ?? [];
-  const coresMap = coresQ.data ?? new Map<string, string>();
+  const coresMap = useMemo(() => buildCategoriaCorMap(coresQ.data ?? []), [coresQ.data]);
 
   const [fLinha, setFLinha] = useState("__all");
   const [mesRef, setMesRef] = useState(() => { const d = new Date(); d.setDate(1); return d; });
