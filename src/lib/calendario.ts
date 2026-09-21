@@ -5,6 +5,9 @@ export type CalendarioEvento = {
   data_inicio: string;
   data_fim: string;
   categoria: string;
+  // Restringe o período aos dias desse tipo (dia da semana) — null = todos
+  // os dias do período. Ex.: período 01-30/09 + "Dias úteis" = só seg-sex.
+  dia_tipo: string | null;
   linha: string | null;
   descricao: string | null;
   created_at: string;
@@ -57,6 +60,11 @@ export async function deleteCalendarioEvento(id: string): Promise<void> {
 // usuário pode digitar qualquer outra em "+ Outra categoria...".
 export const CATEGORIAS_BASE = ["Tempo chuvoso", "Obras na via", "Redução operacional"];
 
+// Dia tipo do evento — mesmo vocabulário usado no resto do sistema, mas
+// aqui é interpretado por DIA DA SEMANA (seg-sex/sáb/dom), não por cadastro.
+export const DIA_TIPO_OPTIONS = ["Dias úteis", "Sábado", "Domingo"];
+export const DIA_TIPO_TODOS = "__todos";
+
 const CATEGORIA_COR: Record<string, string> = {
   "tempo chuvoso": "bg-blue-500",
   "obras na via": "bg-orange-500",
@@ -69,8 +77,20 @@ export function corCategoria(categoria: string): string {
   return CATEGORIA_COR[categoria.trim().toLowerCase()] ?? "bg-slate-500";
 }
 
-/** Expande cada evento (data_inicio..data_fim) em entradas por dia, pra
- * montar o mapa dia -> eventos que o calendário usa pra pintar as células. */
+/** Um dia bate com o dia_tipo do evento? null = todos os dias do período;
+ * senão só o dia da semana correspondente (seg-sex/sáb/dom). */
+function diaBateComTipo(d: Date, diaTipo: string | null): boolean {
+  if (!diaTipo) return true;
+  const dow = d.getDay(); // 0=domingo .. 6=sábado
+  if (diaTipo === "Dias úteis") return dow >= 1 && dow <= 5;
+  if (diaTipo === "Sábado") return dow === 6;
+  if (diaTipo === "Domingo") return dow === 0;
+  return true;
+}
+
+/** Expande cada evento (data_inicio..data_fim) em entradas por dia, pulando
+ * os dias que não batem com o dia_tipo do evento, pra montar o mapa
+ * dia -> eventos que o calendário usa pra pintar as células. */
 export function expandirPorDia(eventos: CalendarioEvento[]): Map<string, CalendarioEvento[]> {
   const map = new Map<string, CalendarioEvento[]>();
   for (const ev of eventos) {
@@ -80,10 +100,12 @@ export function expandirPorDia(eventos: CalendarioEvento[]): Map<string, Calenda
     const cursor = new Date(ini);
     let guard = 0;
     while (cursor <= fim && guard < 400) {
-      const k = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
-      const arr = map.get(k) ?? [];
-      arr.push(ev);
-      map.set(k, arr);
+      if (diaBateComTipo(cursor, ev.dia_tipo)) {
+        const k = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}-${String(cursor.getDate()).padStart(2, "0")}`;
+        const arr = map.get(k) ?? [];
+        arr.push(ev);
+        map.set(k, arr);
+      }
       cursor.setDate(cursor.getDate() + 1);
       guard += 1;
     }

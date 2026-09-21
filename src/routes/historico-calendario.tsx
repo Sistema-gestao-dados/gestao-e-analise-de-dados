@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import {
   fetchCalendarioEventos, insertCalendarioEvento, updateCalendarioEvento, deleteCalendarioEvento,
-  expandirPorDia, corCategoria, CATEGORIAS_BASE, type CalendarioEvento,
+  expandirPorDia, corCategoria, CATEGORIAS_BASE, DIA_TIPO_OPTIONS, DIA_TIPO_TODOS, type CalendarioEvento,
 } from "@/lib/calendario";
 import { fetchLinhas } from "@/lib/data";
 import { logAudit } from "@/lib/audit";
@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
@@ -26,7 +27,6 @@ export const Route = createFileRoute("/historico-calendario")({
 
 const DIAS_SEMANA = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
 const MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
-const NOVA_SENTINEL = "__nova__";
 
 function dkey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -54,14 +54,20 @@ type FormState = {
   id: string | null;
   data_inicio: string;
   data_fim: string;
-  categoria: string;
+  diaTipo: string;
+  categorias: string[];
+  usarNovaCategoria: boolean;
   categoriaNova: string;
   linha: string;
   descricao: string;
 };
 
 function emptyForm(data: string): FormState {
-  return { id: null, data_inicio: data, data_fim: data, categoria: CATEGORIAS_BASE[0], categoriaNova: "", linha: "__todas", descricao: "" };
+  return {
+    id: null, data_inicio: data, data_fim: data, diaTipo: DIA_TIPO_TODOS,
+    categorias: [CATEGORIAS_BASE[0]], usarNovaCategoria: false, categoriaNova: "",
+    linha: "__todas", descricao: "",
+  };
 }
 
 function CalendarioPage() {
@@ -111,36 +117,56 @@ function CalendarioPage() {
       id: ev.id,
       data_inicio: ev.data_inicio,
       data_fim: ev.data_fim,
-      categoria: conhecida ? ev.categoria : NOVA_SENTINEL,
+      diaTipo: ev.dia_tipo ?? DIA_TIPO_TODOS,
+      categorias: conhecida ? [ev.categoria] : [],
+      usarNovaCategoria: !conhecida,
       categoriaNova: conhecida ? "" : ev.categoria,
       linha: ev.linha ?? "__todas",
       descricao: ev.descricao ?? "",
     });
   }
 
+  function toggleCategoria(cat: string) {
+    setForm((f) => f && {
+      ...f,
+      categorias: f.categorias.includes(cat) ? f.categorias.filter((c) => c !== cat) : [...f.categorias, cat],
+    });
+  }
+
   async function salvar() {
     if (!form) return;
-    const categoriaFinal = form.categoria === NOVA_SENTINEL ? form.categoriaNova.trim() : form.categoria;
-    if (!categoriaFinal) { toast.error("Informe a categoria"); return; }
+    const categoriasFinais = Array.from(new Set([
+      ...form.categorias,
+      ...(form.usarNovaCategoria && form.categoriaNova.trim() ? [form.categoriaNova.trim()] : []),
+    ]));
+    if (!categoriasFinais.length) { toast.error("Selecione ao menos uma categoria"); return; }
     if (!form.data_inicio || !form.data_fim) { toast.error("Informe o período"); return; }
     if (form.data_fim < form.data_inicio) { toast.error("Data fim não pode ser antes da data início"); return; }
     setSaving(true);
     try {
-      const payload = {
+      const base = {
         data_inicio: form.data_inicio,
         data_fim: form.data_fim,
-        categoria: categoriaFinal,
+        dia_tipo: form.diaTipo === DIA_TIPO_TODOS ? null : form.diaTipo,
         linha: form.linha === "__todas" ? null : form.linha,
         descricao: form.descricao.trim() || null,
       };
       if (form.id) {
-        await updateCalendarioEvento(form.id, payload);
-        void logAudit({ action: "update", entity: "calendario_eventos", entity_id: form.id, details: payload });
-        toast.success("Evento atualizado");
+        // Editando um evento (1 linha = 1 categoria): a linha existente vira a
+        // 1ª categoria marcada; categorias extras marcadas viram novas linhas.
+        await updateCalendarioEvento(form.id, { ...base, categoria: categoriasFinais[0] });
+        void logAudit({ action: "update", entity: "calendario_eventos", entity_id: form.id, details: { ...base, categoria: categoriasFinais[0] } });
+        for (const cat of categoriasFinais.slice(1)) {
+          const created = await insertCalendarioEvento({ ...base, categoria: cat });
+          void logAudit({ action: "create", entity: "calendario_eventos", entity_id: created.id, details: { ...base, categoria: cat } });
+        }
+        toast.success(categoriasFinais.length > 1 ? "Evento atualizado e categorias extras adicionadas" : "Evento atualizado");
       } else {
-        const created = await insertCalendarioEvento(payload);
-        void logAudit({ action: "create", entity: "calendario_eventos", entity_id: created.id, details: payload });
-        toast.success("Evento registrado");
+        for (const cat of categoriasFinais) {
+          const created = await insertCalendarioEvento({ ...base, categoria: cat });
+          void logAudit({ action: "create", entity: "calendario_eventos", entity_id: created.id, details: { ...base, categoria: cat } });
+        }
+        toast.success(categoriasFinais.length > 1 ? `${categoriasFinais.length} eventos registrados` : "Evento registrado");
       }
       qc.invalidateQueries({ queryKey: ["calendario-eventos"] });
       setForm(null);
@@ -263,6 +289,7 @@ function CalendarioPage() {
                     {fmtCurto(e.data_inicio)}{e.data_fim !== e.data_inicio ? ` – ${fmtCurto(e.data_fim)}` : ""}
                   </span>
                   <Badge variant="outline">{e.categoria}</Badge>
+                  {e.dia_tipo && <Badge variant="outline" className="text-[10px]">{e.dia_tipo}</Badge>}
                   {e.linha && <Badge variant="secondary">Linha {e.linha}</Badge>}
                   <span className="text-muted-foreground truncate flex-1">{e.descricao || "—"}</span>
                   <Button size="icon" variant="ghost" className="h-7 w-7 shrink-0" onClick={() => abrirEdicao(e)}><Pencil className="h-3.5 w-3.5" /></Button>
@@ -288,6 +315,7 @@ function CalendarioPage() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium text-sm">{e.categoria}</span>
+                    {e.dia_tipo && <Badge variant="outline" className="text-[10px]">{e.dia_tipo}</Badge>}
                     {e.linha && <Badge variant="secondary" className="text-[10px]">Linha {e.linha}</Badge>}
                     {e.data_fim !== e.data_inicio && (
                       <span className="text-[11px] text-muted-foreground">{fmtCurto(e.data_inicio)} – {fmtCurto(e.data_fim)}</span>
@@ -325,17 +353,35 @@ function CalendarioPage() {
                 <Input type="date" value={form.data_fim} onChange={(e) => setForm((f) => f && { ...f, data_fim: e.target.value })} />
               </div>
               <div className="md:col-span-2">
-                <Label>Categoria</Label>
-                <Select value={form.categoria} onValueChange={(v) => setForm((f) => f && { ...f, categoria: v })}>
+                <Label>Dia tipo do período</Label>
+                <Select value={form.diaTipo} onValueChange={(v) => setForm((f) => f && { ...f, diaTipo: v })}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
-                    {CATEGORIAS_BASE.map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                    <SelectItem value={NOVA_SENTINEL} className="text-primary">+ Outra categoria...</SelectItem>
+                    <SelectItem value={DIA_TIPO_TODOS}>Todos os dias do período</SelectItem>
+                    {DIA_TIPO_OPTIONS.map((d) => <SelectItem key={d} value={d}>{d}</SelectItem>)}
                   </SelectContent>
                 </Select>
-                {form.categoria === NOVA_SENTINEL && (
-                  <Input className="mt-2" placeholder="Nome da categoria" value={form.categoriaNova} onChange={(e) => setForm((f) => f && { ...f, categoriaNova: e.target.value })} />
-                )}
+                <p className="text-[11px] text-muted-foreground mt-1">
+                  Ex.: período 01 a 30/09 + "Dias úteis" marca só segunda a sexta, ignorando sábados e domingos.
+                </p>
+              </div>
+              <div className="md:col-span-2">
+                <Label>Categoria(s)</Label>
+                <div className="mt-1 space-y-1.5 border rounded-md p-2.5">
+                  {categoriasPresentes.map((c) => (
+                    <label key={c} className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                      <Checkbox checked={form.categorias.includes(c)} onCheckedChange={() => toggleCategoria(c)} />
+                      <span className={`h-2 w-2 rounded-full ${corCategoria(c)}`} /> {c}
+                    </label>
+                  ))}
+                  <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                    <Checkbox checked={form.usarNovaCategoria} onCheckedChange={(v) => setForm((f) => f && { ...f, usarNovaCategoria: !!v })} />
+                    + Outra categoria...
+                  </label>
+                  {form.usarNovaCategoria && (
+                    <Input placeholder="Nome da categoria" value={form.categoriaNova} onChange={(e) => setForm((f) => f && { ...f, categoriaNova: e.target.value })} />
+                  )}
+                </div>
               </div>
               <div className="md:col-span-2">
                 <Label>Linha afetada</Label>
