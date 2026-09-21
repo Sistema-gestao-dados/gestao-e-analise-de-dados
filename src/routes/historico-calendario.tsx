@@ -257,25 +257,33 @@ function CalendarioPage() {
   }
 
   // Chuva histórica: Open-Meteo (reanálise ERA5), sem chave, cobre qualquer
-  // data passada. Marca "Tempo chuvoso" nos dias com precipitação >= limiar,
-  // por cidade selecionada.
+  // data passada. Marca "Tempo chuvoso" nos dias com precipitação >= limiar.
+  // Um dia com chuva em mais de uma cidade vira 1 evento só (não 1 por
+  // cidade), listando todas as cidades na descrição — evita ficar
+  // triplicado no calendário quando chove em Rio+Niterói+São Gonçalo junto.
   async function importarChuva() {
     if (!chuvaInicio || !chuvaFim) { toast.error("Informe o período"); return; }
     if (chuvaFim < chuvaInicio) { toast.error("Data fim não pode ser antes da data início"); return; }
     setImportandoChuva(true);
     let inseridos = 0, ignorados = 0;
     try {
+      const porDia = new Map<string, { cidade: string; mm: number }[]>();
       for (const cidade of CIDADES) {
         if (!chuvaCidades.has(cidade.nome)) continue;
         const dias = await buscarChuvaHistorica(cidade, chuvaInicio, chuvaFim);
         for (const d of dias) {
           if (d.mm < chuvaLimiar) continue;
-          const descricao = `${cidade.nome} — ${d.mm.toFixed(1)} mm no dia (fonte: Open-Meteo/ERA5)`;
-          const jaExiste = eventos.some((e) => e.categoria.toLowerCase() === "tempo chuvoso" && e.data_inicio === d.data && (e.descricao ?? "").includes(cidade.nome));
-          if (jaExiste) { ignorados += 1; continue; }
-          await insertCalendarioEvento({ data_inicio: d.data, data_fim: d.data, dia_tipo: null, categoria: "Tempo chuvoso", linha: null, descricao });
-          inseridos += 1;
+          const arr = porDia.get(d.data) ?? [];
+          arr.push({ cidade: cidade.nome, mm: d.mm });
+          porDia.set(d.data, arr);
         }
+      }
+      for (const [data, cidadesDoDia] of porDia) {
+        const jaExiste = eventos.some((e) => e.categoria.toLowerCase() === "tempo chuvoso" && e.data_inicio === data && e.data_fim === data);
+        if (jaExiste) { ignorados += 1; continue; }
+        const descricao = `${cidadesDoDia.map((c) => `${c.cidade} (${c.mm.toFixed(1)}mm)`).join(", ")} — fonte: Open-Meteo/ERA5`;
+        await insertCalendarioEvento({ data_inicio: data, data_fim: data, dia_tipo: null, categoria: "Tempo chuvoso", linha: null, descricao });
+        inseridos += 1;
       }
       void logAudit({ action: "import", entity: "calendario_eventos", details: { tipo: "chuva", periodo: [chuvaInicio, chuvaFim], limiar: chuvaLimiar, inseridos, ignorados } });
       qc.invalidateQueries({ queryKey: ["calendario-eventos"] });
