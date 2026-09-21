@@ -3,8 +3,12 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import {
   fetchCalendarioEventos, insertCalendarioEvento, updateCalendarioEvento, deleteCalendarioEvento,
+  fetchCategoriaCores, salvarCategoriaCor,
   expandirPorDia, corCategoria, CATEGORIAS_BASE, DIA_TIPO_OPTIONS, DIA_TIPO_TODOS, type CalendarioEvento,
 } from "@/lib/calendario";
+import {
+  buscarFeriadosNacionais, buscarChuvaHistorica, CIDADES, FERIADOS_MUNICIPAIS,
+} from "@/lib/calendario-importar";
 import { fetchLinhas } from "@/lib/data";
 import { logAudit } from "@/lib/audit";
 import { useAuditView } from "@/lib/use-audit-view";
@@ -18,7 +22,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { ArrowLeft, ChevronLeft, ChevronRight, Plus, Pencil, Trash2, CalendarDays } from "lucide-react";
+import { ArrowLeft, ChevronLeft, ChevronRight, Plus, Pencil, Trash2, CalendarDays, Palette, CloudRain, PartyPopper, Loader2 } from "lucide-react";
 
 export const Route = createFileRoute("/historico-calendario")({
   head: () => ({ meta: [{ title: "Calendário de Informações — Gestão e Análise de Dados" }] }),
@@ -75,8 +79,10 @@ function CalendarioPage() {
   const qc = useQueryClient();
   const eventosQ = useQuery({ queryKey: ["calendario-eventos"], queryFn: fetchCalendarioEventos });
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
+  const coresQ = useQuery({ queryKey: ["calendario-categoria-cor"], queryFn: fetchCategoriaCores });
   const eventos = eventosQ.data ?? [];
   const linhas = linhasQ.data ?? [];
+  const coresMap = coresQ.data ?? new Map<string, string>();
 
   const [fLinha, setFLinha] = useState("__all");
   const [mesRef, setMesRef] = useState(() => { const d = new Date(); d.setDate(1); return d; });
@@ -84,6 +90,18 @@ function CalendarioPage() {
   const [form, setForm] = useState<FormState | null>(null);
   const [saving, setSaving] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState<CalendarioEvento | null>(null);
+  const [showCores, setShowCores] = useState(false);
+  const [showFeriados, setShowFeriados] = useState(false);
+  const [showChuva, setShowChuva] = useState(false);
+  const [feriadoAno, setFeriadoAno] = useState(() => new Date().getFullYear());
+  const [feriadoNacionalOn, setFeriadoNacionalOn] = useState(true);
+  const [feriadosMunicipaisOn, setFeriadosMunicipaisOn] = useState<Set<number>>(new Set(FERIADOS_MUNICIPAIS.map((_, i) => i)));
+  const [importandoFeriados, setImportandoFeriados] = useState(false);
+  const [chuvaInicio, setChuvaInicio] = useState("");
+  const [chuvaFim, setChuvaFim] = useState("");
+  const [chuvaLimiar, setChuvaLimiar] = useState(20);
+  const [chuvaCidades, setChuvaCidades] = useState<Set<string>>(new Set(CIDADES.map((c) => c.nome)));
+  const [importandoChuva, setImportandoChuva] = useState(false);
 
   const eventosVisiveis = useMemo(
     () => (fLinha === "__all" ? eventos : eventos.filter((e) => !e.linha || e.linha === fLinha)),
@@ -191,6 +209,85 @@ function CalendarioPage() {
     }
   }
 
+  async function salvarCor(categoria: string, cor: string) {
+    try {
+      await salvarCategoriaCor(categoria, cor);
+      qc.invalidateQueries({ queryKey: ["calendario-categoria-cor"] });
+    } catch (e: any) {
+      toast.error("Erro ao salvar cor", { description: e?.message ?? "erro" });
+    }
+  }
+
+  // Feriados nacionais vêm da BrasilAPI (fonte pública, atualizada). Os 3
+  // municipais foram pesquisados manualmente (ver src/lib/calendario-importar.ts)
+  // e o usuário confirma/desmarca cada um antes de importar — não é um feed
+  // automático confiável como o nacional.
+  async function importarFeriados() {
+    setImportandoFeriados(true);
+    let inseridos = 0, ignorados = 0;
+    try {
+      if (feriadoNacionalOn) {
+        const lista = await buscarFeriadosNacionais(feriadoAno);
+        for (const f of lista) {
+          const jaExiste = eventos.some((e) => e.categoria.toLowerCase() === "feriado nacional" && e.data_inicio === f.data && e.data_fim === f.data);
+          if (jaExiste) { ignorados += 1; continue; }
+          await insertCalendarioEvento({ data_inicio: f.data, data_fim: f.data, dia_tipo: null, categoria: "Feriado Nacional", linha: null, descricao: f.nome });
+          inseridos += 1;
+        }
+      }
+      for (let i = 0; i < FERIADOS_MUNICIPAIS.length; i++) {
+        if (!feriadosMunicipaisOn.has(i)) continue;
+        const fm = FERIADOS_MUNICIPAIS[i];
+        const data = `${feriadoAno}-${String(fm.mes).padStart(2, "0")}-${String(fm.dia).padStart(2, "0")}`;
+        const descricao = `${fm.cidade} — ${fm.nome} (${fm.fonte})`;
+        const jaExiste = eventos.some((e) => e.categoria.toLowerCase() === "feriado municipal" && e.data_inicio === data && (e.descricao ?? "").includes(fm.cidade));
+        if (jaExiste) { ignorados += 1; continue; }
+        await insertCalendarioEvento({ data_inicio: data, data_fim: data, dia_tipo: null, categoria: "Feriado Municipal", linha: null, descricao });
+        inseridos += 1;
+      }
+      void logAudit({ action: "import", entity: "calendario_eventos", details: { tipo: "feriados", ano: feriadoAno, inseridos, ignorados } });
+      qc.invalidateQueries({ queryKey: ["calendario-eventos"] });
+      toast.success(`${inseridos} feriado(s) importado(s)${ignorados ? `, ${ignorados} já existiam` : ""}`);
+      setShowFeriados(false);
+    } catch (e: any) {
+      toast.error("Erro ao importar feriados", { description: e?.message ?? "erro" });
+    } finally {
+      setImportandoFeriados(false);
+    }
+  }
+
+  // Chuva histórica: Open-Meteo (reanálise ERA5), sem chave, cobre qualquer
+  // data passada. Marca "Tempo chuvoso" nos dias com precipitação >= limiar,
+  // por cidade selecionada.
+  async function importarChuva() {
+    if (!chuvaInicio || !chuvaFim) { toast.error("Informe o período"); return; }
+    if (chuvaFim < chuvaInicio) { toast.error("Data fim não pode ser antes da data início"); return; }
+    setImportandoChuva(true);
+    let inseridos = 0, ignorados = 0;
+    try {
+      for (const cidade of CIDADES) {
+        if (!chuvaCidades.has(cidade.nome)) continue;
+        const dias = await buscarChuvaHistorica(cidade, chuvaInicio, chuvaFim);
+        for (const d of dias) {
+          if (d.mm < chuvaLimiar) continue;
+          const descricao = `${cidade.nome} — ${d.mm.toFixed(1)} mm no dia (fonte: Open-Meteo/ERA5)`;
+          const jaExiste = eventos.some((e) => e.categoria.toLowerCase() === "tempo chuvoso" && e.data_inicio === d.data && (e.descricao ?? "").includes(cidade.nome));
+          if (jaExiste) { ignorados += 1; continue; }
+          await insertCalendarioEvento({ data_inicio: d.data, data_fim: d.data, dia_tipo: null, categoria: "Tempo chuvoso", linha: null, descricao });
+          inseridos += 1;
+        }
+      }
+      void logAudit({ action: "import", entity: "calendario_eventos", details: { tipo: "chuva", periodo: [chuvaInicio, chuvaFim], limiar: chuvaLimiar, inseridos, ignorados } });
+      qc.invalidateQueries({ queryKey: ["calendario-eventos"] });
+      toast.success(`${inseridos} dia(s) de chuva forte importado(s)${ignorados ? `, ${ignorados} já existiam` : ""}`);
+      setShowChuva(false);
+    } catch (e: any) {
+      toast.error("Erro ao importar chuva histórica", { description: e?.message ?? "erro" });
+    } finally {
+      setImportandoChuva(false);
+    }
+  }
+
   const hojeKey = dkey(new Date());
   const eventosDoDiaSelecionado = diaSelecionado ? (porDia.get(dkey(diaSelecionado)) ?? []) : [];
 
@@ -205,7 +302,12 @@ function CalendarioPage() {
             rápido e não usar os dados daquele dia como referência pra reprogramação de linha.
           </p>
         </div>
-        <Button size="sm" onClick={() => abrirNovo(new Date())}><Plus className="h-4 w-4 mr-1" /> Novo evento</Button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button variant="outline" size="sm" onClick={() => setShowChuva(true)}><CloudRain className="h-4 w-4 mr-1" /> Importar chuva</Button>
+          <Button variant="outline" size="sm" onClick={() => setShowFeriados(true)}><PartyPopper className="h-4 w-4 mr-1" /> Importar feriados</Button>
+          <Button variant="outline" size="sm" onClick={() => setShowCores(true)}><Palette className="h-4 w-4 mr-1" /> Cores</Button>
+          <Button size="sm" onClick={() => abrirNovo(new Date())}><Plus className="h-4 w-4 mr-1" /> Novo evento</Button>
+        </div>
       </div>
 
       <Card className="shadow-[var(--shadow-card)]">
@@ -223,7 +325,7 @@ function CalendarioPage() {
           <div className="flex items-center gap-2 ml-auto flex-wrap">
             {categoriasPresentes.map((c) => (
               <span key={c} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <span className={`h-2.5 w-2.5 rounded-full ${corCategoria(c)}`} /> {c}
+                <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: corCategoria(c, coresMap) }} /> {c}
               </span>
             ))}
           </div>
@@ -263,7 +365,7 @@ function CalendarioPage() {
                   {evs.length > 0 && (
                     <div className="mt-1 flex flex-wrap gap-0.5">
                       {categoriasUnicas.slice(0, 4).map((c) => (
-                        <span key={c} className={`h-1.5 w-1.5 rounded-full ${corCategoria(c)}`} />
+                        <span key={c} className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: corCategoria(c, coresMap) }} />
                       ))}
                       {evs.length > 4 && <span className="text-[9px] text-muted-foreground">+{evs.length - 4}</span>}
                     </div>
@@ -284,7 +386,7 @@ function CalendarioPage() {
             <div className="divide-y divide-border">
               {eventosDoMes.map((e) => (
                 <div key={e.id} className="flex items-center gap-3 p-3 text-sm">
-                  <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${corCategoria(e.categoria)}`} />
+                  <span className="h-2.5 w-2.5 rounded-full shrink-0" style={{ backgroundColor: corCategoria(e.categoria, coresMap) }} />
                   <span className="text-muted-foreground whitespace-nowrap tabular-nums">
                     {fmtCurto(e.data_inicio)}{e.data_fim !== e.data_inicio ? ` – ${fmtCurto(e.data_fim)}` : ""}
                   </span>
@@ -311,7 +413,7 @@ function CalendarioPage() {
             {eventosDoDiaSelecionado.length === 0 && <p className="text-sm text-muted-foreground">Nenhum evento registrado.</p>}
             {eventosDoDiaSelecionado.map((e) => (
               <div key={e.id} className="flex items-start gap-2 border rounded-md p-2">
-                <span className={`h-2.5 w-2.5 rounded-full shrink-0 mt-1 ${corCategoria(e.categoria)}`} />
+                <span className="h-2.5 w-2.5 rounded-full shrink-0 mt-1" style={{ backgroundColor: corCategoria(e.categoria, coresMap) }} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-medium text-sm">{e.categoria}</span>
@@ -371,7 +473,7 @@ function CalendarioPage() {
                   {categoriasPresentes.map((c) => (
                     <label key={c} className="flex items-center gap-2 text-sm cursor-pointer select-none">
                       <Checkbox checked={form.categorias.includes(c)} onCheckedChange={() => toggleCategoria(c)} />
-                      <span className={`h-2 w-2 rounded-full ${corCategoria(c)}`} /> {c}
+                      <span className="h-2 w-2 rounded-full" style={{ backgroundColor: corCategoria(c, coresMap) }} /> {c}
                     </label>
                   ))}
                   <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
@@ -416,6 +518,127 @@ function CalendarioPage() {
             <Button variant="outline" onClick={() => setConfirmDelete(null)}>Cancelar</Button>
             <Button variant="destructive" onClick={excluir}>Excluir</Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showCores} onOpenChange={setShowCores}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Cores das categorias</DialogTitle>
+            <DialogDescription>Escolha a cor de cada categoria — vale pra todo mundo que usa o sistema.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 max-h-[50vh] overflow-y-auto">
+            {categoriasPresentes.map((c) => (
+              <div key={c} className="flex items-center justify-between gap-3 border rounded-md p-2">
+                <span className="text-sm">{c}</span>
+                <input
+                  type="color"
+                  value={corCategoria(c, coresMap)}
+                  onChange={(e) => salvarCor(c, e.target.value)}
+                  className="h-8 w-12 rounded border border-border cursor-pointer bg-transparent"
+                />
+              </div>
+            ))}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowCores(false)}>Fechar</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showFeriados} onOpenChange={(o) => !importandoFeriados && setShowFeriados(o)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Importar feriados</DialogTitle>
+            <DialogDescription>
+              Nacionais vêm de fonte pública (BrasilAPI), atualizada automaticamente. Os municipais
+              abaixo foram pesquisados manualmente — confira a lei/fonte antes de confiar 100%.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label>Ano</Label>
+              <Input type="number" value={feriadoAno} onChange={(e) => setFeriadoAno(Number(e.target.value) || feriadoAno)} className="w-32" />
+            </div>
+            <label className="flex items-center gap-2 text-sm cursor-pointer select-none">
+              <Checkbox checked={feriadoNacionalOn} onCheckedChange={(v) => setFeriadoNacionalOn(!!v)} />
+              Feriados nacionais (BrasilAPI)
+            </label>
+            <div className="space-y-1.5 border rounded-md p-2.5">
+              <p className="text-xs font-medium text-muted-foreground mb-1">Feriados municipais (data fixa, ano {feriadoAno})</p>
+              {FERIADOS_MUNICIPAIS.map((fm, i) => (
+                <label key={fm.cidade} className="flex items-start gap-2 text-sm cursor-pointer select-none">
+                  <Checkbox
+                    checked={feriadosMunicipaisOn.has(i)}
+                    onCheckedChange={(v) => setFeriadosMunicipaisOn((prev) => {
+                      const next = new Set(prev);
+                      if (v) next.add(i); else next.delete(i);
+                      return next;
+                    })}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <strong>{fm.cidade}</strong> — {String(fm.dia).padStart(2, "0")}/{String(fm.mes).padStart(2, "0")}: {fm.nome}
+                    <br /><span className="text-[11px] text-muted-foreground">{fm.fonte}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowFeriados(false)} disabled={importandoFeriados}>Cancelar</Button>
+            <Button onClick={importarFeriados} disabled={importandoFeriados}>
+              {importandoFeriados ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Importando...</> : "Importar"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showChuva} onOpenChange={(o) => !importandoChuva && setShowChuva(o)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Importar chuva histórica</DialogTitle>
+            <DialogDescription>
+              Precipitação diária via Open-Meteo (reanálise ERA5, sem cadastro) — cobre praticamente
+              qualquer data passada. Dias com chuva acima do limiar viram evento "Tempo chuvoso".
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label>Data início</Label>
+              <Input type="date" value={chuvaInicio} onChange={(e) => setChuvaInicio(e.target.value)} />
+            </div>
+            <div>
+              <Label>Data fim</Label>
+              <Input type="date" value={chuvaFim} onChange={(e) => setChuvaFim(e.target.value)} />
+            </div>
+            <div className="col-span-2">
+              <Label>Limiar de chuva forte (mm no dia)</Label>
+              <Input type="number" min={1} value={chuvaLimiar} onChange={(e) => setChuvaLimiar(Number(e.target.value) || 1)} className="w-32" />
+            </div>
+            <div className="col-span-2 space-y-1.5">
+              <Label>Cidades</Label>
+              {CIDADES.map((cidade) => (
+                <label key={cidade.nome} className="flex items-center gap-2 text-sm cursor-pointer select-none">
+                  <Checkbox
+                    checked={chuvaCidades.has(cidade.nome)}
+                    onCheckedChange={(v) => setChuvaCidades((prev) => {
+                      const next = new Set(prev);
+                      if (v) next.add(cidade.nome); else next.delete(cidade.nome);
+                      return next;
+                    })}
+                  />
+                  {cidade.nome}
+                </label>
+              ))}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowChuva(false)} disabled={importandoChuva}>Cancelar</Button>
+            <Button onClick={importarChuva} disabled={importandoChuva}>
+              {importandoChuva ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Buscando...</> : "Buscar e importar"}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

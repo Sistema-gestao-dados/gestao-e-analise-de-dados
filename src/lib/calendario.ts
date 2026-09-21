@@ -57,24 +57,48 @@ export async function deleteCalendarioEvento(id: string): Promise<void> {
 }
 
 // Categorias sugeridas — texto livre por trás (igual dia tipo), então o
-// usuário pode digitar qualquer outra em "+ Outra categoria...".
-export const CATEGORIAS_BASE = ["Tempo chuvoso", "Obras na via", "Redução operacional"];
+// usuário pode digitar qualquer outra em "+ Outra categoria...". As duas
+// últimas são preenchidas pelos botões de importação automática (feriados).
+export const CATEGORIAS_BASE = ["Tempo chuvoso", "Obras na via", "Redução operacional", "Feriado Nacional", "Feriado Municipal"];
 
 // Dia tipo do evento — mesmo vocabulário usado no resto do sistema, mas
 // aqui é interpretado por DIA DA SEMANA (seg-sex/sáb/dom), não por cadastro.
 export const DIA_TIPO_OPTIONS = ["Dias úteis", "Sábado", "Domingo"];
 export const DIA_TIPO_TODOS = "__todos";
 
-const CATEGORIA_COR: Record<string, string> = {
-  "tempo chuvoso": "bg-blue-500",
-  "obras na via": "bg-orange-500",
-  "redução operacional": "bg-purple-500",
+// Cor padrão (hex) de cada categoria sugerida — usada só até o usuário
+// trocar em "Cores" (persistido em calendario_categoria_cor). Cor é hex
+// (não classe Tailwind) porque precisa poder ser qualquer valor escolhido
+// em runtime num <input type="color">, e o Tailwind não gera classes pra
+// cores arbitrárias que só existem em dado vindo do banco.
+const CATEGORIA_COR_PADRAO: Record<string, string> = {
+  "tempo chuvoso": "#3b82f6",
+  "obras na via": "#f97316",
+  "redução operacional": "#a855f7",
+  "feriado nacional": "#16a34a",
+  "feriado municipal": "#0d9488",
 };
+const COR_FALLBACK = "#64748b";
 
-/** Cor (classe Tailwind bg-*) pra bolinha/badge da categoria — as 3
- * sugeridas têm cor fixa, qualquer outra cai num cinza neutro. */
-export function corCategoria(categoria: string): string {
-  return CATEGORIA_COR[categoria.trim().toLowerCase()] ?? "bg-slate-500";
+/** Cor (hex) pra bolinha/badge da categoria — `overrides` é o mapa vindo de
+ * `calendario_categoria_cor` (customização do usuário); sem override, cai
+ * na cor padrão sugerida; sem nenhuma das duas, cinza neutro. */
+export function corCategoria(categoria: string, overrides?: Map<string, string>): string {
+  const key = categoria.trim().toLowerCase();
+  return overrides?.get(key) ?? CATEGORIA_COR_PADRAO[key] ?? COR_FALLBACK;
+}
+
+export async function fetchCategoriaCores(): Promise<Map<string, string>> {
+  const { data, error } = await db().from("calendario_categoria_cor").select("categoria,cor");
+  if (error) throw error;
+  return new Map(((data ?? []) as { categoria: string; cor: string }[]).map((r) => [r.categoria.trim().toLowerCase(), r.cor]));
+}
+
+export async function salvarCategoriaCor(categoria: string, cor: string): Promise<void> {
+  const { error } = await db()
+    .from("calendario_categoria_cor")
+    .upsert({ categoria: categoria.trim().toLowerCase(), cor }, { onConflict: "categoria" });
+  if (error) throw error;
 }
 
 /** Um dia bate com o dia_tipo do evento? null = todos os dias do período;
