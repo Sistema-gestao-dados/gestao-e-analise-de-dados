@@ -30,6 +30,7 @@ export const MODULE_GROUPS: ModuleGroup[] = [
     label: "Histórico de Programação",
     items: [
       { key: "historico_reprogramacao", label: "Histórico de Reprogramação" },
+      { key: "calendario_informacoes", label: "Calendário de Informações" },
       { key: "importacao_historico_reprogramacao", label: "Importação Reprogramação" },
     ],
   },
