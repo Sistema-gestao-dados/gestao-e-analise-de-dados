@@ -101,10 +101,16 @@ export function valorHora(p: ParametrosCusto): number {
  * horários de turno podem vir ajustados com +1440 (ver ajustarTurno em
  * jornada.ts). */
 export function minutosNoturnos(inicioMin: number, fimMin: number, p: ParametrosCusto): number {
+  // Só soma +1440 no fim quando ele REALMENTE cruza meia-noite (ex.: 22h→5h,
+  // fim numericamente menor que início). Se alguém configurar os dois campos
+  // invertidos ou uma janela do mesmo dia (fim >= início, ex.: 10h→14h por
+  // engano), forçar sempre "fim = dia seguinte" desloca a janela toda um dia
+  // inteiro e o adicional noturno passa a não bater com nenhum turno real.
+  const cruzaMeiaNoite = p.noturnoFimMin <= p.noturnoInicioMin;
   let total = 0;
   for (const offset of [-1440, 0, 1440]) {
     const nInicio = p.noturnoInicioMin + offset;
-    const nFim = p.noturnoFimMin + 1440 + offset; // fim (05:00) é sempre no "dia seguinte" ao início (22:00)
+    const nFim = (cruzaMeiaNoite ? p.noturnoFimMin + 1440 : p.noturnoFimMin) + offset;
     const s = Math.max(inicioMin, nInicio);
     const e = Math.min(fimMin, nFim);
     if (e > s) total += e - s;
