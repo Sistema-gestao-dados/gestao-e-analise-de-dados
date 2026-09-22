@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
+import { fetchViagensValoresDistintos } from "@/lib/viagens";
 import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
 import { buildEmpresaOverrideMap, resolveGrupoViagem, resolveUnidadeViagem } from "@/lib/empresa-estacao";
 import { CrudTable, type ColumnDef } from "@/components/crud-table";
@@ -84,40 +84,16 @@ function ViagensPage() {
     ])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
   }), [linhas, empresaEstacao]);
 
-  // Valores distintos de Dia Tipo, Versão e Arquivo direto da tabela (não
-  // têm cadastro próprio, então precisam vir dos dados já importados) — Dia
+  // Valores distintos de Dia Tipo, Versão e Arquivo — calculados no Postgres
+  // via RPC (ver migração viagens_valores_distintos), não baixando a tabela
+  // inteira uma segunda vez só pra montar essas 3 listas no navegador. Dia
   // Tipo em especial não pode ser hardcoded nos 3 básicos, porque inclui
   // qualquer dia tipo custom criado na importação (feriados etc.).
-  const distintosQ = useQuery({
-    queryKey: ["viagens-distintos"],
-    queryFn: async () => {
-      const diasTipo = new Set<string>();
-      const versoes = new Set<string>();
-      const arquivos = new Set<string>();
-      const pageSize = 1000;
-      let from = 0;
-      for (;;) {
-        const { data, error } = await (supabase as any)
-          .from("viagens")
-          .select("tipo_operacao, versao_programacao, arquivo")
-          .range(from, from + pageSize - 1);
-        if (error) throw error;
-        const chunk = (data ?? []) as { tipo_operacao: string | null; versao_programacao: string | null; arquivo: string | null }[];
-        for (const r of chunk) {
-          if (r.tipo_operacao) diasTipo.add(r.tipo_operacao);
-          if (r.versao_programacao) versoes.add(r.versao_programacao);
-          if (r.arquivo) arquivos.add(r.arquivo);
-        }
-        if (chunk.length < pageSize) break;
-        from += pageSize;
-      }
-      return { diasTipo: Array.from(diasTipo).sort(), versoes: Array.from(versoes).sort(), arquivos: Array.from(arquivos).sort() };
-    },
-  });
+  const distintosQ = useQuery({ queryKey: ["viagens-valores-distintos"], queryFn: fetchViagensValoresDistintos });
 
   const filters = useMemo(() => [
     { key: "linha", label: "Linha", options: () => (linhasQ.data ?? []).map((l) => l.linha).sort() },
-    { key: "tipo_operacao", label: "Dia Tipo", options: () => distintosQ.data?.diasTipo ?? [] },
+    { key: "tipo_operacao", label: "Dia Tipo", options: () => distintosQ.data?.tipos_operacao ?? [] },
     { key: "tipo_servico", label: "Tipo Serv.", options: () => ["TU", "DIR"] },
     { key: "versao_programacao", label: "Versão", options: () => distintosQ.data?.versoes ?? [] },
     { key: "tipo_movimento", label: "Movimento", options: () => ["Soltura", "Comercial", "Recolha", "Deslocamento"] },
