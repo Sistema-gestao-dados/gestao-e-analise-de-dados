@@ -12,7 +12,7 @@ import { fetchDiaTipoHeranca, buildDiaTipoHerancaMap } from "@/components/dia-ti
 import { fetchLinhas, fetchKm, fetchMulti, fetchEmpresaEstacao, type Linha, type ParametroMulti } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import {
-  buildServiceUnits, aggregateByLinha, dominantLinha,
+  buildServiceUnits, aggregateByLinha, aggregateByGroup, dominantLinha,
   type ViagemLite, type AggRow, type CriterioLinha, type ServiceUnit,
 } from "@/lib/resumo";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
@@ -224,14 +224,22 @@ function fmtDelta(n: number, fmt: (n: number) => string): string {
 }
 
 /**
- * Hora extra PROGRAMADA por linha: soma dos minutos excedentes ao limite de
- * jornada (DIR 7h / TU 8h24) de cada serviço, alocada na linha do serviço.
+ * Hora extra PROGRAMADA por linha (ou por grupo de linha, quando `keyOf` é
+ * passado): soma dos minutos excedentes ao limite de jornada (DIR 7h / TU
+ * 8h24) de cada serviço, alocada na linha (ou grupo) do serviço.
  */
-function withHE(rows: AggRow[], viagens: ViagemLite[], linhas: Linha[]): AggRow[] {
+function withHE(
+  rows: AggRow[],
+  viagens: ViagemLite[],
+  linhas: Linha[],
+  keyOf?: (linha: string, dia: string) => string,
+): AggRow[] {
   const he = new Map<string, number>();
   for (const j of buildJornadas(viagens, linhas)) {
     if (j.incompleto || j.horasExtras <= 0) continue;
-    he.set(j.linha, (he.get(j.linha) ?? 0) + j.horasExtras);
+    const dia = j.vehicleKey.split("||")[1] ?? "";
+    const k = keyOf ? keyOf(j.linha, dia) : j.linha;
+    he.set(k, (he.get(k) ?? 0) + j.horasExtras);
   }
   return rows.map((r) => ({ ...r, heMin: he.get(r.groupKey) ?? 0 }));
 }
@@ -285,6 +293,9 @@ export function ComparativoView() {
   const [applied, setApplied] = useState<{ a: Filters; p: Filters } | null>(null);
   // FLAG: regra de contagem de serviço/frota por linha
   const [criterio, setCriterio] = usePersistentState<CriterioLinha>("comparativo.criterio", "predominancia");
+  // FLAG: exibir o comparativo agrupado por Grupo de Linha (soma todas as
+  // linhas do grupo, por dia) em vez de detalhado por linha individual.
+  const [agruparPorGrupo, setAgruparPorGrupo] = usePersistentState("comparativo.agruparPorGrupo", false);
 
   // Métricas visíveis (persistida).
   const [visibleMetricsArr, setVisibleMetricsArr] = usePersistentState<string[]>(
@@ -331,6 +342,18 @@ export function ComparativoView() {
     return grupoMap.get(`${linha}|${tipoDia}`.toLowerCase()) ?? `__sem_grupo__${linha}`;
   }
 
+  // Agrupamento pro modo "Agrupar por Grupo de Linha": cada UNIDADE de
+  // serviço é alocada à linha dominante (mesma regra do modo por linha) e
+  // depois ao Grupo de Linha (grupo_du) dessa linha no dia tipo da própria
+  // unidade — soma todas as linhas do grupo, igual ao "Resumo por Linha".
+  function groupOfGrupo(u: ServiceUnit) {
+    const linha = dominantLinha(u, criterio);
+    const key = grupoDaLinha(linha, u.tipo_operacao);
+    const label = key.startsWith("__sem_grupo__") ? `(sem grupo) ${linha}` : key;
+    const ord = ordemMap.get(linha);
+    return { key, label, order: ord == null ? undefined : ord };
+  }
+
   // Decide, por GRUPO DE LINHA (não linha isolada): se o grupo inteiro não
   // teve NENHUMA viagem na Proposta 2 (Feriado), assume que ninguém criou
   // programação especial pra ele e repete o pai inteiro. Se o grupo TEVE
@@ -362,25 +385,35 @@ export function ComparativoView() {
   // tabela principal (evita misturar viagens de linhas diferentes no
   // mesmo cálculo de frota/serviço, que já causou frota errada antes).
   const paiRows = useMemo(() => {
-    if (!applied || !linhasRepetidas.size || !paiFiltroSet) return [] as AggRow[];
+    const chaves = agruparPorGrupo ? gruposRepetidos : linhasRepetidas;
+    if (!applied || !chaves.size || !paiFiltroSet) return [] as AggRow[];
     const f = paiViagens;
     const fOrigem = applyFiltersSemLinha(baseFor(paiFiltroSet), paiFiltroSet, linhaMap, grupoMap, empresaOverrideMap);
-    return withHE(aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio), f, linhas);
-  }, [applied, linhasRepetidas, paiFiltroSet, paiViagens, baseFor, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap]);
+    const rows = agruparPorGrupo
+      ? aggregateByGroup(buildServiceUnits(f, kmFn), groupOfGrupo)
+      : aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio);
+    return withHE(rows, f, linhas, agruparPorGrupo ? grupoDaLinha : undefined);
+  }, [applied, linhasRepetidas, gruposRepetidos, paiFiltroSet, paiViagens, baseFor, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap, agruparPorGrupo]);
 
   const atualRows = useMemo(() => {
     if (!applied) return [] as AggRow[];
     const f = atualFiltradoBase;
     const fOrigem = applyFiltersSemLinha(baseFor(applied.a), applied.a, linhaMap, grupoMap, empresaOverrideMap);
-    return withHE(aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio), f, linhas);
-  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap, atualFiltradoBase]);
+    const rows = agruparPorGrupo
+      ? aggregateByGroup(buildServiceUnits(f, kmFn), groupOfGrupo)
+      : aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio);
+    return withHE(rows, f, linhas, agruparPorGrupo ? grupoDaLinha : undefined);
+  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap, atualFiltradoBase, agruparPorGrupo]);
 
   const propostaRows = useMemo(() => {
     if (!applied) return [] as AggRow[];
     const f = propostaFiltradoBase;
     const fOrigem = applyFiltersSemLinha(baseFor(applied.p), applied.p, linhaMap, grupoMap, empresaOverrideMap);
-    return withHE(aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio), f, linhas);
-  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap, propostaFiltradoBase]);
+    const rows = agruparPorGrupo
+      ? aggregateByGroup(buildServiceUnits(f, kmFn), groupOfGrupo)
+      : aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio);
+    return withHE(rows, f, linhas, agruparPorGrupo ? grupoDaLinha : undefined);
+  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap, propostaFiltradoBase, agruparPorGrupo]);
 
 
   const basesAplicadas = useMemo(() => {
@@ -502,12 +535,24 @@ export function ComparativoView() {
   const custoPorLinha = useMemo(() => {
     const atual = new Map<string, number>();
     const proposta = new Map<string, number>();
+    // Precisa bater com o `linha` exibido na tabela (groupLabel), não com o
+    // groupKey cru — "sem grupo" vira "(sem grupo) X" no rótulo exibido.
+    const chave = (j: { linha: string; vehicleKey: string }) => {
+      if (!agruparPorGrupo) return j.linha;
+      const raw = grupoDaLinha(j.linha, j.vehicleKey.split("||")[1] ?? "");
+      return raw.startsWith("__sem_grupo__") ? `(sem grupo) ${j.linha}` : raw;
+    };
     if (custoParams) {
-      for (const j of buildJornadas(basesAplicadas.atual, linhas)) atual.set(j.linha, (atual.get(j.linha) ?? 0) + custoServico(j, custoParams));
-      for (const j of buildJornadas(basesAplicadas.proposta, linhas)) proposta.set(j.linha, (proposta.get(j.linha) ?? 0) + custoServico(j, custoParams));
+      for (const j of buildJornadas(basesAplicadas.atual, linhas)) { const k = chave(j); atual.set(k, (atual.get(k) ?? 0) + custoServico(j, custoParams)); }
+      for (const j of buildJornadas(basesAplicadas.proposta, linhas)) { const k = chave(j); proposta.set(k, (proposta.get(k) ?? 0) + custoServico(j, custoParams)); }
     }
     return { atual, proposta };
-  }, [basesAplicadas, linhas, custoParams]);
+  }, [basesAplicadas, linhas, custoParams, agruparPorGrupo]);
+
+  // Em modo "por linha", a chave de repetição é a linha; em modo "por grupo
+  // de linha", é o grupo inteiro (gruposRepetidos já é calculado acima pela
+  // mesma regra: grupo sem NENHUM dado na Proposta 2 repete o pai).
+  const chavesRepetidas = agruparPorGrupo ? gruposRepetidos : linhasRepetidas;
 
   const merged = useMemo(() => {
     const map = new Map<string, { linha: string; order: string; a: AggRow | null; p: AggRow | null }>();
@@ -519,14 +564,14 @@ export function ComparativoView() {
       if (cur) cur.p = r;
       else map.set(r.groupKey, { linha: r.groupLabel, order: r.groupOrder, a: null, p: r });
     }
-    // Linha decidida pra "repetir" (grupo de linha inteiro sem dado na
-    // Proposta 2): usa a linha calculada a partir do PAI registrado na
-    // importação (não da seleção de "Atual" na tela, que pode ser outra
-    // coisa) — evita misturar viagens de linhas diferentes no mesmo
-    // cálculo de frota/serviço (o que já causou frota errada antes).
-    const paiPorLinha = new Map(paiRows.map((r) => [r.groupKey, r]));
-    for (const chave of linhasRepetidas) {
-      const paiRow = paiPorLinha.get(chave);
+    // Linha (ou grupo) decidida pra "repetir" (sem dado na Proposta 2): usa
+    // o cálculo a partir do PAI registrado na importação (não da seleção de
+    // "Atual" na tela, que pode ser outra coisa) — evita misturar viagens de
+    // linhas diferentes no mesmo cálculo de frota/serviço (o que já causou
+    // frota errada antes).
+    const paiPorChave = new Map(paiRows.map((r) => [r.groupKey, r]));
+    for (const chave of chavesRepetidas) {
+      const paiRow = paiPorChave.get(chave);
       if (!paiRow) continue;
       const cur = map.get(chave);
       if (cur) cur.p = paiRow;
@@ -547,7 +592,7 @@ export function ComparativoView() {
       );
     }
     return arr;
-  }, [atualRows, propostaRows, onlyDiff, ordenarPor, unidadePorLinha, linhasRepetidas, paiRows]);
+  }, [atualRows, propostaRows, onlyDiff, ordenarPor, unidadePorLinha, chavesRepetidas, paiRows]);
 
   const totals = useMemo(() => {
     const base = { a: {} as Record<string, number>, p: {} as Record<string, number> };
@@ -577,7 +622,7 @@ export function ComparativoView() {
   const loading = viagensQ.isLoading || linhasQ.isLoading || kmQ.isLoading || multiQ.isLoading;
 
   function buildExportRows() {
-    const header1: string[] = ["Linha"];
+    const header1: string[] = [agruparPorGrupo ? "Grupo de Linha" : "Linha"];
     const header2: string[] = [""];
     for (const m of shownMetrics) {
       header1.push(m.label, "", "", ...(showPct ? [""] : []));
@@ -620,7 +665,7 @@ export function ComparativoView() {
     const wb = XLSX.utils.book_new();
     const aoa: (string | number)[][] = [
       ["RELATÓRIO COMPARATIVO — ATUAL vs PROPOSTA"],
-      [`Gerado em ${new Date().toLocaleString("pt-BR")} — ${merged.length} linha(s)`],
+      [`Gerado em ${new Date().toLocaleString("pt-BR")} — ${merged.length} ${agruparPorGrupo ? "grupo(s)" : "linha(s)"}`],
       [],
       header1,
       header2,
@@ -657,8 +702,8 @@ export function ComparativoView() {
         f.versao !== "__all" ? `Versão ${f.versao}` : null,
       ].filter(Boolean).join(" · ");
       const subtitleTxt = applied
-        ? `Atual: ${periodoTxt(applied.a)}  →  Proposta: ${periodoTxt(applied.p)} — ${merged.length} linha(s)`
-        : `${merged.length} linha(s) — mesma base do Resumo por Linha`;
+        ? `Atual: ${periodoTxt(applied.a)}  →  Proposta: ${periodoTxt(applied.p)} — ${merged.length} ${agruparPorGrupo ? "grupo(s)" : "linha(s)"}`
+        : `${merged.length} ${agruparPorGrupo ? "grupo(s)" : "linha(s)"} — mesma base do Resumo por Linha`;
 
       function drawHeader(d: InstanceType<typeof jsPDF>) {
         d.setTextColor(37, 99, 235); d.setFont("helvetica", "bold"); d.setFontSize(12);
@@ -763,6 +808,10 @@ export function ComparativoView() {
             <Checkbox checked={somenteAtivos} onCheckedChange={(v) => setSomenteAtivos(!!v)} className="h-3.5 w-3.5" />
             Somente ativos
           </label>
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer" title="Em vez de detalhar linha por linha, soma todas as linhas de cada Grupo de Linha (grupo_du) e mostra o comparativo por grupo.">
+            <Checkbox checked={agruparPorGrupo} onCheckedChange={(v) => setAgruparPorGrupo(!!v)} className="h-3.5 w-3.5" />
+            Agrupar por Grupo de Linha
+          </label>
 
           <Button size="sm" onClick={() => setApplied({ a: atualFilters, p: propostaFilters })} disabled={loading}>
             Consultar
@@ -795,7 +844,7 @@ export function ComparativoView() {
       <div className="print-only">
         <div style={{ fontWeight: 700, fontSize: "14pt", color: "#2563eb" }}>RELATÓRIO COMPARATIVO — ATUAL vs PROPOSTA</div>
         <div style={{ fontSize: "8pt", color: "#555", marginBottom: "6pt" }}>
-          Gerado em {new Date().toLocaleString("pt-BR")} — {merged.length} linha(s)
+          Gerado em {new Date().toLocaleString("pt-BR")} — {merged.length} {agruparPorGrupo ? "grupo(s)" : "linha(s)"}
         </div>
         <table className="print-table">
           <thead>
@@ -912,8 +961,8 @@ export function ComparativoView() {
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-semibold flex items-center gap-2">
             <ArrowUpDown className="h-4 w-4" />
-            Comparativo por Linha
-            <Badge variant="outline" className="text-[10px]">{merged.length} linha(s)</Badge>
+            Comparativo por {agruparPorGrupo ? "Grupo de Linha" : "Linha"}
+            <Badge variant="outline" className="text-[10px]">{merged.length} {agruparPorGrupo ? "grupo(s)" : "linha(s)"}</Badge>
             <Badge variant="secondary" className="text-[10px]">Atual: {atualRows.length}</Badge>
             <Badge variant="secondary" className="text-[10px]">Proposta: {propostaRows.length}</Badge>
           </CardTitle>
@@ -932,7 +981,7 @@ export function ComparativoView() {
               <Table className="text-xs">
                 <TableHeader>
                   <TableRow className="h-8 border-b-2">
-                    <TableHead rowSpan={2} className="px-2 py-1 align-bottom">Linha</TableHead>
+                    <TableHead rowSpan={2} className="px-2 py-1 align-bottom">{agruparPorGrupo ? "Grupo de Linha" : "Linha"}</TableHead>
                     {shownMetrics.map((m) => (
                       <TableHead
                         key={m.key as string}
@@ -972,7 +1021,7 @@ export function ComparativoView() {
                     <TableRow key={linha} className="h-8">
                       <TableCell className="px-2 py-1 font-medium">
                         {linha}
-                        {linhasRepetidas.has(linha) && (
+                        {chavesRepetidas.has(linha) && (
                           <Badge variant="outline" className="ml-1.5 text-[9px] px-1 py-0 h-4 align-middle bg-amber-500/10 text-amber-700 border-amber-500/30">repetido</Badge>
                         )}
                       </TableCell>
@@ -1052,18 +1101,28 @@ export function ComparativoView() {
         </CardContent>
       </Card>
 
-      <ResumoComparativoTable titulo="Resumo Gerencial por Empresa" rows={resumoPorEmpresa} />
-      <ResumoComparativoTable titulo="Resumo Gerencial por Grupo" rows={resumoPorGrupo} />
-      <ResumoComparativoTable titulo="Resumo Gerencial por Unidade" rows={resumoPorUnidade} />
+      <ResumoComparativoTable titulo="Resumo Gerencial por Empresa" rows={resumoPorEmpresa} showPct={showPct} />
+      <ResumoComparativoTable titulo="Resumo Gerencial por Grupo" rows={resumoPorGrupo} showPct={showPct} />
+      <ResumoComparativoTable titulo="Resumo Gerencial por Unidade" rows={resumoPorUnidade} showPct={showPct} />
       </div>
     </div>
   );
 }
 
 type BreakdownVal = { servicos: number; frota: number; partidas: number; km: number; custo: number };
-function ResumoComparativoTable({ titulo, rows }: { titulo: string; rows: { chave: string; atual: BreakdownVal; proposta: BreakdownVal }[] }) {
+
+const BREAKDOWN_METRICS: { key: keyof BreakdownVal; label: string; fmt: (n: number) => string }[] = [
+  { key: "servicos", label: "Serviços", fmt: fmtInt },
+  { key: "frota", label: "Frota", fmt: fmtInt },
+  { key: "partidas", label: "Partidas", fmt: fmtInt },
+  { key: "km", label: "KM", fmt: (n) => fmtKm(n) },
+];
+
+function ResumoComparativoTable({ titulo, rows, showPct }: { titulo: string; rows: { chave: string; atual: BreakdownVal; proposta: BreakdownVal }[]; showPct: boolean }) {
   if (rows.length === 0) return null;
   const comCusto = rows.some((r) => r.atual.custo > 0 || r.proposta.custo > 0);
+  const metrics = comCusto ? [...BREAKDOWN_METRICS, { key: "custo" as const, label: "Custo M.O.", fmt: fmtMoeda }] : BREAKDOWN_METRICS;
+  const colsPerMetric = showPct ? 4 : 3;
   const totA = rows.reduce((s, r) => ({ servicos: s.servicos + r.atual.servicos, frota: s.frota + r.atual.frota, partidas: s.partidas + r.atual.partidas, km: s.km + r.atual.km, custo: s.custo + r.atual.custo }), { servicos: 0, frota: 0, partidas: 0, km: 0, custo: 0 });
   const totP = rows.reduce((s, r) => ({ servicos: s.servicos + r.proposta.servicos, frota: s.frota + r.proposta.frota, partidas: s.partidas + r.proposta.partidas, km: s.km + r.proposta.km, custo: s.custo + r.proposta.custo }), { servicos: 0, frota: 0, partidas: 0, km: 0, custo: 0 });
   return (
@@ -1075,15 +1134,18 @@ function ResumoComparativoTable({ titulo, rows }: { titulo: string; rows: { chav
             <TableHeader>
               <TableRow className="h-8">
                 <TableHead className="px-2 py-1" rowSpan={2}></TableHead>
-                <TableHead className="px-2 py-1 text-center border-l" colSpan={2}>Serviços</TableHead>
-                <TableHead className="px-2 py-1 text-center border-l" colSpan={2}>Frota</TableHead>
-                <TableHead className="px-2 py-1 text-center border-l" colSpan={2}>Partidas</TableHead>
-                <TableHead className="px-2 py-1 text-center border-l" colSpan={2}>KM</TableHead>
-                {comCusto && <TableHead className="px-2 py-1 text-center border-l" colSpan={2}>Custo M.O.</TableHead>}
+                {metrics.map((m) => (
+                  <TableHead key={String(m.key)} className="px-2 py-1 text-center border-l" colSpan={colsPerMetric}>{m.label}</TableHead>
+                ))}
               </TableRow>
               <TableRow className="h-7">
-                {["Atual", "Proposta", "Atual", "Proposta", "Atual", "Proposta", "Atual", "Proposta", ...(comCusto ? ["Atual", "Proposta"] : [])].map((l, i) => (
-                  <TableHead key={i} className={`px-2 py-1 text-right text-[10px] ${i % 2 === 0 ? "border-l" : ""}`}>{l}</TableHead>
+                {metrics.map((m) => (
+                  <Fragment key={String(m.key)}>
+                    <TableHead className="px-2 py-1 text-right border-l text-[10px] uppercase tracking-wider text-blue-600">Atual</TableHead>
+                    <TableHead className="px-2 py-1 text-right text-[10px] uppercase tracking-wider text-emerald-600">Prop.</TableHead>
+                    <TableHead className="px-2 py-1 text-right text-[10px] uppercase tracking-wider">Δ</TableHead>
+                    {showPct && <TableHead className="px-2 py-1 text-right text-[10px] uppercase tracking-wider">Δ%</TableHead>}
+                  </Fragment>
                 ))}
               </TableRow>
             </TableHeader>
@@ -1091,30 +1153,40 @@ function ResumoComparativoTable({ titulo, rows }: { titulo: string; rows: { chav
               {rows.map((r) => (
                 <TableRow key={r.chave} className="h-8">
                   <TableCell className="px-2 py-1 font-medium">{r.chave}</TableCell>
-                  <TableCell className="px-2 py-1 text-right tabular-nums border-l">{r.atual.servicos}</TableCell>
-                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.proposta.servicos}</TableCell>
-                  <TableCell className="px-2 py-1 text-right tabular-nums border-l">{r.atual.frota}</TableCell>
-                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.proposta.frota}</TableCell>
-                  <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtInt(r.atual.partidas)}</TableCell>
-                  <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(r.proposta.partidas)}</TableCell>
-                  <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtKm(r.atual.km)}</TableCell>
-                  <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(r.proposta.km)}</TableCell>
-                  {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtMoeda(r.atual.custo)}</TableCell>}
-                  {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(r.proposta.custo)}</TableCell>}
+                  {metrics.map((m) => {
+                    const av = r.atual[m.key];
+                    const pv = r.proposta[m.key];
+                    const d = pv - av;
+                    const pct = diffPct(av, pv);
+                    const dCls = d > 0 ? "text-emerald-600" : d < 0 ? "text-red-600" : "text-muted-foreground";
+                    return (
+                      <Fragment key={String(m.key)}>
+                        <TableCell className="px-2 py-1 text-right tabular-nums border-l">{m.fmt(av)}</TableCell>
+                        <TableCell className="px-2 py-1 text-right tabular-nums">{m.fmt(pv)}</TableCell>
+                        <TableCell className={`px-2 py-1 text-right tabular-nums font-semibold ${dCls}`}>{fmtDelta(d, m.fmt)}</TableCell>
+                        {showPct && <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{fmtPct(pct)}</TableCell>}
+                      </Fragment>
+                    );
+                  })}
                 </TableRow>
               ))}
               <TableRow className="bg-muted/50 font-bold h-9">
                 <TableCell className="px-2 py-1">TOTAL</TableCell>
-                <TableCell className="px-2 py-1 text-right tabular-nums border-l">{totA.servicos}</TableCell>
-                <TableCell className="px-2 py-1 text-right tabular-nums">{totP.servicos}</TableCell>
-                <TableCell className="px-2 py-1 text-right tabular-nums border-l">{totA.frota}</TableCell>
-                <TableCell className="px-2 py-1 text-right tabular-nums">{totP.frota}</TableCell>
-                <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtInt(totA.partidas)}</TableCell>
-                <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(totP.partidas)}</TableCell>
-                <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtKm(totA.km)}</TableCell>
-                <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(totP.km)}</TableCell>
-                {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtMoeda(totA.custo)}</TableCell>}
-                {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(totP.custo)}</TableCell>}
+                {metrics.map((m) => {
+                  const av = totA[m.key];
+                  const pv = totP[m.key];
+                  const d = pv - av;
+                  const pct = diffPct(av, pv);
+                  const dCls = d > 0 ? "text-emerald-600" : d < 0 ? "text-red-600" : "";
+                  return (
+                    <Fragment key={String(m.key)}>
+                      <TableCell className="px-2 py-1 text-right tabular-nums border-l">{m.fmt(av)}</TableCell>
+                      <TableCell className="px-2 py-1 text-right tabular-nums">{m.fmt(pv)}</TableCell>
+                      <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{fmtDelta(d, m.fmt)}</TableCell>
+                      {showPct && <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{fmtPct(pct)}</TableCell>}
+                    </Fragment>
+                  );
+                })}
               </TableRow>
             </TableBody>
           </Table>
