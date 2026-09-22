@@ -75,6 +75,26 @@ export function runVerificacaoIntegridade(args: {
     }
   }
 
+  // 2b) Linhas sem o campo "Grupo" (ordem) preenchido — o filtro "Grupo"
+  // dos relatórios (Resumo, Comparativo, Dashboard, Viagens) usa esse campo
+  // pra maioria das linhas; sem ele, a linha só aparece no filtro "Grupo"
+  // se tiver uma exceção cadastrada em Empresa por Estação. Com poucas
+  // linhas preenchidas, o filtro "Grupo" parece só reconhecer essas poucas.
+  {
+    const semGrupo = linhas.filter((l) => !l.ordem?.trim());
+    if (semGrupo.length > 0) {
+      alertas.push({
+        id: "linha_sem_grupo_ordem",
+        categoria: "Cadastro",
+        severidade: semGrupo.length === linhas.length ? "critico" : "atencao",
+        titulo: "Linhas sem o campo \"Grupo\" preenchido",
+        descricao: "Essas linhas não têm o campo \"Grupo\" (Cadastro de Linhas) preenchido — o filtro \"Grupo\" dos relatórios não reconhece essas linhas em nenhuma opção, exceto se houver uma exceção cadastrada em Empresa por Estação pra elas. Preencha o campo \"Grupo\" em /linhas pra elas aparecerem certo no filtro.",
+        quantidade: semGrupo.length,
+        amostra: amostra(semGrupo.map((l) => `Linha ${l.linha}`)),
+      });
+    }
+  }
+
   // 3) Viagens comerciais sem serviço ou turno
   {
     const semServicoTurno = viagens.filter((v) =>
