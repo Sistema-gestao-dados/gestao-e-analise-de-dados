@@ -8,15 +8,20 @@
 // branco), cai no cadastro normal da linha (`linhas`).
 
 import type { Linha, LinhaEmpresaEstacao } from "./data";
+import { normKey } from "./km";
 
 type Override = { empresa: string; grupo: string | null; unidade: string | null };
-export type EmpresaOverrideMap = Map<string, Map<string, Override>>; // linha -> (estacao -> {empresa, grupo, unidade})
+export type EmpresaOverrideMap = Map<string, Map<string, Override>>; // linha -> (estacao normalizada -> {empresa, grupo, unidade})
 
 export function buildEmpresaOverrideMap(rows: LinhaEmpresaEstacao[]): EmpresaOverrideMap {
   const m: EmpresaOverrideMap = new Map();
   for (const r of rows) {
     const porEstacao = m.get(r.linha) ?? new Map<string, Override>();
-    porEstacao.set(r.estacao, { empresa: r.empresa, grupo: r.grupo ?? null, unidade: r.unidade ?? null });
+    // Chave normalizada (sem acento, maiúscula, sem espaço nas pontas) —
+    // mesma função usada em km.ts pro mesmo tipo de problema: `estacao` é
+    // texto livre cadastrado à mão, e sem isso uma diferença de acento ou
+    // maiúscula contra origem/destino da viagem faz o override nunca bater.
+    porEstacao.set(normKey(r.estacao), { empresa: r.empresa, grupo: r.grupo ?? null, unidade: r.unidade ?? null });
     m.set(r.linha, porEstacao);
   }
   return m;
@@ -28,8 +33,14 @@ function findOverride(
 ): Override | null {
   const porEstacao = overrideMap.get(v.linha);
   if (!porEstacao) return null;
-  if (v.origem && porEstacao.has(v.origem)) return porEstacao.get(v.origem)!;
-  if (v.destino && porEstacao.has(v.destino)) return porEstacao.get(v.destino)!;
+  if (v.origem) {
+    const o = porEstacao.get(normKey(v.origem));
+    if (o) return o;
+  }
+  if (v.destino) {
+    const d = porEstacao.get(normKey(v.destino));
+    if (d) return d;
+  }
   return null;
 }
 
