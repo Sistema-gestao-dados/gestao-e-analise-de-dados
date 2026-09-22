@@ -23,15 +23,15 @@ export async function fetchHistorico(): Promise<Historico[]> {
 }
 
 export async function fetchHistoricoDiaTipos(): Promise<string[]> {
-  const { data, error } = await supabase.from("historico_dia_tipos").select("nome").order("nome");
-  if (error) throw error;
-  return (data ?? []).map((r) => r.nome);
+  const rows = await fetchAllPaginado<{ nome: string }>("historico_dia_tipos", "nome", { order: { column: "nome" } });
+  return rows.map((r) => r.nome);
 }
 
 export async function ensureDiaTipo(nome: string): Promise<void> {
   const v = nome.trim();
   if (!v) return;
-  await supabase.from("historico_dia_tipos").upsert({ nome: v }, { onConflict: "nome", ignoreDuplicates: true });
+  const { error } = await supabase.from("historico_dia_tipos").upsert({ nome: v }, { onConflict: "nome", ignoreDuplicates: true });
+  if (error) throw error;
 }
 
 export async function insertHistorico(row: HistoricoInput): Promise<Historico> {

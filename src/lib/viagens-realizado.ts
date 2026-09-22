@@ -13,6 +13,7 @@ export async function fetchRealizado(dataInicio: string, dataFim: string): Promi
       .select("*")
       .gte("data", dataInicio)
       .lte("data", dataFim)
+      .order("id", { ascending: true })
       .range(from, from + 999);
     if (error) throw error;
     const chunk = (data ?? []) as RealizadoDb[];

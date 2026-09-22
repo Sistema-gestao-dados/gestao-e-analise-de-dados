@@ -11,8 +11,10 @@ import { supabase } from "@/integrations/supabase/client";
 //
 // Não muda NENHUM dado retornado nem lógica de filtro — só a forma de
 // buscar. `order` por padrão é por `id` (toda tabela do projeto tem uuid
-// `id` como PK) pra garantir que as páginas não se sobreponham/percam
-// linha mesmo buscando em paralelo.
+// `id` como PK); quando o chamador passa outra coluna (ex.: "vigencia",
+// "data_inicio", "ordem" — nenhuma delas única), sempre encadeia `id` como
+// desempate, senão duas páginas buscadas em paralelo não têm garantia de
+// ordem relativa entre linhas empatadas e podem repetir/pular alguma.
 export async function fetchAllPaginado<T>(
   table: string,
   select: string,
@@ -23,6 +25,12 @@ export async function fetchAllPaginado<T>(
   const orderColumn = opts?.order?.column ?? "id";
   const ascending = opts?.order?.ascending ?? true;
 
+  const applyOrder = (q: any) => {
+    q = q.order(orderColumn, { ascending });
+    if (orderColumn !== "id") q = q.order("id", { ascending: true });
+    return q;
+  };
+
   const { count, error: countError } = await client.from(table).select("*", { count: "exact", head: true });
   if (countError) throw countError;
   const total = count ?? 0;
@@ -30,7 +38,7 @@ export async function fetchAllPaginado<T>(
 
   const pages = Math.ceil(total / pageSize);
   const requests = Array.from({ length: pages }, (_, i) =>
-    client.from(table).select(select).order(orderColumn, { ascending }).range(i * pageSize, i * pageSize + pageSize - 1),
+    applyOrder(client.from(table).select(select)).range(i * pageSize, i * pageSize + pageSize - 1),
   );
   const results = await Promise.all(requests);
 
@@ -39,5 +47,23 @@ export async function fetchAllPaginado<T>(
     if (r.error) throw r.error;
     all.push(...((r.data ?? []) as T[]));
   }
+
+  // Proteção contra corrida com escrita concorrente (ex.: alguém importando
+  // um TXT enquanto essa busca roda): se o total cresceu entre a contagem
+  // inicial e agora, busca sequencialmente só o que ficou de fora, em vez
+  // de simplesmente devolver um resultado incompleto sem avisar.
+  const { count: countDepois } = await client.from(table).select("*", { count: "exact", head: true });
+  if ((countDepois ?? 0) > total) {
+    let from = pages * pageSize;
+    for (;;) {
+      const { data, error } = await applyOrder(client.from(table).select(select)).range(from, from + pageSize - 1);
+      if (error) throw error;
+      const chunk = (data ?? []) as T[];
+      all.push(...chunk);
+      if (chunk.length < pageSize) break;
+      from += pageSize;
+    }
+  }
+
   return all;
 }
