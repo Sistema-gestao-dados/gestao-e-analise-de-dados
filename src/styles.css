@@ -51,107 +51,126 @@
 }
 
 :root {
-  /* Densidade de console corporativo: cantos quase retos (não zero — só
-     suaviza), e a base rem menor (ver `html` em @layer base) encolhe junto
-     TODA a escala de espaçamento do Tailwind (p-4, gap-2 etc. são em rem),
-     sem precisar editar padding/gap em cada componente um por um. */
-  --radius: 0.375rem;
+  /* "Moderno", não quadrado — cantos visíveis mas discretos (não o 0.75rem
+     arredondado de landing page de antes, nem o 0.375rem quase reto de
+     console puro). A base rem menor (ver `html` em @layer base) encolhe
+     TODA a escala de espaçamento do Tailwind (p-4, gap-2 etc.) de uma vez. */
+  --radius: 0.625rem;
 
-  /* Navy Trust — #0f1b3d / #1e3a5f / #3b6fa0 / #e8edf3 */
-  --background: oklch(0.975 0.006 250);
-  --foreground: oklch(0.22 0.055 265);
+  /* Laranja + verde, neutro preto/branco por trás — sem tingir de azul
+     marinho. As cores de marca (laranja/verde) e a paleta de gráfico foram
+     validadas com o script da skill de dataviz (contraste, daltonismo) —
+     ver commit. Texto sobre laranja/verde usa preto (#0b0b0b), não branco:
+     testado, dá bem mais contraste (6.1:1 e 7.0:1) do que texto branco
+     (3.2:1 e 2.8:1, abaixo do mínimo de leitura confortável). */
+  --background: oklch(0.99 0 0);
+  --foreground: oklch(0.15 0 0);
 
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.22 0.055 265);
+  --card-foreground: oklch(0.15 0 0);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.22 0.055 265);
+  --popover-foreground: oklch(0.15 0 0);
 
-  --primary: oklch(0.30 0.09 265);          /* #0f1b3d navy */
-  --primary-foreground: oklch(0.985 0.005 250);
-  --primary-glow: oklch(0.56 0.10 253);     /* #3b6fa0 */
+  --primary: #eb6834;                 /* laranja */
+  --primary-foreground: #0b0b0b;
+  --primary-glow: #f2985f;
 
-  --secondary: oklch(0.945 0.012 250);
-  --secondary-foreground: oklch(0.30 0.07 265);
+  --secondary: oklch(0.95 0 0);
+  --secondary-foreground: oklch(0.18 0 0);
 
-  --muted: oklch(0.955 0.008 250);
-  --muted-foreground: oklch(0.52 0.025 258);
+  --muted: oklch(0.96 0 0);
+  --muted-foreground: oklch(0.46 0 0);
 
-  --accent: oklch(0.93 0.025 250);          /* #e8edf3 */
-  --accent-foreground: oklch(0.30 0.08 265);
+  --accent: oklch(0.94 0 0);
+  --accent-foreground: oklch(0.18 0 0);
 
+  /* Cores de status (erro/sucesso/atenção) ficam fixas — não seguem o tema
+     de marca, senão perdem o significado reservado (vermelho = erro etc.). */
   --destructive: oklch(0.56 0.20 27);
   --destructive-foreground: oklch(0.99 0 0);
-  --success: oklch(0.60 0.13 160);
-  --success-foreground: oklch(0.99 0 0);
+  --success: #1baf7a;                 /* verde moderno */
+  --success-foreground: #0b0b0b;
   --warning: oklch(0.74 0.14 72);
   --warning-foreground: oklch(0.22 0.05 70);
 
-  --border: oklch(0.905 0.010 250);
-  --input: oklch(0.915 0.010 250);
-  --ring: oklch(0.56 0.10 253);
+  --border: oklch(0.89 0 0);
+  --input: oklch(0.89 0 0);
+  --ring: #eb6834;
 
-  --chart-1: oklch(0.38 0.10 262);
-  --chart-2: oklch(0.56 0.10 253);
-  --chart-3: oklch(0.68 0.08 230);
-  --chart-4: oklch(0.62 0.12 165);
-  --chart-5: oklch(0.68 0.13 72);
+  /* Paleta categórica validada (dataviz skill): 5 tons distintos por
+     daltonismo, não mais uma escala monocromática de azul. */
+  --chart-1: #eb6834;
+  --chart-2: #1baf7a;
+  --chart-3: #eda100;
+  --chart-4: #e87ba4;
+  --chart-5: #008300;
 
-  /* Sidebar — navy institucional */
-  --sidebar: oklch(0.23 0.075 266);
-  --sidebar-foreground: oklch(0.90 0.015 250);
-  --sidebar-primary: oklch(0.56 0.10 253);
-  --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: oklch(0.31 0.075 264);
-  --sidebar-accent-foreground: oklch(0.98 0 0);
-  --sidebar-border: oklch(0.31 0.05 264);
-  --sidebar-ring: oklch(0.56 0.10 253);
+  /* Sidebar — preto de verdade, não navy */
+  --sidebar: oklch(0.13 0 0);
+  --sidebar-foreground: oklch(0.92 0 0);
+  --sidebar-primary: #eb6834;
+  --sidebar-primary-foreground: #0b0b0b;
+  --sidebar-accent: oklch(0.20 0 0);
+  --sidebar-accent-foreground: oklch(0.97 0 0);
+  --sidebar-border: oklch(0.22 0 0);
+  --sidebar-ring: #eb6834;
 
   --gradient-primary: linear-gradient(135deg, var(--primary), var(--primary-glow));
-  --gradient-card: linear-gradient(180deg, oklch(1 0 0), oklch(0.975 0.008 250));
-  /* Console corporativo: quase sem sombra — a separação entre superfícies
-     vem de borda (border-border), não de elevação flutuante de site. */
-  --shadow-card: 0 1px 2px 0 oklch(0.24 0.06 265 / 0.04);
-  --shadow-elevated: 0 4px 14px -6px oklch(0.24 0.09 265 / 0.18);
+  --gradient-card: linear-gradient(180deg, oklch(1 0 0), oklch(0.98 0 0));
+  --shadow-card: 0 1px 2px 0 oklch(0 0 0 / 0.05);
+  --shadow-elevated: 0 4px 14px -6px oklch(0 0 0 / 0.16);
 }
 
 .dark {
-  --background: oklch(0.17 0.045 265);
-  --foreground: oklch(0.95 0.008 250);
-  --card: oklch(0.215 0.05 265);
-  --card-foreground: oklch(0.95 0.008 250);
-  --popover: oklch(0.215 0.05 265);
-  --popover-foreground: oklch(0.95 0.008 250);
-  --primary: oklch(0.60 0.11 253);
-  --primary-foreground: oklch(0.15 0.04 265);
-  --primary-glow: oklch(0.70 0.09 250);
-  --secondary: oklch(0.27 0.05 265);
-  --secondary-foreground: oklch(0.95 0.008 250);
-  --muted: oklch(0.25 0.045 265);
-  --muted-foreground: oklch(0.70 0.025 255);
-  --accent: oklch(0.30 0.06 260);
-  --accent-foreground: oklch(0.95 0.008 250);
+  /* Preto mesmo (validado como superfície de gráfico na skill de dataviz,
+     #141414), não o azul marinho de antes. Texto quase branco (#fafafa)
+     contra esse fundo dá 17.6:1 de contraste — bem acima do mínimo de
+     4.5:1 pra texto normal, então nada fica "apagado". */
+  --background: #141414;
+  --foreground: #fafafa;
+  --card: #1c1c1c;
+  --card-foreground: #fafafa;
+  --popover: #1c1c1c;
+  --popover-foreground: #fafafa;
+
+  --primary: #d95926;                 /* laranja (passo escuro) */
+  --primary-foreground: #0b0b0b;
+  --primary-glow: #f2985f;
+
+  --secondary: #232323;
+  --secondary-foreground: #fafafa;
+
+  --muted: #1f1f1f;
+  --muted-foreground: #c3c2b7;        /* 10.3:1 de contraste — legível, não apagado */
+
+  --accent: #262626;
+  --accent-foreground: #fafafa;
+
   --destructive: oklch(0.63 0.20 27);
   --destructive-foreground: oklch(0.99 0 0);
-  --success: oklch(0.66 0.14 160);
-  --success-foreground: oklch(0.15 0 0);
+  --success: #199e70;                 /* verde moderno (passo escuro) */
+  --success-foreground: #0b0b0b;
   --warning: oklch(0.78 0.15 72);
   --warning-foreground: oklch(0.2 0.05 70);
-  --border: oklch(0.30 0.04 265);
-  --input: oklch(0.30 0.04 265);
-  --ring: oklch(0.60 0.11 253);
-  --chart-1: oklch(0.60 0.11 253);
-  --chart-2: oklch(0.70 0.09 240);
-  --chart-3: oklch(0.75 0.08 215);
-  --chart-4: oklch(0.68 0.13 165);
-  --chart-5: oklch(0.75 0.13 72);
-  --sidebar: oklch(0.145 0.04 266);
-  --sidebar-foreground: oklch(0.90 0.015 250);
-  --sidebar-primary: oklch(0.60 0.11 253);
-  --sidebar-primary-foreground: oklch(0.99 0 0);
-  --sidebar-accent: oklch(0.23 0.05 265);
-  --sidebar-accent-foreground: oklch(0.95 0.008 250);
-  --sidebar-border: oklch(0.26 0.04 265);
-  --sidebar-ring: oklch(0.60 0.11 253);
+
+  --border: #2e2e2e;
+  --input: #2e2e2e;
+  --ring: #d95926;
+
+  --chart-1: #d95926;
+  --chart-2: #199e70;
+  --chart-3: #c98500;
+  --chart-4: #d55181;
+  --chart-5: #008300;
+
+  --sidebar: #0d0d0d;
+  --sidebar-foreground: #fafafa;
+  --sidebar-primary: #d95926;
+  --sidebar-primary-foreground: #0b0b0b;
+  --sidebar-accent: #1f1f1f;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: #262626;
+  --sidebar-ring: #d95926;
 }
 
 @layer base {
