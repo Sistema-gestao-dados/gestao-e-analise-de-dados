@@ -155,7 +155,15 @@ function ajustarTurno(viagens: ViagemLite[]): { partidas: number[]; chegadas: nu
     if (g > gapSize) { gapSize = g; gapIdx = i; }
   }
 
-  if (gapSize < 4 * 60 || gapIdx < 0) {
+  // O grupo ANTES do gap (índices 0..gapIdx-1) é quem viraria "dia seguinte"
+  // se a gente tratar esse gap como meia-noite. Só faz sentido se esse
+  // grupo estiver mesmo perto da meia-noite (ex.: 00:15, 01:45) — um turno
+  // só de um dia com horários espalhados (ex.: 04:00/09:00/14:00/20:00)
+  // também pode ter um gap grande no meio (14:00→20:00) sem cruzar
+  // meia-noite nenhuma; sem essa checagem, esse turno era invertido por
+  // engano (virava 20:00→14:40 do dia seguinte, 18h40 em vez de 16h40).
+  const LIMIAR_POS_MEIANOITE_MIN = 6 * 60;
+  if (gapSize < 4 * 60 || gapIdx < 0 || sorted[gapIdx - 1].p > LIMIAR_POS_MEIANOITE_MIN) {
     return {
       partidas: sorted.map((x) => x.p),
       chegadas: sorted.map((x) => x.c),
