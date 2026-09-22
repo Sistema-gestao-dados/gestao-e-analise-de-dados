@@ -350,7 +350,10 @@ function DashOperacional() {
   const { params: custoParams } = useSalarioMotorista();
   const jornadasParaCusto = useMemo(() => buildJornadas(filtered, linhas), [filtered, linhas]);
   const custoTotalDashboard = useMemo(
-    () => (custoParams ? jornadasParaCusto.reduce((s, j) => s + custoServico(j, custoParams), 0) : 0),
+    // TU incompleto (só T1 ou só T2) não entra em nenhum total de jornada
+    // (mesma regra de jornadaTotais em src/lib/jornada.ts) — não pode
+    // entrar no custo de mão de obra também.
+    () => (custoParams ? jornadasParaCusto.reduce((s, j) => s + (j.incompleto ? 0 : custoServico(j, custoParams)), 0) : 0),
     [jornadasParaCusto, custoParams],
   );
 
@@ -376,6 +379,7 @@ function DashOperacional() {
     const custoPorChave = new Map<string, number>();
     if (custoParams) {
       for (const j of jornadasParaCusto) {
+        if (j.incompleto) continue;
         const k = chaveJornada(j);
         custoPorChave.set(k, (custoPorChave.get(k) ?? 0) + custoServico(j, custoParams));
       }

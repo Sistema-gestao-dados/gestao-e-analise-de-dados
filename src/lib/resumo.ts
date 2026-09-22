@@ -380,8 +380,9 @@ export function vehicleOrigemLinha(
 export function validarConsistenciaFrota(
   units: Map<string, ServiceUnit>,
   allViagens: ViagemLite[],
+  criterio: CriterioLinha = "predominancia",
 ): { totalVeiculos: number; veiculosComOrigem: number; veiculosSemOrigem: number; ok: boolean; mensagem: string | null } {
-  const origem = vehicleOrigemLinha(allViagens);
+  const origem = vehicleOrigemLinha(allViagens, criterio);
   const veiculos = new Set(Array.from(units.values()).map((u) => u.vehicleKey));
   let comOrigem = 0;
   for (const vk of veiculos) if (origem.has(vk)) comOrigem++;

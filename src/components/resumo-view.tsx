@@ -360,8 +360,11 @@ const totals = useMemo(() => {
   const [showTU, setShowTU] = usePersistentState(`resumo.${mode}.showTU`, false);
   const [showKm, setShowKm] = usePersistentState(`resumo.${mode}.showKm`, false);
 
-  // Validação obrigatória da regra de Frota: soma por linha == veículos distintos
-  const frotaValidacao = useMemo(() => validarConsistenciaFrota(units, viagensParaOrigem), [units, viagensParaOrigem]);
+  // Validação obrigatória da regra de Frota: soma por linha == veículos
+  // distintos — usa o mesmo critério (S.criterio) que gerou os números de
+  // Frota exibidos na tela, senão a validação pode dizer "OK" checando uma
+  // regra diferente da que produziu o que está na tela.
+  const frotaValidacao = useMemo(() => validarConsistenciaFrota(units, viagensParaOrigem, S.criterio), [units, viagensParaOrigem, S.criterio]);
 
   const kmSemCadastro = useMemo(() => {
     const trechos = new Map<string, { linha: string; origem: string; destino: string; viagens: number }>();
@@ -384,6 +387,10 @@ const totals = useMemo(() => {
     const m = new Map<string, number>();
     if (!custoParams) return m;
     for (const j of jornadasParaCusto) {
+      // TU incompleto (só T1 ou só T2) não entra em nenhum total de
+      // jornada (mesma regra de jornadaTotais em src/lib/jornada.ts) — não
+      // pode entrar no custo de mão de obra também.
+      if (j.incompleto) continue;
       const k = chaveFn(j);
       m.set(k, (m.get(k) ?? 0) + custoServico(j, custoParams));
     }

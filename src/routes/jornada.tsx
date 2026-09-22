@@ -158,6 +158,10 @@ function JornadaPage() {
   function resumoPorChave(chaveFn: (j: JornadaServico) => string) {
     const m = new Map<string, { jornadas: number; frota: Set<string>; minutosTotal: number; horasExtras: number; custo: number }>();
     for (const j of jornadas) {
+      // Mesma regra do cabeçalho (jornadaTotais): TU incompleto (só T1 ou só
+      // T2) não entra em nenhum total — senão "Custo M.O." e os outros
+      // totais desse resumo ficam maiores que o total mostrado no topo.
+      if (j.incompleto) continue;
       const k = chaveFn(j);
       const cur = m.get(k) ?? { jornadas: 0, frota: new Set<string>(), minutosTotal: 0, horasExtras: 0, custo: 0 };
       cur.jornadas++;
