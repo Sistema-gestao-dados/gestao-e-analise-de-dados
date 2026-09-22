@@ -1,5 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { ParametroMulti } from "@/lib/data";
+import { fetchAllPaginado } from "@/lib/fetch-paginado";
 
 export type Historico = {
   id: string;
@@ -18,21 +19,7 @@ export type Historico = {
 export type HistoricoInput = Omit<Historico, "id" | "created_at" | "updated_at">;
 
 export async function fetchHistorico(): Promise<Historico[]> {
-  const all: Historico[] = [];
-  let from = 0;
-  for (;;) {
-    const { data, error } = await supabase
-      .from("historico_reprogramacao")
-      .select("*")
-      .order("vigencia", { ascending: false })
-      .range(from, from + 999);
-    if (error) throw error;
-    const chunk = (data ?? []) as Historico[];
-    all.push(...chunk);
-    if (chunk.length < 1000) break;
-    from += 1000;
-  }
-  return all;
+  return fetchAllPaginado<Historico>("historico_reprogramacao", "*", { order: { column: "vigencia", ascending: false } });
 }
 
 export async function fetchHistoricoDiaTipos(): Promise<string[]> {

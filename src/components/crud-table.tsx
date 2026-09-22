@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
+import { fetchAllPaginado } from "@/lib/fetch-paginado";
 
 export type ColumnDef = {
   key: string;
@@ -66,20 +67,7 @@ export function CrudTable({
   const qc = useQueryClient();
   const dataQ = useQuery<Row[]>({
     queryKey: [queryKey],
-    queryFn: async () => {
-      const all: Row[] = [];
-      const pageSize = 1000;
-      let from = 0;
-      for (;;) {
-        const { data, error } = await (supabase as any).from(table).select("*").range(from, from + pageSize - 1);
-        if (error) throw error;
-        const chunk = (data ?? []) as Row[];
-        all.push(...chunk);
-        if (chunk.length < pageSize) break;
-        from += pageSize;
-      }
-      return all;
-    },
+    queryFn: () => fetchAllPaginado<Row>(table, "*", { order: { column: pk } }),
   });
 
   const rows = dataQ.data ?? [];

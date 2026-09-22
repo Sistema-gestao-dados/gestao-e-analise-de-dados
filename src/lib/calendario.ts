@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { fetchAllPaginado } from "@/lib/fetch-paginado";
 
 export type CalendarioEvento = {
   id: string;
@@ -23,21 +24,7 @@ export type CalendarioEventoInput = Omit<CalendarioEvento, "id" | "created_at" |
 const db = () => supabase as any;
 
 export async function fetchCalendarioEventos(): Promise<CalendarioEvento[]> {
-  const all: CalendarioEvento[] = [];
-  let from = 0;
-  for (;;) {
-    const { data, error } = await db()
-      .from("calendario_eventos")
-      .select("*")
-      .order("data_inicio", { ascending: false })
-      .range(from, from + 999);
-    if (error) throw error;
-    const chunk = (data ?? []) as CalendarioEvento[];
-    all.push(...chunk);
-    if (chunk.length < 1000) break;
-    from += 1000;
-  }
-  return all;
+  return fetchAllPaginado<CalendarioEvento>("calendario_eventos", "*", { order: { column: "data_inicio", ascending: false } });
 }
 
 export async function insertCalendarioEvento(row: CalendarioEventoInput): Promise<CalendarioEvento> {

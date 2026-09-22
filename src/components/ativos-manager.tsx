@@ -4,8 +4,8 @@
 
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { fetchProjetosAtivos, ativarProjeto, desativarProjeto } from "@/lib/projeto-ativo";
+import { fetchAllPaginado } from "@/lib/fetch-paginado";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -18,19 +18,10 @@ import { toast } from "sonner";
 type Row = { linha: string; tipo_operacao: string; versoes: string[] };
 
 async function fetchCombos(): Promise<Row[]> {
-  const all: any[] = [];
-  let from = 0;
-  for (;;) {
-    const { data, error } = await (supabase as any)
-      .from("viagens")
-      .select("linha,tipo_operacao,versao_programacao")
-      .range(from, from + 999);
-    if (error) throw error;
-    const chunk = data ?? [];
-    all.push(...chunk);
-    if (chunk.length < 1000) break;
-    from += 1000;
-  }
+  const all = await fetchAllPaginado<{ linha: string; tipo_operacao: string; versao_programacao: string }>(
+    "viagens",
+    "linha,tipo_operacao,versao_programacao",
+  );
   const map = new Map<string, Set<string>>();
   for (const r of all) {
     if (!r.linha || !r.tipo_operacao || !r.versao_programacao) continue;

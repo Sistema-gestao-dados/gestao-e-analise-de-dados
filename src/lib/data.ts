@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { fetchAllPaginado } from "@/lib/fetch-paginado";
 
 export type Linha = {
   linha: string;
@@ -50,16 +51,10 @@ export type Importacao = {
 };
 
 async function fetchAllRows<T>(table: "linhas" | "parametro_km" | "parametro_multilinha" | "linha_empresa_estacao", order?: string): Promise<T[]> {
-  const all: T[] = [];
-  for (let from = 0; ; from += 1000) {
-    let query = supabase.from(table).select("*").range(from, from + 999);
-    if (order) query = query.order(order, { ascending: true, nullsFirst: false });
-    const { data, error } = await query;
-    if (error) throw error;
-    const chunk = (data ?? []) as T[];
-    all.push(...chunk);
-    if (chunk.length < 1000) return all;
-  }
+  // "linhas" não tem `id` — a PK dela é a própria coluna `linha`, por isso
+  // segue precisando de order explícito ("ordem"); as outras 3 tabelas têm
+  // `id` e caem no default do fetchAllPaginado.
+  return fetchAllPaginado<T>(table, "*", order ? { order: { column: order } } : undefined);
 }
 
 export async function fetchLinhas(): Promise<Linha[]> {
