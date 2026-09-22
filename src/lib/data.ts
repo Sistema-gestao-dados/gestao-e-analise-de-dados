@@ -51,10 +51,13 @@ export type Importacao = {
 };
 
 async function fetchAllRows<T>(table: "linhas" | "parametro_km" | "parametro_multilinha" | "linha_empresa_estacao", order?: string): Promise<T[]> {
-  // "linhas" não tem `id` — a PK dela é a própria coluna `linha`, por isso
-  // segue precisando de order explícito ("ordem"); as outras 3 tabelas têm
-  // `id` e caem no default do fetchAllPaginado.
-  return fetchAllPaginado<T>(table, "*", order ? { order: { column: order } } : undefined);
+  // "linhas" não tem coluna `id` — a PK dela é a própria coluna `linha`,
+  // por isso precisa de um desempate diferente do padrão ("id"), senão
+  // fetchAllPaginado tenta `.order("id", ...)` numa coluna que não existe
+  // e a consulta falha inteira (foi exatamente isso que fez o Cadastro de
+  // Linhas sumir da tela). As outras 3 tabelas têm `id` e usam o padrão.
+  const tiebreak = table === "linhas" ? "linha" : undefined;
+  return fetchAllPaginado<T>(table, "*", { order: order ? { column: order } : undefined, tiebreak });
 }
 
 export async function fetchLinhas(): Promise<Linha[]> {

@@ -10,24 +10,31 @@ import { supabase } from "@/integrations/supabase/client";
 // "21x o round-trip" pra "~1x o round-trip" (todas voltam juntas).
 //
 // Não muda NENHUM dado retornado nem lógica de filtro — só a forma de
-// buscar. `order` por padrão é por `id` (toda tabela do projeto tem uuid
-// `id` como PK); quando o chamador passa outra coluna (ex.: "vigencia",
-// "data_inicio", "ordem" — nenhuma delas única), sempre encadeia `id` como
-// desempate, senão duas páginas buscadas em paralelo não têm garantia de
-// ordem relativa entre linhas empatadas e podem repetir/pular alguma.
+// buscar. `order` por padrão é por `id` (a maioria das tabelas do projeto
+// tem uuid `id` como PK); quando o chamador passa outra coluna (ex.:
+// "vigencia", "data_inicio", "ordem" — nenhuma delas única), sempre
+// encadeia um desempate único, senão duas páginas buscadas em paralelo não
+// têm garantia de ordem relativa entre linhas empatadas e podem
+// repetir/pular alguma. O desempate é `id` por padrão, MAS a tabela
+// `linhas` não tem coluna `id` (a PK dela é a própria coluna `linha`) — por
+// isso `tiebreak` é configurável, não fixo em "id" (fixo quebrava toda
+// consulta na tabela `linhas` com "column linhas.id does not exist",
+// fazendo o Cadastro de Linhas inteiro sumir da tela por erro, não por
+// dado apagado).
 export async function fetchAllPaginado<T>(
   table: string,
   select: string,
-  opts?: { pageSize?: number; order?: { column: string; ascending?: boolean } },
+  opts?: { pageSize?: number; order?: { column: string; ascending?: boolean }; tiebreak?: string },
 ): Promise<T[]> {
   const client = supabase as any;
   const pageSize = opts?.pageSize ?? 1000;
   const orderColumn = opts?.order?.column ?? "id";
   const ascending = opts?.order?.ascending ?? true;
+  const tiebreak = opts?.tiebreak ?? "id";
 
   const applyOrder = (q: any) => {
     q = q.order(orderColumn, { ascending });
-    if (orderColumn !== "id") q = q.order("id", { ascending: true });
+    if (orderColumn !== tiebreak) q = q.order(tiebreak, { ascending: true });
     return q;
   };
 
