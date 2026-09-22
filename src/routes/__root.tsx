@@ -90,17 +90,64 @@ function NotFoundComponent() {
   );
 }
 
+// Depois de um deploy novo, os arquivos JS de cada tela trocam de nome
+// (hash no arquivo). Uma aba que já estava aberta antes do deploy tenta
+// buscar o arquivo velho, que não existe mais — daí esse erro específico do
+// Vite/ESM. `router.invalidate()` não resolve (não busca o HTML/manifesto
+// novo); só um reload de página de verdade pega a versão atual. Guarda em
+// sessionStorage pra não entrar em loop se o erro persistir por outro motivo.
+const CHUNK_ERROR_PATTERN = /failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed/i;
+const CHUNK_RELOAD_GUARD_KEY = "chunk-error-reload";
+
 function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
   console.error(error);
   const router = useRouter();
+  const isChunkError = CHUNK_ERROR_PATTERN.test(error.message);
+  const alreadyTriedReload =
+    typeof sessionStorage !== "undefined" && sessionStorage.getItem(CHUNK_RELOAD_GUARD_KEY) === "1";
+
+  useEffect(() => {
+    if (isChunkError && !alreadyTriedReload) {
+      sessionStorage.setItem(CHUNK_RELOAD_GUARD_KEY, "1");
+      window.location.reload();
+    }
+  }, [isChunkError, alreadyTriedReload]);
+
+  if (isChunkError && !alreadyTriedReload) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-4">
+        <div className="max-w-md text-center">
+          <h1 className="text-xl font-semibold text-foreground">Atualizando o sistema…</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            Uma nova versão foi publicada. Recarregando automaticamente.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
       <div className="max-w-md text-center">
-        <h1 className="text-xl font-semibold text-foreground">Esta página não carregou</h1>
-        <p className="mt-2 text-sm text-muted-foreground">{error.message}</p>
+        <h1 className="text-xl font-semibold text-foreground">
+          {isChunkError ? "Não foi possível atualizar automaticamente" : "Esta página não carregou"}
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          {isChunkError
+            ? "Uma nova versão foi publicada, mas o recarregamento automático não resolveu. Recarregue a página manualmente (Ctrl+Shift+R)."
+            : error.message}
+        </p>
         <div className="mt-6 flex justify-center gap-2">
           <button
-            onClick={() => { router.invalidate(); reset(); }}
+            onClick={() => {
+              if (isChunkError) {
+                sessionStorage.removeItem(CHUNK_RELOAD_GUARD_KEY);
+                window.location.reload();
+                return;
+              }
+              router.invalidate();
+              reset();
+            }}
             className="rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90"
           >
             Tentar novamente
