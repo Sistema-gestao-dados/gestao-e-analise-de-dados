@@ -69,15 +69,17 @@ function parseHHMM(s: string | null): number | null {
 }
 
 function StatCard({ label, value, icon: Icon, hint, tone = "primary" }: { label: string; value: string | number; icon: any; hint?: string; tone?: "primary" | "success" | "warning" }) {
+  // Laranja/verde/amarelo — mesma família da marca (ver styles.css), não
+  // mais o ciano/fúcsia "neon" solto que não seguia o tema.
   const gradients = {
-    primary: "from-cyan-500/25 via-sky-500/10 to-indigo-500/25 text-cyan-400",
-    success: "from-emerald-500/25 via-teal-500/10 to-cyan-500/25 text-emerald-400",
-    warning: "from-fuchsia-500/25 via-rose-500/10 to-amber-500/25 text-fuchsia-400",
+    primary: "from-orange-500/25 via-amber-500/10 to-orange-600/25 text-orange-400",
+    success: "from-emerald-500/25 via-green-500/10 to-teal-500/25 text-emerald-400",
+    warning: "from-amber-400/25 via-yellow-500/10 to-amber-600/25 text-amber-400",
   } as const;
   const ring = {
-    primary: "ring-cyan-400/30 shadow-[0_0_20px_-4px_hsl(190_90%_55%/0.4)]",
+    primary: "ring-orange-400/30 shadow-[0_0_20px_-4px_hsl(30_90%_55%/0.4)]",
     success: "ring-emerald-400/30 shadow-[0_0_20px_-4px_hsl(160_80%_50%/0.4)]",
-    warning: "ring-fuchsia-400/30 shadow-[0_0_20px_-4px_hsl(320_85%_60%/0.4)]",
+    warning: "ring-amber-400/30 shadow-[0_0_20px_-4px_hsl(45_95%_55%/0.4)]",
   } as const;
   return (
     <Card className={`group relative overflow-hidden rounded-2xl border-border/60 bg-gradient-to-br ${gradients[tone]} bg-card/80 backdrop-blur-sm transition-all hover:-translate-y-0.5 hover:shadow-[0_20px_40px_-20px_hsl(var(--foreground)/0.35)]`}>
