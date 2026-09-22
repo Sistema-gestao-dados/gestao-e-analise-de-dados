@@ -30,19 +30,10 @@ export const Route = createFileRoute("/dashboard-operacional")({
   component: DashOperacional,
 });
 
-// Paleta moderna estilo neumórfico (cyan → violeta → magenta)
-const COLORS = ["#22d3ee", "#38bdf8", "#818cf8", "#a78bfa", "#f472b6", "#f59e0b", "#34d399", "#f43f5e"];
-// Pares (topo → base) para gradientes de barras/áreas
-const GRADS: Array<[string, string]> = [
-  ["#67e8f9", "#0891b2"],
-  ["#7dd3fc", "#2563eb"],
-  ["#a5b4fc", "#4f46e5"],
-  ["#c4b5fd", "#7c3aed"],
-  ["#f9a8d4", "#db2777"],
-  ["#fde68a", "#d97706"],
-  ["#6ee7b7", "#059669"],
-  ["#fda4af", "#e11d48"],
-];
+// Paleta categórica do tema (laranja → verde → amarelo → ...), validada na
+// skill de dataviz — usa var(--chart-N) direto pra acompanhar claro/escuro
+// automaticamente, em vez de um array de hex solto desligado do tema.
+const COLORS = Array.from({ length: 8 }, (_, i) => `var(--chart-${i + 1})`);
 const HOURS = Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0"));
 
 const CHART_TITLES = [
@@ -119,7 +110,7 @@ function ChartCard({ title, badge, onExport, children }: { title: string; badge?
       <CardHeader className="pb-1">
         <div className="flex items-center justify-between gap-2">
           <CardTitle className="text-[13px] font-semibold tracking-tight flex items-center gap-2">
-            <span className="h-1.5 w-1.5 rounded-full bg-gradient-to-br from-cyan-400 to-fuchsia-500 shadow-[0_0_8px_hsl(var(--primary)/0.6)]" />
+            <span className="h-1.5 w-1.5 rounded-full bg-gradient-to-br from-orange-400 to-emerald-500 shadow-[0_0_8px_hsl(var(--primary)/0.6)]" />
             {title}
           </CardTitle>
           <div className="flex items-center gap-1.5">
@@ -151,22 +142,18 @@ function ChartDefs() {
   return (
     <svg width="0" height="0" style={{ position: "absolute" }} aria-hidden>
       <defs>
-        {GRADS.map(([a, b], i) => (
+        {COLORS.map((c, i) => (
           <linearGradient key={`bar-v-${i}`} id={`bar-v-${i}`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={a} stopOpacity={1} />
-            <stop offset="100%" stopColor={b} stopOpacity={0.85} />
+            <stop offset="0%" stopColor={c} stopOpacity={1} />
+            <stop offset="100%" stopColor={c} stopOpacity={0.7} />
           </linearGradient>
         ))}
-        {GRADS.map(([a, b], i) => (
+        {COLORS.map((c, i) => (
           <linearGradient key={`bar-h-${i}`} id={`bar-h-${i}`} x1="0" y1="0" x2="1" y2="0">
-            <stop offset="0%" stopColor={b} stopOpacity={0.85} />
-            <stop offset="100%" stopColor={a} stopOpacity={1} />
+            <stop offset="0%" stopColor={c} stopOpacity={0.7} />
+            <stop offset="100%" stopColor={c} stopOpacity={1} />
           </linearGradient>
         ))}
-        <linearGradient id="grad-area" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor="#22d3ee" stopOpacity={0.9} />
-          <stop offset="100%" stopColor="#a78bfa" stopOpacity={0.15} />
-        </linearGradient>
         <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
           <feGaussianBlur stdDeviation="3" result="b" />
           <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
@@ -181,7 +168,7 @@ function DonutCenter({ total, label }: { total: number | string; label: string }
   return (
     <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
       <div className="text-[10px] uppercase tracking-widest text-muted-foreground">{label}</div>
-      <div className="mt-1 text-2xl font-bold tabular-nums bg-gradient-to-br from-cyan-300 to-fuchsia-400 bg-clip-text text-transparent">
+      <div className="mt-1 text-2xl font-bold tabular-nums bg-gradient-to-br from-orange-400 to-emerald-400 bg-clip-text text-transparent">
         {typeof total === "number" ? total.toLocaleString("pt-BR") : total}
       </div>
     </div>
