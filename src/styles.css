@@ -74,7 +74,7 @@
   --popover: oklch(1 0 0);
   --popover-foreground: oklch(0.15 0 0);
 
-  --primary: #eb6834;                 /* laranja */
+  --primary: #f45f1a;                 /* laranja — croma no teto do gamute sRGB (validado) */
   --primary-foreground: #0b0b0b;
   --primary-glow: #f2985f;
 
@@ -98,31 +98,35 @@
 
   --border: oklch(0.89 0 0);
   --input: oklch(0.89 0 0);
-  --ring: #eb6834;
+  --ring: #f45f1a;
 
   /* Paleta categórica validada (dataviz skill): 8 tons distintos por
      daltonismo, não mais uma escala monocromática de azul (nem o "neon"
      ciano/fúcsia solto que tinha só no Dashboard). Slots 1-5 usados nos
      gráficos "padrão" do sistema; 6-8 extra pros gráficos com mais séries
-     (ex.: Dashboard, que cicla por até 8 categorias). */
-  --chart-1: #eb6834;
+     (ex.: Dashboard, que cicla por até 8 categorias). Croma elevado ao
+     limite do gamute sRGB pra cada matiz/luminosidade (script da skill) —
+     pedido do usuário de cor "mais forte, tipo neon" sem perder validação
+     de contraste/daltonismo. Verde (chart-2/5) e amarelo (chart-3) já
+     estavam perto do teto, por isso quase não mudaram. */
+  --chart-1: #f45f1a;
   --chart-2: #1baf7a;
   --chart-3: #eda100;
-  --chart-4: #e87ba4;
+  --chart-4: #fb68a4;
   --chart-5: #008300;
-  --chart-6: #4a3aa7;
-  --chart-7: #e34948;
-  --chart-8: #2a78d6;
+  --chart-6: #4e14cd;
+  --chart-7: #f61f32;
+  --chart-8: #1476e2;
 
   /* Sidebar — preto de verdade, não navy */
   --sidebar: oklch(0.13 0 0);
   --sidebar-foreground: oklch(0.92 0 0);
-  --sidebar-primary: #eb6834;
+  --sidebar-primary: #f45f1a;
   --sidebar-primary-foreground: #0b0b0b;
   --sidebar-accent: oklch(0.20 0 0);
   --sidebar-accent-foreground: oklch(0.97 0 0);
   --sidebar-border: oklch(0.22 0 0);
-  --sidebar-ring: #eb6834;
+  --sidebar-ring: #f45f1a;
 
   --gradient-primary: linear-gradient(135deg, var(--primary), var(--primary-glow));
   --gradient-card: linear-gradient(180deg, oklch(1 0 0), oklch(0.98 0 0));
@@ -142,7 +146,7 @@
   --popover: #1c1c1c;
   --popover-foreground: #fafafa;
 
-  --primary: #d95926;                 /* laranja (passo escuro) */
+  --primary: #e55a20;                 /* laranja (passo escuro) — croma no teto do gamute */
   --primary-foreground: #0b0b0b;
   --primary-glow: #f2985f;
 
@@ -164,25 +168,25 @@
 
   --border: #2e2e2e;
   --input: #2e2e2e;
-  --ring: #d95926;
+  --ring: #e55a20;
 
-  --chart-1: #d95926;
+  --chart-1: #e55a20;
   --chart-2: #199e70;
   --chart-3: #c98500;
-  --chart-4: #d55181;
+  --chart-4: #eb287f;
   --chart-5: #008300;
-  --chart-6: #9085e9;
-  --chart-7: #e66767;
-  --chart-8: #3987e5;
+  --chart-6: #8c7af6;
+  --chart-7: #f84651;
+  --chart-8: #2085f5;
 
   --sidebar: #0d0d0d;
   --sidebar-foreground: #fafafa;
-  --sidebar-primary: #d95926;
+  --sidebar-primary: #e55a20;
   --sidebar-primary-foreground: #0b0b0b;
   --sidebar-accent: #1f1f1f;
   --sidebar-accent-foreground: #fafafa;
   --sidebar-border: #262626;
-  --sidebar-ring: #d95926;
+  --sidebar-ring: #e55a20;
 }
 
 @layer base {
