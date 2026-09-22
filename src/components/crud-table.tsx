@@ -23,6 +23,7 @@ import {
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
 import { fetchAllPaginado } from "@/lib/fetch-paginado";
+import { useStatusBarCount } from "@/routes/__root";
 
 export type ColumnDef = {
   key: string;
@@ -109,6 +110,8 @@ export function CrudTable({
       return String(av).localeCompare(String(bv), "pt-BR", { numeric: true }) * m;
     });
   }, [filtered, sort]);
+
+  useStatusBarCount(sorted.length);
 
   const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
   const safePage = Math.min(page, totalPages - 1);

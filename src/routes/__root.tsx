@@ -9,10 +9,25 @@ import {
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AuthProvider, useAuth } from "@/lib/auth-context";
 import { Moon, Sun, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
+import packageJson from "../../package.json";
+
+// Slot pra telas informarem a "contagem de registros" da status bar do
+// rodapé sem precisar prop-drill — cada tela chama useStatusBarCount(n) e
+// o número some sozinho quando a tela desmonta (troca de rota).
+const StatusBarContext = createContext<{ setCount: (n: number | null) => void } | null>(null);
+
+export function useStatusBarCount(n: number | null) {
+  const ctx = useContext(StatusBarContext);
+  useEffect(() => {
+    if (!ctx) return;
+    ctx.setCount(n);
+    return () => ctx.setCount(null);
+  }, [ctx, n]);
+}
 
 function ThemeToggle() {
   const [dark, setDark] = useState(false);
@@ -225,6 +240,8 @@ function AuthGate() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const search = useRouterState({ select: (s) => s.location.searchStr });
   const navigate = useNavigate();
+  const [recordCount, setRecordCount] = useState<number | null>(null);
+  const statusBarValue = useMemo(() => ({ setCount: setRecordCount }), []);
   useEffect(() => {
     if (loading) return;
     if (!user && pathname !== "/login") {
@@ -233,10 +250,12 @@ function AuthGate() {
     }
   }, [user, loading, pathname, search, navigate]);
 
-  // Bloqueio por módulo também na rota (não só escondendo do menu) — pega a
-  // permissão do item de menu cujo url mais se aproxima do caminho atual.
-  const requiredPerm = useMemo(() => {
-    let best: { url: string; perm: string } | null = null;
+  // Bloqueio por módulo também na rota (não só escondendo do menu) — pega o
+  // item de menu cujo url mais se aproxima do caminho atual. Reaproveitado
+  // pro título da barra de topo/rodapé (nome do módulo atual), não só pra
+  // checagem de permissão.
+  const activeItem = useMemo(() => {
+    let best: { url: string; perm: string; title: string } | null = null;
     for (const g of groups) {
       for (const item of g.items) {
         if (pathname === item.url || pathname.startsWith(item.url + "/")) {
@@ -244,8 +263,9 @@ function AuthGate() {
         }
       }
     }
-    return best?.perm ?? null;
+    return best;
   }, [pathname]);
+  const requiredPerm = activeItem?.perm ?? null;
   const allowed = !requiredPerm || can(requiredPerm);
   useEffect(() => {
     if (loading || !user) return;
@@ -257,22 +277,38 @@ function AuthGate() {
   if (!allowed) return null;
   return (
     <SidebarProvider>
-      <div className="min-h-screen flex w-full bg-background">
-        <AppSidebar />
-        <div className="flex-1 flex flex-col min-w-0">
-          <header className="h-16 flex items-center gap-3 border-b border-border bg-card/80 backdrop-blur-md px-4 md:px-6 sticky top-0 z-10 shadow-[var(--shadow-card)]">
-            <SidebarTrigger />
-            <div className="font-display text-sm font-semibold tracking-tight text-foreground">Painel Operacional</div>
-            <ClientDate />
-            <RefreshAllButton />
-            <ThemeToggle />
-            <UserBadge />
-          </header>
-          <main className="flex-1 p-4 md:p-6 lg:p-8 overflow-x-hidden max-w-[1800px] w-full mx-auto">
-            <Outlet />
-          </main>
+      <StatusBarContext.Provider value={statusBarValue}>
+        <div className="h-screen flex w-full bg-background overflow-hidden">
+          <AppSidebar />
+          <div className="flex-1 flex flex-col min-w-0 h-full">
+            <header className="h-10 shrink-0 flex items-center gap-2 border-b border-border bg-card px-3 z-10">
+              <SidebarTrigger className="h-7 w-7" />
+              <div className="font-display text-[13px] font-semibold tracking-tight text-foreground truncate">
+                {activeItem?.title ?? "Painel Operacional"}
+              </div>
+              <ClientDate />
+              <RefreshAllButton />
+              <ThemeToggle />
+              <UserBadge />
+            </header>
+            <main className="flex-1 overflow-y-auto overflow-x-hidden p-3 md:p-4">
+              <Outlet />
+            </main>
+            <footer className="h-6 shrink-0 flex items-center gap-2.5 border-t border-border bg-card px-3 text-[11px] text-muted-foreground">
+              <span className="font-medium text-foreground/80">{user.nome}</span>
+              <span className="opacity-40">·</span>
+              <span className="truncate">{activeItem?.title ?? "—"}</span>
+              {recordCount != null && (
+                <>
+                  <span className="opacity-40">·</span>
+                  <span className="tabular-nums">{recordCount.toLocaleString("pt-BR")} registro(s)</span>
+                </>
+              )}
+              <span className="ml-auto shrink-0">v{packageJson.version}</span>
+            </footer>
+          </div>
         </div>
-      </div>
+      </StatusBarContext.Provider>
     </SidebarProvider>
   );
 }

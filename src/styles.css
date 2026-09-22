@@ -51,7 +51,11 @@
 }
 
 :root {
-  --radius: 0.75rem;
+  /* Densidade de console corporativo: cantos quase retos (não zero — só
+     suaviza), e a base rem menor (ver `html` em @layer base) encolhe junto
+     TODA a escala de espaçamento do Tailwind (p-4, gap-2 etc. são em rem),
+     sem precisar editar padding/gap em cada componente um por um. */
+  --radius: 0.375rem;
 
   /* Navy Trust — #0f1b3d / #1e3a5f / #3b6fa0 / #e8edf3 */
   --background: oklch(0.975 0.006 250);
@@ -104,8 +108,10 @@
 
   --gradient-primary: linear-gradient(135deg, var(--primary), var(--primary-glow));
   --gradient-card: linear-gradient(180deg, oklch(1 0 0), oklch(0.975 0.008 250));
-  --shadow-card: 0 1px 2px 0 oklch(0.24 0.06 265 / 0.06), 0 1px 3px 0 oklch(0.24 0.06 265 / 0.06);
-  --shadow-elevated: 0 16px 40px -20px oklch(0.24 0.09 265 / 0.35);
+  /* Console corporativo: quase sem sombra — a separação entre superfícies
+     vem de borda (border-border), não de elevação flutuante de site. */
+  --shadow-card: 0 1px 2px 0 oklch(0.24 0.06 265 / 0.04);
+  --shadow-elevated: 0 4px 14px -6px oklch(0.24 0.09 265 / 0.18);
 }
 
 .dark {
@@ -150,12 +156,19 @@
 
 @layer base {
   * { border-color: var(--color-border); }
+  /* 81.25% de 16px = 13px — base do console. Como toda a escala de
+     espaçamento do Tailwind (p-4, gap-2, h-8...) é em rem, isso encolhe
+     padding/gap/altura de componente no sistema inteiro de uma vez, em vez
+     de precisar editar cada tela. Usa % (não px fixo) pra continuar
+     respeitando zoom/acessibilidade do navegador do usuário. */
+  html { font-size: 81.25%; }
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
     font-family: var(--font-sans);
     font-feature-settings: "cv11", "ss01";
     -webkit-font-smoothing: antialiased;
+    line-height: 1.4;
   }
   h1, h2, h3, h4, .font-display {
     font-family: var(--font-display);
