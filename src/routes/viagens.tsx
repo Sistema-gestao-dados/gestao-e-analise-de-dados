@@ -111,16 +111,21 @@ function ViagensPage() {
 
   const clientFilter = useMemo(() => {
     return (r: any) => {
-      if (somenteAtivos && ativos.length) {
+      // Mesma regra de filterViagensAtivas() (lib/projeto-ativo.ts), usada
+      // por Jornada/Dashboard/Resumo/Intrajornada: combinação linha/dia
+      // tipo sem NENHUMA versão ativada fica de fora, não passa — antes
+      // aqui em Viagens acontecia o oposto (passava), então "Somente
+      // ativas" mostrava coisas diferentes em telas diferentes.
+      if (somenteAtivos) {
         const key = `${r.linha}||${r.tipo_operacao ?? ""}`;
-        const v = ativosKey.get(key);
-        if (v && r.versao_programacao !== v) return false;
+        const versaoAtiva = ativosKey.get(key);
+        if (!versaoAtiva || r.versao_programacao !== versaoAtiva) return false;
       }
       if (fUnidade !== "__all" && resolveUnidadeViagem(r, linhaMap, empresaOverrideMap) !== fUnidade) return false;
       if (fGrupo !== "__all" && resolveGrupoViagem(r, linhaMap, empresaOverrideMap) !== fGrupo) return false;
       return true;
     };
-  }, [somenteAtivos, ativos.length, ativosKey, fUnidade, fGrupo, linhaMap, empresaOverrideMap]);
+  }, [somenteAtivos, ativosKey, fUnidade, fGrupo, linhaMap, empresaOverrideMap]);
 
   return (
     <div className="space-y-4">
