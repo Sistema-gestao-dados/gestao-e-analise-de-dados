@@ -199,15 +199,23 @@ export function runVerificacaoIntegridade(args: {
 
   // 9) Linha sem Grupo de Linha (grupo_du) mapeado no dia tipo custom em que aparece
   if (multi) {
-    const mapeadas = new Set(multi.map((m) => `${m.tipo_dia}||${m.linha}`));
-    const orfas = new Map<string, number>();
+    // Comparação sem diferenciar maiúsculas/minúsculas — mesma razão do
+    // .ilike() em linhasDoGrupo() (lib/projeto-ativo.ts): dia tipo é texto
+    // livre, e uma grafia levemente diferente entre importações não pode
+    // gerar um alerta falso de "grupo faltando" quando o mapeamento existe.
+    const mapeadas = new Set(multi.map((m) => `${m.tipo_dia.toLowerCase()}||${m.linha}`));
+    const diasBaseLower = DIAS_TIPO_BASE.map((d) => d.toLowerCase());
+    const orfas = new Map<string, { linha: string; diaOriginal: string; n: number }>();
     for (const v of viagens) {
       const dia = v.tipo_operacao?.trim();
-      if (!dia || DIAS_TIPO_BASE.includes(dia)) continue;
-      const key = `${dia}||${v.linha}`;
-      if (!mapeadas.has(key)) orfas.set(key, (orfas.get(key) ?? 0) + 1);
+      if (!dia || diasBaseLower.includes(dia.toLowerCase())) continue;
+      const key = `${dia.toLowerCase()}||${v.linha}`;
+      if (!mapeadas.has(key)) {
+        const atual = orfas.get(key);
+        orfas.set(key, { linha: v.linha, diaOriginal: atual?.diaOriginal ?? dia, n: (atual?.n ?? 0) + 1 });
+      }
     }
-    const total = Array.from(orfas.values()).reduce((s, n) => s + n, 0);
+    const total = Array.from(orfas.values()).reduce((s, x) => s + x.n, 0);
     if (total > 0) {
       alertas.push({
         id: "linha_sem_grupo_dia_tipo",
@@ -216,10 +224,7 @@ export function runVerificacaoIntegridade(args: {
         titulo: "Linha sem Grupo de Linha mapeado no dia tipo",
         descricao: "Essa combinação linha + dia tipo não tem grupo_du em Cadastro de Grupos — some/fica incompleta nos relatórios agrupados por Grupo de Linha (Resumo por Grupo, Comparativo). Costuma acontecer quando uma importação posterior do mesmo dia tipo traz linhas que a primeira importação não tinha. Cadastre manualmente em Cadastro de Grupos, ou reimporte um arquivo que contenha essas linhas com esse dia tipo selecionado.",
         quantidade: total,
-        amostra: amostra(Array.from(orfas, ([key, n]) => {
-          const [dia, linha] = key.split("||");
-          return `Linha ${linha}, dia tipo "${dia}" — ${n} viagem(ns)`;
-        })),
+        amostra: amostra(Array.from(orfas.values(), (x) => `Linha ${x.linha}, dia tipo "${x.diaOriginal}" — ${x.n} viagem(ns)`)),
       });
     }
   }

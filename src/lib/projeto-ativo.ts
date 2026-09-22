@@ -4,6 +4,7 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import type { ViagemLite } from "@/lib/resumo";
+import { fetchAllPaginado } from "@/lib/fetch-paginado";
 
 export type ProjetoAtivo = {
   id: string;
@@ -13,9 +14,14 @@ export type ProjetoAtivo = {
 };
 
 export async function fetchProjetosAtivos(): Promise<ProjetoAtivo[]> {
-  const { data, error } = await supabase.from("projeto_ativo").select("id,linha,tipo_operacao,versao_programacao");
-  if (error) throw error;
-  return (data ?? []) as ProjetoAtivo[];
+  return fetchAllPaginado<ProjetoAtivo>("projeto_ativo", "id,linha,tipo_operacao,versao_programacao");
+}
+
+/** Escapa `%`, `_` e `\` pra usar um texto livre com segurança como padrão
+ *  de `.ilike()` — sem isso, um dia tipo custom com esses caracteres no
+ *  nome pode casar com linhas de outro grupo por engano. */
+function escapeIlike(s: string): string {
+  return s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
 }
 
 /** Ativa (linha, tipo_operacao, versao) — como o unique é (linha, tipo_operacao),
@@ -36,18 +42,21 @@ export async function ativarProjeto(linha: string, tipo_operacao: string, versao
  *  quebrar silenciosamente se o dia tipo vier com grafia levemente
  *  diferente entre importações (já causou esse problema antes). */
 async function linhasDoGrupo(linha: string, tipo_operacao: string): Promise<string[]> {
-  const { data: g } = await (supabase as any)
+  const padrao = escapeIlike(tipo_operacao);
+  const { data: g, error: e1 } = await (supabase as any)
     .from("parametro_multilinha")
     .select("grupo_du")
     .eq("linha", linha)
-    .ilike("tipo_dia", tipo_operacao);
+    .ilike("tipo_dia", padrao);
+  if (e1) throw e1;
   const grupos = Array.from(new Set((g ?? []).map((r: any) => r.grupo_du).filter(Boolean)));
   if (!grupos.length) return [linha];
-  const { data: irmas } = await (supabase as any)
+  const { data: irmas, error: e2 } = await (supabase as any)
     .from("parametro_multilinha")
     .select("linha")
     .in("grupo_du", grupos)
-    .ilike("tipo_dia", tipo_operacao);
+    .ilike("tipo_dia", padrao);
+  if (e2) throw e2;
   const set = new Set<string>([linha, ...((irmas ?? []).map((r: any) => r.linha))]);
   return Array.from(set);
 }
@@ -104,8 +113,8 @@ export async function desativarProjeto(linha: string, tipo_operacao: string) {
 }
 
 /** Filtra viagens mantendo apenas as pertencentes ao projeto ativo de cada
- *  combinação (linha, tipo_operacao). Combinações sem projeto ativo permanecem
- *  inalteradas (mostra tudo). */
+ *  combinação (linha, tipo_operacao). Combinação sem NENHUM projeto ativo
+ *  fica de fora (não aparece) — não "mostra tudo". */
 export function filterViagensAtivas(viagens: ViagemLite[], ativos: ProjetoAtivo[]): ViagemLite[] {
   if (!ativos.length) return [];
   const map = new Map<string, string>();
