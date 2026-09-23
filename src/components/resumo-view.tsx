@@ -51,6 +51,20 @@ function roundTo(n: number, decimals: number): number {
   return Math.round(n * f) / f;
 }
 
+/** Campos alternáveis em "Campos visíveis" — mesmo padrão do Relatório
+ * Comparativo: controla o que aparece na tela E no PDF/Excel. */
+type ResumoFieldKey = "dir1" | "dir2" | "aprov" | "tu" | "totalServico" | "frota" | "partidas" | "km";
+const RESUMO_FIELDS: { key: ResumoFieldKey; label: string; fmt: (n: number) => string }[] = [
+  { key: "dir1", label: "Dir 1º T.", fmt: fmtInt },
+  { key: "dir2", label: "Dir 2º T.", fmt: fmtInt },
+  { key: "aprov", label: "Aproveit.", fmt: fmtInt },
+  { key: "tu", label: "TU", fmt: fmtInt },
+  { key: "totalServico", label: "Serviços", fmt: fmtInt },
+  { key: "frota", label: "Frota", fmt: fmtInt },
+  { key: "partidas", label: "Partidas", fmt: fmtInt },
+  { key: "km", label: "KM", fmt: (n) => fmtKm(n) },
+];
+
 function KpiCard({ label, value, icon: Icon }: { label: string; value: string | number; icon: any }) {
   return (
     <Card className="shadow-[var(--shadow-card)]">
@@ -125,6 +139,19 @@ export function ResumoView({ mode }: { mode: Mode }) {
   const [criterio, setCriterio] = usePersistentState<CriterioLinha>(`resumo.${mode}.criterio`, "predominancia");
   const [mostrarDescricao, setMostrarDescricao] = usePersistentState(`resumo.${mode}.mostrarDescricao`, false);
   const [mostrarCusto, setMostrarCusto] = usePersistentState(`resumo.${mode}.mostrarCusto`, false);
+  // Campos visíveis — controla tela E exportação (PDF/Excel), igual ao
+  // Relatório Comparativo. Por padrão todos ligados (comportamento antigo).
+  const [visibleFieldsArr, setVisibleFieldsArr] = usePersistentState<string[]>(
+    `resumo.${mode}.visibleFields`,
+    RESUMO_FIELDS.map((f) => f.key as string),
+  );
+  const visibleFields = useMemo(() => new Set(visibleFieldsArr), [visibleFieldsArr]);
+  const shownFields = useMemo(() => RESUMO_FIELDS.filter((f) => visibleFields.has(f.key)), [visibleFields]);
+  function toggleField(k: string) {
+    const next = new Set(visibleFields);
+    if (next.has(k)) next.delete(k); else next.add(k);
+    setVisibleFieldsArr(Array.from(next));
+  }
 
   const [fDia, setFDia] = usePersistentState(`resumo.${mode}.fDia`, "__all");
   const [fLinha, setFLinha] = usePersistentState<string[]>(`resumo.${mode}.fLinha`, []);
@@ -508,7 +535,7 @@ const totals = useMemo(() => {
   const title = mode === "linha" ? "Resumo por Linha" : "Resumo Operacional";
   const firstColLabel = mode === "linha" ? "Linha" : (groupBy === "grupo" ? "Grupo de Linha" : "Projeto / Versão");
   const comCustoTabela = mostrarCusto && !!custoParams && custoParams.salarioMotoristaMensal > 0;
-  const headers = [firstColLabel, "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas", "KM Total", ...(comCustoTabela ? ["Custo M.O."] : [])];
+  const headers = [firstColLabel, ...shownFields.map((f) => f.label), ...(comCustoTabela ? ["Custo M.O."] : [])];
 
   function exportXLSX() {
     const wb = XLSX.utils.book_new();
@@ -519,12 +546,13 @@ const totals = useMemo(() => {
     // mini-resumo por Unidade. Usa xlsx-js-style pra cor de célula (a
     // "xlsx" comunidade ignora estilo ao salvar).
     type RowKind = "title" | "subtitle" | "blank" | "unidade" | "header" | "body" | "total" | "miniHeader" | "miniBody" | "miniTotal";
-    const headerRow = [firstColLabel, ...(comDescricao ? ["Descrição"] : []), "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas", "KM", ...(comCustoTabela ? ["Custo M.O."] : [])];
+    const headerRow = [firstColLabel, ...(comDescricao ? ["Descrição"] : []), ...shownFields.map((f) => f.label), ...(comCustoTabela ? ["Custo M.O."] : [])];
     const nCols = headerRow.length;
     const rowsAll: (string | number)[][] = [];
     const kinds: RowKind[] = [];
     const merges: { s: { r: number; c: number }; e: { r: number; c: number } }[] = [];
     const push = (r: (string | number)[], k: RowKind) => { rowsAll.push(r); kinds.push(k); };
+    const fieldVals = (r: Record<ResumoFieldKey, number>) => shownFields.map((f) => f.key === "km" ? roundTo(r.km, 1) : r[f.key]);
 
     push([title.toUpperCase()], "title");
     merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: nCols - 1 } });
@@ -540,7 +568,7 @@ const totals = useMemo(() => {
         push([
           r.groupLabel,
           ...(comDescricao ? [descricaoPorLinha.get(r.groupKey) ?? ""] : []),
-          r.dir1, r.dir2, r.aprov, r.tu, r.totalServico, r.frota, r.partidas, roundTo(r.km, 1),
+          ...fieldVals(r),
           ...(comCustoTabela ? [roundTo(custoPorGroupKey.get(r.groupKey) ?? 0, 2)] : []),
         ], "body");
       }
@@ -551,7 +579,7 @@ const totals = useMemo(() => {
       }), { dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0, km: 0, custo: 0 });
       push([
         "TOTAL", ...(comDescricao ? [""] : []),
-        tot.dir1, tot.dir2, tot.aprov, tot.tu, tot.totalServico, tot.frota, tot.partidas, roundTo(tot.km, 1),
+        ...fieldVals(tot),
         ...(comCustoTabela ? [roundTo(tot.custo, 2)] : []),
       ], "total");
       push([], "blank");
@@ -570,9 +598,9 @@ const totals = useMemo(() => {
 
     const ws = XLSX.utils.aoa_to_sheet(rowsAll);
     ws["!merges"] = merges;
-    const colsBase = [{ wch: 22 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 12 }];
-    const colsComDescricao = [{ wch: 22 }, { wch: 30 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 12 }];
-    ws["!cols"] = comCustoTabela ? [...(comDescricao ? colsComDescricao : colsBase), { wch: 14 }] : (comDescricao ? colsComDescricao : colsBase);
+    const colsFields = shownFields.map((f) => ({ wch: f.key === "km" ? 12 : 10 }));
+    const cols = [{ wch: 22 }, ...(comDescricao ? [{ wch: 30 }] : []), ...colsFields, ...(comCustoTabela ? [{ wch: 14 }] : [])];
+    ws["!cols"] = cols;
 
     const FILL_BLUE = { patternType: "solid", fgColor: { rgb: XLSX_BLUE } };
     const FILL_LIGHTBLUE = { patternType: "solid", fgColor: { rgb: XLSX_BLUE_LIGHT } };
@@ -632,7 +660,8 @@ const totals = useMemo(() => {
       }
 
       const comDescricaoPdf = mode === "linha" && mostrarDescricao;
-      const headersPdf = [firstColLabel, ...(comDescricaoPdf ? ["Descrição"] : []), "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas", "KM", ...(comCustoTabela ? ["Custo M.O."] : [])];
+      const headersPdf = [firstColLabel, ...(comDescricaoPdf ? ["Descrição"] : []), ...shownFields.map((f) => f.label), ...(comCustoTabela ? ["Custo M.O."] : [])];
+      const fieldValsPdf = (r: Record<ResumoFieldKey, number>) => shownFields.map((f) => f.fmt(r[f.key]));
       const empBody = resumoEmpresa.map((e) => [e.empresa, fmtInt(e.servicos), fmtInt(e.frota), fmtInt(e.partidas), fmtKm(e.km)]);
       const empHeaders = ["Empresa", "Serviços", "Frota", "Partidas", "KM"];
       const empFoot = ["TOTAL",
@@ -661,17 +690,19 @@ const totals = useMemo(() => {
       const blockRowsPdf = rowsPorUnidadeExport.flatMap((grupo) => grupo.rows.map((r) => [
         r.groupLabel,
         ...(comDescricaoPdf ? [descricaoPorLinha.get(r.groupKey) ?? ""] : []),
-        fmtInt(r.dir1), fmtInt(r.dir2), fmtInt(r.aprov), fmtInt(r.tu), fmtInt(r.totalServico), fmtInt(r.frota), fmtInt(r.partidas), fmtKm(r.km),
+        ...fieldValsPdf(r),
         ...(comCustoTabela ? [fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)] : []),
       ]));
-      const blockFootPdf = ["TOTAL", ...(comDescricaoPdf ? [""] : []), fmtInt(totals.dir1), fmtInt(totals.dir2), fmtInt(totals.aprov), fmtInt(totals.tu), fmtInt(totals.totalServico), fmtInt(totals.frota), fmtInt(totals.partidas), fmtKm(totals.km), ...(comCustoTabela ? [fmtMoeda(Array.from(custoPorGroupKey.values()).reduce((s, v) => s + v, 0))] : [])];
+      const blockFootPdf = ["TOTAL", ...(comDescricaoPdf ? [""] : []), ...fieldValsPdf(totals), ...(comCustoTabela ? [fmtMoeda(Array.from(custoPorGroupKey.values()).reduce((s, v) => s + v, 0))] : [])];
 
-      // Largura natural calculada só com getTextWidth (API padrão do jsPDF).
-      function tableNaturalWidth(fontSize: number, headerRow: string[], bodyRows: any[][], footRow: any[]) {
+      // Largura natural calculada só com getTextWidth (API padrão do jsPDF)
+      // — por coluna, pra dar cellWidth explícita e garantir que todo bloco
+      // de Unidade use a MESMA largura (senão cada bloco auto-ajustava só
+      // com o próprio conteúdo e as colunas ficavam desalinhadas entre si).
+      function tableColWidths(fontSize: number, headerRow: string[], bodyRows: any[][], footRow: any[]) {
         const padX = 2 * (fontSize / 8);
         probe.setFontSize(fontSize);
-        let total = 0;
-        for (let c = 0; c < headerRow.length; c++) {
+        return headerRow.map((_, c) => {
           let maxW = 0;
           const cellsInCol = [headerRow[c], ...bodyRows.map((r) => r[c]), footRow[c]];
           for (const cell of cellsInCol) {
@@ -679,9 +710,11 @@ const totals = useMemo(() => {
             const w = probe.getTextWidth(String(cell ?? ""));
             if (w > maxW) maxW = w;
           }
-          total += maxW + padX * 2;
-        }
-        return total;
+          return maxW + padX * 2;
+        });
+      }
+      function tableNaturalWidth(fontSize: number, headerRow: string[], bodyRows: any[][], footRow: any[]) {
+        return tableColWidths(fontSize, headerRow, bodyRows, footRow).reduce((s, w) => s + w, 0);
       }
       function naturalWidth(fontSize: number) {
         const mainW = tableNaturalWidth(fontSize, headersPdf, blockRowsPdf, blockFootPdf);
@@ -704,6 +737,10 @@ const totals = useMemo(() => {
             data.cell.styles.fontStyle = "bold";
           }
         };
+        // Larguras fixas por coluna (mesma pra todo bloco de Unidade).
+        const mainWidths = tableColWidths(fontSize, headersPdf, blockRowsPdf, blockFootPdf);
+        const columnStylesMain: Record<number, { cellWidth: number; halign: "center" }> = {};
+        mainWidths.forEach((w, i) => { columnStylesMain[i] = { cellWidth: w, halign: "center" }; });
 
         // Um bloco de tabela por Unidade, cada um com seu próprio TOTAL —
         // mesmo formato nos dois modos (Resumo por Linha / Operacional) e
@@ -715,7 +752,7 @@ const totals = useMemo(() => {
           const groupBody = grupo.rows.map((r) => [
             r.groupLabel,
             ...(comDescricaoPdf ? [descricaoPorLinha.get(r.groupKey) ?? ""] : []),
-            fmtInt(r.dir1), fmtInt(r.dir2), fmtInt(r.aprov), fmtInt(r.tu), fmtInt(r.totalServico), fmtInt(r.frota), fmtInt(r.partidas), fmtKm(r.km),
+            ...fieldValsPdf(r),
             ...(comCustoTabela ? [fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)] : []),
           ]);
           const tot = grupo.rows.reduce((s, r) => ({
@@ -723,13 +760,14 @@ const totals = useMemo(() => {
             totalServico: s.totalServico + r.totalServico, frota: s.frota + r.frota, partidas: s.partidas + r.partidas,
             km: s.km + r.km, custo: s.custo + (custoPorGroupKey.get(r.groupKey) ?? 0),
           }), { dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0, km: 0, custo: 0 });
-          const groupFoot = ["TOTAL", ...(comDescricaoPdf ? [""] : []), fmtInt(tot.dir1), fmtInt(tot.dir2), fmtInt(tot.aprov), fmtInt(tot.tu), fmtInt(tot.totalServico), fmtInt(tot.frota), fmtInt(tot.partidas), fmtKm(tot.km), ...(comCustoTabela ? [fmtMoeda(tot.custo)] : [])];
+          const groupFoot = ["TOTAL", ...(comDescricaoPdf ? [""] : []), ...fieldValsPdf(tot), ...(comCustoTabela ? [fmtMoeda(tot.custo)] : [])];
           autoTable(d, {
             startY: y + 5 * zoom,
             head: [headersPdf],
             body: groupBody,
             foot: [groupFoot],
             styles: styleBase,
+            columnStyles: columnStylesMain,
             headStyles: headStyleBase,
             footStyles: footStyleBase,
             didParseCell: blueCol0,
@@ -900,6 +938,22 @@ const totals = useMemo(() => {
         </div>
       </div>
 
+      <Card className="shadow-[var(--shadow-card)] print:hidden">
+        <CardContent className="p-3 flex flex-wrap items-center gap-4">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Campos visíveis</span>
+          {RESUMO_FIELDS.map((f) => (
+            <label key={f.key} className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <Checkbox
+                checked={visibleFields.has(f.key)}
+                onCheckedChange={() => toggleField(f.key)}
+                className="h-3.5 w-3.5"
+              />
+              {f.label}
+            </label>
+          ))}
+        </CardContent>
+      </Card>
+
       {/* Visualização de impressão — some na tela normal, só aparece no
           diálogo de impressão do navegador. O navegador cuida de margens,
           escala ("ajustar à página") e nº de páginas, com pré-visualização
@@ -920,14 +974,7 @@ const totals = useMemo(() => {
             {displayRows.map((r) => (
               <tr key={r.groupKey}>
                 <td style={{ textAlign: "left", fontWeight: 600 }}>{r.groupLabel}</td>
-                <td>{fmtInt(r.dir1)}</td>
-                <td>{fmtInt(r.dir2)}</td>
-                <td>{fmtInt(r.aprov)}</td>
-                <td>{fmtInt(r.tu)}</td>
-                <td style={{ fontWeight: 600 }}>{fmtInt(r.totalServico)}</td>
-                <td style={{ fontWeight: 600 }}>{fmtInt(r.frota)}</td>
-                <td>{fmtInt(r.partidas)}</td>
-                <td>{fmtKm(r.km)}</td>
+                {shownFields.map((f) => <td key={f.key}>{f.fmt(r[f.key])}</td>)}
                 {comCustoTabela && <td>{fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)}</td>}
               </tr>
             ))}
@@ -935,14 +982,8 @@ const totals = useMemo(() => {
           <tfoot>
             <tr>
               <td style={{ textAlign: "left" }}>TOTAL</td>
-              <td>{fmtInt(totals.dir1)}</td>
-              <td>{fmtInt(totals.dir2)}</td>
-              <td>{fmtInt(totals.aprov)}</td>
-              <td>{fmtInt(totals.tu)}</td>
-              <td>{fmtInt(totals.totalServico)}</td>
-              <td>{fmtInt(totals.frota)}</td>
-              <td>{fmtInt(totals.partidas)}</td>
-              <td>{fmtKm(totals.km)}</td>
+              {shownFields.map((f) => <td key={f.key}>{f.fmt(totals[f.key])}</td>)}
+              {comCustoTabela && <td>{fmtMoeda(Array.from(custoPorGroupKey.values()).reduce((s, v) => s + v, 0))}</td>}
             </tr>
           </tfoot>
         </table>
@@ -1139,27 +1180,17 @@ const totals = useMemo(() => {
                           <span className="block text-[10px] font-normal text-muted-foreground">{descricaoPorLinha.get(r.groupKey)}</span>
                         )}
                       </TableCell>
-                      <TableCell className="px-2 py-1 text-right tabular-nums">{r.dir1}</TableCell>
-                      <TableCell className="px-2 py-1 text-right tabular-nums">{r.dir2}</TableCell>
-                      <TableCell className="px-2 py-1 text-right tabular-nums">{r.aprov}</TableCell>
-                      <TableCell className="px-2 py-1 text-right tabular-nums">{r.tu}</TableCell>
-                      <TableCell className="px-2 py-1 text-right tabular-nums font-semibold">{r.totalServico}</TableCell>
-                      <TableCell className="px-2 py-1 text-right tabular-nums font-semibold">{r.frota}</TableCell>
-                      <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(r.partidas)}</TableCell>
-                      <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(r.km)}</TableCell>
+                      {shownFields.map((f) => (
+                        <TableCell key={f.key} className="px-2 py-1 text-right tabular-nums">{f.fmt(r[f.key])}</TableCell>
+                      ))}
                       {comCustoTabela && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)}</TableCell>}
                     </TableRow>
                   ))}
                   <TableRow className="bg-muted/50 font-bold h-9">
                     <TableCell className="px-2 py-1">TOTAL</TableCell>
-                    <TableCell className="px-2 py-1 text-right tabular-nums">{totals.dir1}</TableCell>
-                    <TableCell className="px-2 py-1 text-right tabular-nums">{totals.dir2}</TableCell>
-                    <TableCell className="px-2 py-1 text-right tabular-nums">{totals.aprov}</TableCell>
-                    <TableCell className="px-2 py-1 text-right tabular-nums">{totals.tu}</TableCell>
-                    <TableCell className="px-2 py-1 text-right tabular-nums">{totals.totalServico}</TableCell>
-                    <TableCell className="px-2 py-1 text-right tabular-nums">{totals.frota}</TableCell>
-                    <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(totals.partidas)}</TableCell>
-                    <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(totals.km)}</TableCell>
+                    {shownFields.map((f) => (
+                      <TableCell key={f.key} className="px-2 py-1 text-right tabular-nums">{f.fmt(totals[f.key])}</TableCell>
+                    ))}
                     {comCustoTabela && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(Array.from(custoPorGroupKey.values()).reduce((s, v) => s + v, 0))}</TableCell>}
                   </TableRow>
                 </TableBody>
