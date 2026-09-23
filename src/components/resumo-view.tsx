@@ -23,13 +23,17 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Bus, Users, Activity, Gauge, FileSpreadsheet, FileText, Layers, AlertTriangle, Play, RotateCcw, Printer } from "lucide-react";
 import { MultiSelect } from "@/components/multi-select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import * as XLSX from "xlsx";
+// xlsx-js-style (fork da SheetJS community, mesma API) em vez de "xlsx"
+// puro: a "xlsx" comunidade não escreve estilo de célula (cor de
+// fundo/fonte) no arquivo gerado — só a versão paga faz isso.
+import * as XLSX from "xlsx-js-style";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { PdfPreviewDialog, type PdfOrientation } from "@/components/pdf-preview-dialog";
 import { logAudit } from "@/lib/audit";
 import { useAuditView } from "@/lib/use-audit-view";
 import { usePersistentState } from "@/hooks/use-persistent-state";
+import { PDF_BLUE, PDF_BLUE_LIGHT, PDF_LINE_BLUE, XLSX_BLUE, XLSX_BLUE_LIGHT, XLSX_LINE_BLUE } from "@/lib/report-style";
 
 const fetchViagens = fetchAllViagens;
 
@@ -37,6 +41,14 @@ function parseHHMM(s: string | null): number | null {
   if (!s) return null;
   const m = /^(\d{1,2}):(\d{2})/.exec(s);
   return m ? parseInt(m[1], 10) * 60 + parseInt(m[2], 10) : null;
+}
+
+// Arredonda ANTES de calcular somas/diferenças — soma de muitos valores
+// decimais (KM, principalmente) acumula ruído de ponto flutuante (ex.:
+// -4,5e-13 em vez de 0).
+function roundTo(n: number, decimals: number): number {
+  const f = 10 ** decimals;
+  return Math.round(n * f) / f;
 }
 
 function KpiCard({ label, value, icon: Icon }: { label: string; value: string | number; icon: any }) {
@@ -324,10 +336,11 @@ export function ResumoView({ mode }: { mode: Mode }) {
     });
   }, [rows, ordenarPor, unidadePorGrupo]);
 
-  // Linhas agrupadas por Unidade, na ordem que os relatórios de exportação
-  // (Excel/PDF) usam — só faz sentido no modo "Resumo por Linha".
-  const linhasPorUnidadeExport = useMemo(() => {
-    if (mode !== "linha") return [] as { unidade: string; rows: AggRow[] }[];
+  // Linhas/grupos agrupados por Unidade, na ordem que os relatórios de
+  // exportação (Excel/PDF) usam — mesmo formato "por Unidade" nos dois
+  // modos (Resumo por Linha e Resumo Operacional), só muda a granularidade
+  // de `rows` (linha individual ou grupo/versão, já vem pronta de `rows`).
+  const rowsPorUnidadeExport = useMemo(() => {
     const grupos = new Map<string, AggRow[]>();
     for (const r of rows) {
       const un = unidadePorGrupo.get(r.groupKey) || "Sem unidade";
@@ -337,7 +350,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
     }
     for (const arr of grupos.values()) arr.sort((a, b) => a.groupLabel.localeCompare(b.groupLabel, "pt-BR", { numeric: true }));
     return Array.from(grupos, ([unidade, rows]) => ({ unidade, rows })).sort((a, b) => a.unidade.localeCompare(b.unidade, "pt-BR"));
-  }, [mode, rows, unidadePorGrupo]);
+  }, [rows, unidadePorGrupo]);
 
 
 const totals = useMemo(() => {
@@ -501,88 +514,86 @@ const totals = useMemo(() => {
     const wb = XLSX.utils.book_new();
     const comDescricao = mode === "linha" && mostrarDescricao;
 
-    if (mode === "linha") {
-      // Layout agrupado por Unidade: cada unidade em bloco próprio, com
-      // cabeçalho, TOTAL por unidade, e um mini-resumo no rodapé.
-      const nCols = 9 + (comDescricao ? 1 : 0) + (comCustoTabela ? 1 : 0);
-      const aoa: (string | number)[][] = [];
-      const merges: { s: { r: number; c: number }; e: { r: number; c: number } }[] = [];
-      const tituloGrupo = S.grupo !== "__all" ? ` - ${S.grupo.toUpperCase()}` : "";
-      aoa.push([""]); merges.push({ s: { r: 0, c: 1 }, e: { r: 0, c: nCols - 1 } });
-      aoa[0] = ["", `RESUMO POR LINHA${tituloGrupo}`, ...Array(nCols - 2).fill("")];
-      aoa.push(Array(nCols).fill(""));
+    // Layout "por Unidade" (mesmo dos dois modos): um bloco por Unidade —
+    // título, cabeçalho azul, linhas, TOTAL em azul claro — seguido do
+    // mini-resumo por Unidade. Usa xlsx-js-style pra cor de célula (a
+    // "xlsx" comunidade ignora estilo ao salvar).
+    type RowKind = "title" | "subtitle" | "blank" | "unidade" | "header" | "body" | "total" | "miniHeader" | "miniBody" | "miniTotal";
+    const headerRow = [firstColLabel, ...(comDescricao ? ["Descrição"] : []), "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas", "KM", ...(comCustoTabela ? ["Custo M.O."] : [])];
+    const nCols = headerRow.length;
+    const rowsAll: (string | number)[][] = [];
+    const kinds: RowKind[] = [];
+    const merges: { s: { r: number; c: number }; e: { r: number; c: number } }[] = [];
+    const push = (r: (string | number)[], k: RowKind) => { rowsAll.push(r); kinds.push(k); };
 
-      const headerRow = ["", "Linha", ...(comDescricao ? ["Descrição"] : []), "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas", ...(comCustoTabela ? ["Custo M.O."] : [])];
+    push([title.toUpperCase()], "title");
+    merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: nCols - 1 } });
+    push([`Gerado em ${new Date().toLocaleString("pt-BR")} — ${rows.length} ${mode === "linha" ? "linha(s)" : "grupo(s)"}`], "subtitle");
+    merges.push({ s: { r: 1, c: 0 }, e: { r: 1, c: nCols - 1 } });
+    push([], "blank");
 
-      for (const grupo of linhasPorUnidadeExport) {
-        aoa.push(headerRow);
-        const unidadeRowStart = aoa.length;
-        for (const r of grupo.rows) {
-          aoa.push([
-            aoa.length === unidadeRowStart ? `UNIDADE ${grupo.unidade.toUpperCase()}` : "",
-            r.groupLabel,
-            ...(comDescricao ? [descricaoPorLinha.get(r.groupKey) ?? ""] : []),
-            r.dir1, r.dir2, r.aprov, r.tu, r.totalServico, r.frota, r.partidas,
-            ...(comCustoTabela ? [fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)] : []),
-          ]);
-        }
-        if (grupo.rows.length > 1) merges.push({ s: { r: unidadeRowStart, c: 0 }, e: { r: aoa.length - 1, c: 0 } });
-        const tot = grupo.rows.reduce((s, r) => ({
-          dir1: s.dir1 + r.dir1, dir2: s.dir2 + r.dir2, aprov: s.aprov + r.aprov, tu: s.tu + r.tu,
-          totalServico: s.totalServico + r.totalServico, frota: s.frota + r.frota, partidas: s.partidas + r.partidas,
-          custo: s.custo + (custoPorGroupKey.get(r.groupKey) ?? 0),
-        }), { dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0, custo: 0 });
-        aoa.push(["", "TOTAL", ...(comDescricao ? [""] : []), tot.dir1, tot.dir2, tot.aprov, tot.tu, tot.totalServico, tot.frota, tot.partidas, ...(comCustoTabela ? [fmtMoeda(tot.custo)] : [])]);
-        merges.push({ s: { r: aoa.length - 1, c: 1 }, e: { r: aoa.length - 1, c: comDescricao ? 2 : 1 } });
-        aoa.push(Array(nCols).fill(""));
+    for (const grupo of rowsPorUnidadeExport) {
+      push([`UNIDADE ${grupo.unidade.toUpperCase()}`], "unidade");
+      merges.push({ s: { r: rowsAll.length - 1, c: 0 }, e: { r: rowsAll.length - 1, c: nCols - 1 } });
+      push(headerRow, "header");
+      for (const r of grupo.rows) {
+        push([
+          r.groupLabel,
+          ...(comDescricao ? [descricaoPorLinha.get(r.groupKey) ?? ""] : []),
+          r.dir1, r.dir2, r.aprov, r.tu, r.totalServico, r.frota, r.partidas, roundTo(r.km, 1),
+          ...(comCustoTabela ? [roundTo(custoPorGroupKey.get(r.groupKey) ?? 0, 2)] : []),
+        ], "body");
       }
-      aoa.push(Array(nCols).fill(""));
-
-      // Mini-resumo por unidade, no rodapé (Unidade/Serviços/Frota/Partidas)
-      const miniStart = aoa.length;
-      aoa.push(["", "", "Unidade", "Serviços", "Frota", "Partidas", ...Array(Math.max(0, nCols - 6)).fill("")]);
-      for (const u of resumoUnidade) {
-        aoa.push(["", "", u.unidade, u.servicos, u.frota, fmtInt(u.partidas), ...Array(Math.max(0, nCols - 6)).fill("")]);
-      }
-      aoa.push(["", "", "TOTAL",
-        resumoUnidade.reduce((s, u) => s + u.servicos, 0),
-        resumoUnidade.reduce((s, u) => s + u.frota, 0),
-        fmtInt(resumoUnidade.reduce((s, u) => s + u.partidas, 0)),
-        ...Array(Math.max(0, nCols - 6)).fill(""),
-      ]);
-
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
-      ws["!merges"] = merges;
-      const colsBase = [{ wch: 20 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 12 }];
-      const colsComDescricao = [{ wch: 20 }, { wch: 10 }, { wch: 30 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 12 }];
-      const colsFinal = comDescricao ? colsComDescricao : colsBase;
-      ws["!cols"] = comCustoTabela ? [...colsFinal, { wch: 14 }] : colsFinal;
-      XLSX.utils.book_append_sheet(wb, ws, title.slice(0, 31));
-    } else {
-      // Resumo Operacional: layout de tabela única, como sempre foi.
-      const headersXlsx = headers;
-      const aoa: (string | number)[][] = [
-        [title.toUpperCase()],
-        [`Gerado em ${new Date().toLocaleString("pt-BR")} — ${rows.length} grupo(s)`],
-        [],
-        headersXlsx,
-        ...displayRows.map((r) => [
-          r.groupLabel, r.dir1, r.dir2, r.aprov, r.tu, r.totalServico, r.frota, r.partidas, Number(r.km.toFixed(1)),
-          ...(comCustoTabela ? [fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)] : []),
-        ]),
-        [
-          "TOTAL", totals.dir1, totals.dir2, totals.aprov, totals.tu, totals.totalServico, totals.frota, totals.partidas, Number(totals.km.toFixed(1)),
-          ...(comCustoTabela ? [fmtMoeda(Array.from(custoPorGroupKey.values()).reduce((s, v) => s + v, 0))] : []),
-        ],
-      ];
-      const ws = XLSX.utils.aoa_to_sheet(aoa);
-      ws["!merges"] = [
-        { s: { r: 0, c: 0 }, e: { r: 0, c: headersXlsx.length - 1 } },
-        { s: { r: 1, c: 0 }, e: { r: 1, c: headersXlsx.length - 1 } },
-      ];
-      ws["!cols"] = [{ wch: 26 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 10 }, { wch: 12 }, { wch: 14 }, ...(comCustoTabela ? [{ wch: 14 }] : [])];
-      XLSX.utils.book_append_sheet(wb, ws, title.slice(0, 31));
+      const tot = grupo.rows.reduce((s, r) => ({
+        dir1: s.dir1 + r.dir1, dir2: s.dir2 + r.dir2, aprov: s.aprov + r.aprov, tu: s.tu + r.tu,
+        totalServico: s.totalServico + r.totalServico, frota: s.frota + r.frota, partidas: s.partidas + r.partidas,
+        km: s.km + r.km, custo: s.custo + (custoPorGroupKey.get(r.groupKey) ?? 0),
+      }), { dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0, km: 0, custo: 0 });
+      push([
+        "TOTAL", ...(comDescricao ? [""] : []),
+        tot.dir1, tot.dir2, tot.aprov, tot.tu, tot.totalServico, tot.frota, tot.partidas, roundTo(tot.km, 1),
+        ...(comCustoTabela ? [roundTo(tot.custo, 2)] : []),
+      ], "total");
+      push([], "blank");
     }
+
+    // Mini-resumo por Unidade (Serviços/Frota/Partidas/KM), no rodapé.
+    push(["Unidade", "Serviços", "Frota", "Partidas", "KM"], "miniHeader");
+    for (const u of resumoUnidade) push([u.unidade, u.servicos, u.frota, u.partidas, roundTo(u.km, 1)], "miniBody");
+    push([
+      "TOTAL",
+      resumoUnidade.reduce((s, u) => s + u.servicos, 0),
+      resumoUnidade.reduce((s, u) => s + u.frota, 0),
+      resumoUnidade.reduce((s, u) => s + u.partidas, 0),
+      roundTo(resumoUnidade.reduce((s, u) => s + u.km, 0), 1),
+    ], "miniTotal");
+
+    const ws = XLSX.utils.aoa_to_sheet(rowsAll);
+    ws["!merges"] = merges;
+    const colsBase = [{ wch: 22 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 12 }];
+    const colsComDescricao = [{ wch: 22 }, { wch: 30 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 8 }, { wch: 10 }, { wch: 12 }];
+    ws["!cols"] = comCustoTabela ? [...(comDescricao ? colsComDescricao : colsBase), { wch: 14 }] : (comDescricao ? colsComDescricao : colsBase);
+
+    const FILL_BLUE = { patternType: "solid", fgColor: { rgb: XLSX_BLUE } };
+    const FILL_LIGHTBLUE = { patternType: "solid", fgColor: { rgb: XLSX_BLUE_LIGHT } };
+    const THIN = { style: "thin", color: { rgb: "B4B4B4" } };
+    const border = { top: THIN, bottom: THIN, left: THIN, right: THIN };
+    rowsAll.forEach((row, r) => {
+      const kind = kinds[r];
+      if (kind === "blank") return;
+      for (let c = 0; c < row.length; c++) {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        const cell = (ws as any)[addr];
+        if (!cell) continue;
+        if (kind === "title") cell.s = { font: { bold: true, sz: 13, color: { rgb: XLSX_LINE_BLUE } }, alignment: { horizontal: "center" } };
+        else if (kind === "subtitle") cell.s = { font: { sz: 9, color: { rgb: "666666" } }, alignment: { horizontal: "center" } };
+        else if (kind === "unidade") cell.s = { font: { bold: true, sz: 11 }, alignment: { horizontal: "left" } };
+        else if (kind === "header" || kind === "miniHeader") cell.s = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: FILL_BLUE, alignment: { horizontal: "center" }, border };
+        else if (kind === "body" || kind === "miniBody") cell.s = { font: c === 0 ? { bold: true, color: { rgb: XLSX_LINE_BLUE } } : { color: { rgb: "000000" } }, alignment: { horizontal: "center" }, border };
+        else if (kind === "total" || kind === "miniTotal") cell.s = { font: { bold: true, color: { rgb: "000000" } }, fill: FILL_LIGHTBLUE, alignment: { horizontal: "center" }, border };
+      }
+    });
+    XLSX.utils.book_append_sheet(wb, ws, title.slice(0, 31));
 
     // Aba Empresa
     appendResumoSheet(wb, "Empresa", "empresa", resumoEmpresa);
@@ -605,37 +616,23 @@ const totals = useMemo(() => {
         S.dia !== "__all" ? S.dia : "Todos os dias",
         S.versao !== "__all" ? `Versão ${S.versao}` : null,
       ].filter(Boolean).join(" · ");
-      const subtitleTxt = `Período: ${periodoTxt} — ${rows.length} ${mode === "linha" ? "linha(s)" : "grupo(s)"} · TU único · Frota = veículos físicos distintos`;
+      // "Gerado em" entra na linha do subtítulo (centralizada) em vez do
+      // canto — evita colidir com o título centralizado.
+      const geradoEmTxt = `Gerado em ${new Date().toLocaleString("pt-BR")}`;
+      const subtitleTxt = `Período: ${periodoTxt} — ${rows.length} ${mode === "linha" ? "linha(s)" : "grupo(s)"} · TU único · Frota = veículos físicos distintos — ${geradoEmTxt}`;
 
       function drawHeader(d: InstanceType<typeof jsPDF>) {
-        d.setTextColor(37, 99, 235); d.setFont("helvetica", "bold"); d.setFontSize(12);
-        d.text(title.toUpperCase(), 10, 8);
-        d.setFont("helvetica", "normal"); d.setFontSize(7); d.setTextColor(100);
-        d.text(`Gerado em ${new Date().toLocaleString("pt-BR")}`, pageW - 10, 8, { align: "right" });
-        d.setFontSize(6.8); d.setTextColor(90);
-        d.text(subtitleTxt, 10, 13);
-        d.setDrawColor(37, 99, 235); d.setLineWidth(0.5);
+        d.setTextColor(...PDF_LINE_BLUE); d.setFont("helvetica", "bold"); d.setFontSize(12);
+        d.text(title.toUpperCase(), pageW / 2, 8, { align: "center" });
+        d.setFontSize(6.8); d.setTextColor(90); d.setFont("helvetica", "normal");
+        d.text(subtitleTxt, pageW / 2, 13, { align: "center" });
+        d.setDrawColor(...PDF_LINE_BLUE); d.setLineWidth(0.5);
         d.line(10, 15, pageW - 10, 15);
         d.setTextColor(20);
       }
 
       const comDescricaoPdf = mode === "linha" && mostrarDescricao;
-      const headersPdf = comDescricaoPdf
-        ? [firstColLabel, "Descrição", "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas", "KM Total", ...(comCustoTabela ? ["Custo M.O."] : [])]
-        : headers;
-      const mainBody = displayRows.map((r) => [
-        r.groupLabel,
-        ...(comDescricaoPdf ? [descricaoPorLinha.get(r.groupKey) ?? ""] : []),
-        fmtInt(r.dir1), fmtInt(r.dir2), fmtInt(r.aprov), fmtInt(r.tu),
-        fmtInt(r.totalServico), fmtInt(r.frota), fmtInt(r.partidas), fmtKm(r.km),
-        ...(comCustoTabela ? [fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)] : []),
-      ]);
-      const mainFoot = [
-        "TOTAL", ...(comDescricaoPdf ? [""] : []),
-        fmtInt(totals.dir1), fmtInt(totals.dir2), fmtInt(totals.aprov), fmtInt(totals.tu),
-        fmtInt(totals.totalServico), fmtInt(totals.frota), fmtInt(totals.partidas), fmtKm(totals.km),
-        ...(comCustoTabela ? [fmtMoeda(Array.from(custoPorGroupKey.values()).reduce((s, v) => s + v, 0))] : []),
-      ];
+      const headersPdf = [firstColLabel, ...(comDescricaoPdf ? ["Descrição"] : []), "Dir 1º T.", "Dir 2º T.", "Aproveit.", "TU", "Serviços", "Frota", "Partidas", "KM", ...(comCustoTabela ? ["Custo M.O."] : [])];
       const empBody = resumoEmpresa.map((e) => [e.empresa, fmtInt(e.servicos), fmtInt(e.frota), fmtInt(e.partidas), fmtKm(e.km)]);
       const empHeaders = ["Empresa", "Serviços", "Frota", "Partidas", "KM"];
       const empFoot = ["TOTAL",
@@ -661,6 +658,14 @@ const totals = useMemo(() => {
         fmtKm(resumoGrupoLinha.reduce((s, e) => s + e.km, 0)),
       ];
 
+      const blockRowsPdf = rowsPorUnidadeExport.flatMap((grupo) => grupo.rows.map((r) => [
+        r.groupLabel,
+        ...(comDescricaoPdf ? [descricaoPorLinha.get(r.groupKey) ?? ""] : []),
+        fmtInt(r.dir1), fmtInt(r.dir2), fmtInt(r.aprov), fmtInt(r.tu), fmtInt(r.totalServico), fmtInt(r.frota), fmtInt(r.partidas), fmtKm(r.km),
+        ...(comCustoTabela ? [fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)] : []),
+      ]));
+      const blockFootPdf = ["TOTAL", ...(comDescricaoPdf ? [""] : []), fmtInt(totals.dir1), fmtInt(totals.dir2), fmtInt(totals.aprov), fmtInt(totals.tu), fmtInt(totals.totalServico), fmtInt(totals.frota), fmtInt(totals.partidas), fmtKm(totals.km), ...(comCustoTabela ? [fmtMoeda(Array.from(custoPorGroupKey.values()).reduce((s, v) => s + v, 0))] : [])];
+
       // Largura natural calculada só com getTextWidth (API padrão do jsPDF).
       function tableNaturalWidth(fontSize: number, headerRow: string[], bodyRows: any[][], footRow: any[]) {
         const padX = 2 * (fontSize / 8);
@@ -670,7 +675,7 @@ const totals = useMemo(() => {
           let maxW = 0;
           const cellsInCol = [headerRow[c], ...bodyRows.map((r) => r[c]), footRow[c]];
           for (const cell of cellsInCol) {
-            probe.setFont("helvetica", c === 0 ? "bold" : "normal");
+            probe.setFont("helvetica", "bold");
             const w = probe.getTextWidth(String(cell ?? ""));
             if (w > maxW) maxW = w;
           }
@@ -679,7 +684,7 @@ const totals = useMemo(() => {
         return total;
       }
       function naturalWidth(fontSize: number) {
-        const mainW = tableNaturalWidth(fontSize, headersPdf, mainBody, mainFoot);
+        const mainW = tableNaturalWidth(fontSize, headersPdf, blockRowsPdf, blockFootPdf);
         const empW = tableNaturalWidth(fontSize - 0.3, empHeaders, empBody, empFoot);
         return Math.max(mainW, empW);
       }
@@ -688,97 +693,81 @@ const totals = useMemo(() => {
         const d = new jsPDF({ orientation, unit: "mm", format: "a4" });
         const fontSize = 8 * zoom;
         const padY = 1.5 * zoom;
-        const styleBase = { fontSize, cellPadding: { top: padY, right: 2 * zoom, bottom: padY, left: 2 * zoom }, halign: "right" as const, valign: "middle" as const, overflow: "linebreak" as const, lineColor: [180, 180, 180] as [number, number, number], lineWidth: 0.18 };
-        const headStyleBase = { fillColor: [37, 99, 235] as [number, number, number], textColor: 255, fontSize: fontSize + 0.5, halign: "center" as const, fontStyle: "bold" as const, cellPadding: padY + 0.4 * zoom };
-        const footStyleBase = { fillColor: [219, 234, 254] as [number, number, number], textColor: 20, fontStyle: "bold" as const, halign: "right" as const };
-
-        let afterY: number;
-        if (mode === "linha") {
-          // Um bloco de tabela por Unidade, cada um com seu próprio TOTAL —
-          // mesmo formato do Excel.
-          let y = HEADER_H + 3;
-          for (const grupo of linhasPorUnidadeExport) {
-            d.setFontSize(9 * zoom); d.setFont("helvetica", "bold"); d.setTextColor(20);
-            d.text(`UNIDADE ${grupo.unidade.toUpperCase()}`, marginLeft, y + 3 * zoom);
-            const groupBody = grupo.rows.map((r) => [
-              r.groupLabel,
-              ...(comDescricaoPdf ? [descricaoPorLinha.get(r.groupKey) ?? ""] : []),
-              fmtInt(r.dir1), fmtInt(r.dir2), fmtInt(r.aprov), fmtInt(r.tu), fmtInt(r.totalServico), fmtInt(r.frota), fmtInt(r.partidas),
-              ...(comCustoTabela ? [fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)] : []),
-            ]);
-            const tot = grupo.rows.reduce((s, r) => ({
-              dir1: s.dir1 + r.dir1, dir2: s.dir2 + r.dir2, aprov: s.aprov + r.aprov, tu: s.tu + r.tu,
-              totalServico: s.totalServico + r.totalServico, frota: s.frota + r.frota, partidas: s.partidas + r.partidas,
-              custo: s.custo + (custoPorGroupKey.get(r.groupKey) ?? 0),
-            }), { dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0, custo: 0 });
-            const groupFoot = ["TOTAL", ...(comDescricaoPdf ? [""] : []), fmtInt(tot.dir1), fmtInt(tot.dir2), fmtInt(tot.aprov), fmtInt(tot.tu), fmtInt(tot.totalServico), fmtInt(tot.frota), fmtInt(tot.partidas), ...(comCustoTabela ? [fmtMoeda(tot.custo)] : [])];
-            autoTable(d, {
-              startY: y + 5 * zoom,
-              head: [headersPdf],
-              body: groupBody,
-              foot: [groupFoot],
-              styles: styleBase,
-              columnStyles: comDescricaoPdf
-                ? { 0: { halign: "left", fontStyle: "bold" }, 1: { halign: "left" }, 6: { fontStyle: "bold" }, 7: { fontStyle: "bold" } }
-                : { 0: { halign: "left", fontStyle: "bold" }, 5: { fontStyle: "bold" }, 6: { fontStyle: "bold" } },
-              headStyles: headStyleBase,
-              footStyles: footStyleBase,
-              alternateRowStyles: { fillColor: [249, 250, 251] },
-              margin: { left: marginLeft, right: 10, top: HEADER_H + 3, bottom: 12 },
-              theme: "grid",
-              tableWidth: "wrap",
-              rowPageBreak: "avoid",
-              didDrawPage: () => drawHeader(d),
-            });
-            y = (d as any).lastAutoTable.finalY + 6 * zoom;
+        const styleBase = { fontSize, cellPadding: { top: padY, right: 2 * zoom, bottom: padY, left: 2 * zoom }, halign: "center" as const, valign: "middle" as const, overflow: "linebreak" as const, lineColor: [180, 180, 180] as [number, number, number], lineWidth: 0.18 };
+        const headStyleBase = { fillColor: PDF_BLUE, textColor: 255, fontSize: fontSize + 0.5, halign: "center" as const, fontStyle: "bold" as const, cellPadding: padY + 0.4 * zoom };
+        const footStyleBase = { fillColor: PDF_BLUE_LIGHT, textColor: 20, fontStyle: "bold" as const, halign: "center" as const };
+        // Coluna 0 (Linha/Grupo) em azul/negrito só no corpo — total já é
+        // preto/negrito via footStyleBase.
+        const blueCol0 = (data: any) => {
+          if (data.section === "body" && data.column.index === 0) {
+            data.cell.styles.textColor = PDF_LINE_BLUE;
+            data.cell.styles.fontStyle = "bold";
           }
-          // Mini-resumo por Unidade, mesmo formato do Excel.
+        };
+
+        // Um bloco de tabela por Unidade, cada um com seu próprio TOTAL —
+        // mesmo formato nos dois modos (Resumo por Linha / Operacional) e
+        // no Excel.
+        let y = HEADER_H + 3;
+        for (const grupo of rowsPorUnidadeExport) {
           d.setFontSize(9 * zoom); d.setFont("helvetica", "bold"); d.setTextColor(20);
-          const miniBody = resumoUnidade.map((u) => [u.unidade, fmtInt(u.servicos), fmtInt(u.frota), fmtInt(u.partidas)]);
-          const miniFoot = ["TOTAL",
-            fmtInt(resumoUnidade.reduce((s, u) => s + u.servicos, 0)),
-            fmtInt(resumoUnidade.reduce((s, u) => s + u.frota, 0)),
-            fmtInt(resumoUnidade.reduce((s, u) => s + u.partidas, 0)),
-          ];
+          d.text(`UNIDADE ${grupo.unidade.toUpperCase()}`, marginLeft, y + 3 * zoom);
+          const groupBody = grupo.rows.map((r) => [
+            r.groupLabel,
+            ...(comDescricaoPdf ? [descricaoPorLinha.get(r.groupKey) ?? ""] : []),
+            fmtInt(r.dir1), fmtInt(r.dir2), fmtInt(r.aprov), fmtInt(r.tu), fmtInt(r.totalServico), fmtInt(r.frota), fmtInt(r.partidas), fmtKm(r.km),
+            ...(comCustoTabela ? [fmtMoeda(custoPorGroupKey.get(r.groupKey) ?? 0)] : []),
+          ]);
+          const tot = grupo.rows.reduce((s, r) => ({
+            dir1: s.dir1 + r.dir1, dir2: s.dir2 + r.dir2, aprov: s.aprov + r.aprov, tu: s.tu + r.tu,
+            totalServico: s.totalServico + r.totalServico, frota: s.frota + r.frota, partidas: s.partidas + r.partidas,
+            km: s.km + r.km, custo: s.custo + (custoPorGroupKey.get(r.groupKey) ?? 0),
+          }), { dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0, km: 0, custo: 0 });
+          const groupFoot = ["TOTAL", ...(comDescricaoPdf ? [""] : []), fmtInt(tot.dir1), fmtInt(tot.dir2), fmtInt(tot.aprov), fmtInt(tot.tu), fmtInt(tot.totalServico), fmtInt(tot.frota), fmtInt(tot.partidas), fmtKm(tot.km), ...(comCustoTabela ? [fmtMoeda(tot.custo)] : [])];
           autoTable(d, {
-            startY: y + 2 * zoom,
-            head: [["Unidade", "Serviços", "Frota", "Partidas"]],
-            body: miniBody,
-            foot: [miniFoot],
+            startY: y + 5 * zoom,
+            head: [headersPdf],
+            body: groupBody,
+            foot: [groupFoot],
             styles: styleBase,
-            columnStyles: { 0: { halign: "left", fontStyle: "bold" } },
             headStyles: headStyleBase,
             footStyles: footStyleBase,
-            alternateRowStyles: { fillColor: [249, 250, 251] },
+            didParseCell: blueCol0,
             margin: { left: marginLeft, right: 10, top: HEADER_H + 3, bottom: 12 },
             theme: "grid",
             tableWidth: "wrap",
+            pageBreak: "avoid",
             rowPageBreak: "avoid",
             didDrawPage: () => drawHeader(d),
           });
-          afterY = (d as any).lastAutoTable.finalY + 8 * zoom;
-        } else {
+          y = (d as any).lastAutoTable.finalY + 6 * zoom;
+        }
+        // Mini-resumo por Unidade, mesmo formato do Excel.
+        d.setFontSize(9 * zoom); d.setFont("helvetica", "bold"); d.setTextColor(20);
+        const miniBody = resumoUnidade.map((u) => [u.unidade, fmtInt(u.servicos), fmtInt(u.frota), fmtInt(u.partidas), fmtKm(u.km)]);
+        const miniFoot = ["TOTAL",
+          fmtInt(resumoUnidade.reduce((s, u) => s + u.servicos, 0)),
+          fmtInt(resumoUnidade.reduce((s, u) => s + u.frota, 0)),
+          fmtInt(resumoUnidade.reduce((s, u) => s + u.partidas, 0)),
+          fmtKm(resumoUnidade.reduce((s, u) => s + u.km, 0)),
+        ];
         autoTable(d, {
-          startY: HEADER_H + 3,
-          head: [headersPdf],
-          body: mainBody,
-          foot: [mainFoot],
-          styles: { fontSize, cellPadding: { top: padY, right: 2 * zoom, bottom: padY, left: 2 * zoom }, halign: "right", valign: "middle", overflow: "linebreak", lineColor: [180, 180, 180], lineWidth: 0.18 },
-          columnStyles: comDescricaoPdf
-            ? { 0: { halign: "left", fontStyle: "bold" }, 1: { halign: "left" }, 6: { fontStyle: "bold" }, 7: { fontStyle: "bold" } }
-            : { 0: { halign: "left", fontStyle: "bold" }, 5: { fontStyle: "bold" }, 6: { fontStyle: "bold" } },
-          headStyles: { fillColor: [37, 99, 235], textColor: 255, fontSize: fontSize + 0.5, halign: "center", fontStyle: "bold", cellPadding: padY + 0.4 * zoom },
-          footStyles: { fillColor: [219, 234, 254], textColor: 20, fontStyle: "bold", halign: "right" },
-          alternateRowStyles: { fillColor: [249, 250, 251] },
+          startY: y + 2 * zoom,
+          head: [["Unidade", "Serviços", "Frota", "Partidas", "KM"]],
+          body: miniBody,
+          foot: [miniFoot],
+          styles: styleBase,
+          headStyles: headStyleBase,
+          footStyles: footStyleBase,
+          didParseCell: blueCol0,
           margin: { left: marginLeft, right: 10, top: HEADER_H + 3, bottom: 12 },
           theme: "grid",
           tableWidth: "wrap",
-          showFoot: "lastPage",
+          pageBreak: "avoid",
           rowPageBreak: "avoid",
           didDrawPage: () => drawHeader(d),
         });
-        afterY = (d as any).lastAutoTable.finalY + 8 * zoom;
-        }
+        const afterY = (d as any).lastAutoTable.finalY + 8 * zoom;
         d.setFontSize(10 * zoom); d.setFont("helvetica", "bold"); d.setTextColor(20);
         d.text("Resumo Gerencial por Empresa", marginLeft, afterY);
         autoTable(d, {
@@ -786,11 +775,10 @@ const totals = useMemo(() => {
           head: [empHeaders],
           body: empBody,
           foot: [empFoot],
-          styles: { fontSize: fontSize - 0.3, cellPadding: Math.max(padY - 0.2 * zoom, 0.3), halign: "right", valign: "middle", lineColor: [180, 180, 180], lineWidth: 0.18 },
-          columnStyles: { 0: { halign: "left", fontStyle: "bold" } },
-          headStyles: { fillColor: [37, 99, 235], textColor: 255, halign: "center", fontStyle: "bold", cellPadding: 1.6 * zoom },
-          footStyles: { fillColor: [219, 234, 254], textColor: 20, fontStyle: "bold" },
-          alternateRowStyles: { fillColor: [249, 250, 251] },
+          styles: { fontSize: fontSize - 0.3, cellPadding: Math.max(padY - 0.2 * zoom, 0.3), halign: "center", valign: "middle", lineColor: [180, 180, 180], lineWidth: 0.18 },
+          headStyles: { fillColor: PDF_BLUE, textColor: 255, halign: "center", fontStyle: "bold", cellPadding: 1.6 * zoom },
+          footStyles: { fillColor: PDF_BLUE_LIGHT, textColor: 20, fontStyle: "bold", halign: "center" },
+          didParseCell: blueCol0,
           margin: { left: marginLeft, right: 10, top: HEADER_H + 3, bottom: 12 },
           theme: "grid",
           tableWidth: "wrap",
@@ -805,11 +793,10 @@ const totals = useMemo(() => {
           head: [uniHeaders],
           body: uniBody,
           foot: [uniFoot],
-          styles: { fontSize: fontSize - 0.3, cellPadding: Math.max(padY - 0.2 * zoom, 0.3), halign: "right", valign: "middle", lineColor: [180, 180, 180], lineWidth: 0.18 },
-          columnStyles: { 0: { halign: "left", fontStyle: "bold" } },
-          headStyles: { fillColor: [37, 99, 235], textColor: 255, halign: "center", fontStyle: "bold", cellPadding: 1.6 * zoom },
-          footStyles: { fillColor: [219, 234, 254], textColor: 20, fontStyle: "bold" },
-          alternateRowStyles: { fillColor: [249, 250, 251] },
+          styles: { fontSize: fontSize - 0.3, cellPadding: Math.max(padY - 0.2 * zoom, 0.3), halign: "center", valign: "middle", lineColor: [180, 180, 180], lineWidth: 0.18 },
+          headStyles: { fillColor: PDF_BLUE, textColor: 255, halign: "center", fontStyle: "bold", cellPadding: 1.6 * zoom },
+          footStyles: { fillColor: PDF_BLUE_LIGHT, textColor: 20, fontStyle: "bold", halign: "center" },
+          didParseCell: blueCol0,
           margin: { left: marginLeft, right: 10, top: HEADER_H + 3, bottom: 12 },
           theme: "grid",
           tableWidth: "wrap",
@@ -825,11 +812,10 @@ const totals = useMemo(() => {
           head: [grpHeaders],
           body: grpBody,
           foot: [grpFoot],
-          styles: { fontSize: fontSize - 0.3, cellPadding: Math.max(padY - 0.2 * zoom, 0.3), halign: "right", valign: "middle", lineColor: [180, 180, 180], lineWidth: 0.18 },
-          columnStyles: { 0: { halign: "left", fontStyle: "bold" } },
-          headStyles: { fillColor: [37, 99, 235], textColor: 255, halign: "center", fontStyle: "bold", cellPadding: 1.6 * zoom },
-          footStyles: { fillColor: [219, 234, 254], textColor: 20, fontStyle: "bold" },
-          alternateRowStyles: { fillColor: [249, 250, 251] },
+          styles: { fontSize: fontSize - 0.3, cellPadding: Math.max(padY - 0.2 * zoom, 0.3), halign: "center", valign: "middle", lineColor: [180, 180, 180], lineWidth: 0.18 },
+          headStyles: { fillColor: PDF_BLUE, textColor: 255, halign: "center", fontStyle: "bold", cellPadding: 1.6 * zoom },
+          footStyles: { fillColor: PDF_BLUE_LIGHT, textColor: 20, fontStyle: "bold", halign: "center" },
+          didParseCell: blueCol0,
           margin: { left: marginLeft, right: 10, top: HEADER_H + 3, bottom: 12 },
           theme: "grid",
           tableWidth: "wrap",
@@ -1199,17 +1185,34 @@ function appendResumoSheet(wb: XLSX.WorkBook, nomeAba: string, keyField: string,
     [`RESUMO GERENCIAL POR ${nomeAba.toUpperCase()}`],
     [],
     [nomeAba, "Serviços", "Frota", "Partidas", "KM"],
-    ...rows.map((r) => [r[keyField], r.servicos, r.frota, r.partidas, Number(r.km.toFixed(1))]),
+    ...rows.map((r) => [r[keyField], r.servicos, r.frota, r.partidas, roundTo(r.km, 1)]),
     ["TOTAL",
       rows.reduce((s, r) => s + r.servicos, 0),
       rows.reduce((s, r) => s + r.frota, 0),
       rows.reduce((s, r) => s + r.partidas, 0),
-      Number(rows.reduce((s, r) => s + r.km, 0).toFixed(1)),
+      roundTo(rows.reduce((s, r) => s + r.km, 0), 1),
     ],
   ];
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }];
   ws["!cols"] = [{ wch: 28 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 14 }];
+
+  const FILL_BLUE = { patternType: "solid", fgColor: { rgb: XLSX_BLUE } };
+  const FILL_LIGHTBLUE = { patternType: "solid", fgColor: { rgb: XLSX_BLUE_LIGHT } };
+  const THIN = { style: "thin", color: { rgb: "B4B4B4" } };
+  const border = { top: THIN, bottom: THIN, left: THIN, right: THIN };
+  const titleCell = (ws as any)["A1"];
+  if (titleCell) titleCell.s = { font: { bold: true, sz: 13, color: { rgb: XLSX_LINE_BLUE } }, alignment: { horizontal: "center" } };
+  for (let c = 0; c < 5; c++) {
+    const headCell = (ws as any)[XLSX.utils.encode_cell({ r: 2, c })];
+    if (headCell) headCell.s = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: FILL_BLUE, alignment: { horizontal: "center" }, border };
+    for (let r = 3; r < 3 + rows.length; r++) {
+      const cell = (ws as any)[XLSX.utils.encode_cell({ r, c })];
+      if (cell) cell.s = { font: c === 0 ? { bold: true, color: { rgb: XLSX_LINE_BLUE } } : { color: { rgb: "000000" } }, alignment: { horizontal: "center" }, border };
+    }
+    const totCell = (ws as any)[XLSX.utils.encode_cell({ r: 3 + rows.length, c })];
+    if (totCell) totCell.s = { font: { bold: true, color: { rgb: "000000" } }, fill: FILL_LIGHTBLUE, alignment: { horizontal: "center" }, border };
+  }
   XLSX.utils.book_append_sheet(wb, ws, `Resumo ${nomeAba}`.slice(0, 31));
 }
 

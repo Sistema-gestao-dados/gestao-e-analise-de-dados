@@ -38,6 +38,7 @@ import { logAudit } from "@/lib/audit";
 import { buildJornadas, fmtDur } from "@/lib/jornada";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
+import { PDF_BLUE, PDF_BLUE_LIGHT, PDF_LINE_BLUE, XLSX_BLUE, XLSX_BLUE_LIGHT, XLSX_LINE_BLUE } from "@/lib/report-style";
 import { custoServico, fmtMoeda } from "@/lib/custo";
 import { useSalarioMotorista } from "@/components/salario-motorista";
 
@@ -248,12 +249,8 @@ function fmtDelta(n: number, fmt: (n: number) => string): string {
 // padrão do jsPDF (Helvetica/WinAnsi) não tem glifo pra "Δ" — virava
 // caractere quebrado no PDF.
 // ---------------------------------------------------------------------------
-const PDF_BLUE: [number, number, number] = [68, 114, 196]; // #4472C4
-const PDF_BLUE_LIGHT: [number, number, number] = [219, 234, 254]; // #DBEAFE
-const PDF_LINE_BLUE: [number, number, number] = [37, 99, 235]; // #2563eb
-const XLSX_BLUE = "4472C4";
-const XLSX_BLUE_LIGHT = "DBEAFE";
-const XLSX_LINE_BLUE = "2563EB";
+// Cores compartilhadas com o Resumo por Linha / Resumo Operacional — ver
+// src/lib/report-style.ts.
 
 type MetricKeyName = "dir1" | "dir2" | "aprov" | "tu" | "totalServico" | "frota" | "partidas" | "km" | "heMin" | "custo";
 type UnidadeMetric = { key: MetricKeyName; label: string; fmt: (n: number) => string; round: (n: number) => number };
