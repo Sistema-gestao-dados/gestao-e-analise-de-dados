@@ -106,7 +106,7 @@ function ImportacaoHistoricoPage() {
       const iLinha = headers.indexOf("linha");
       const iVersao = headers.indexOf("versao");
       const iDiaTipo = headers.findIndex((h) => h === "dia_tipo" || h === "dia_tipo");
-      const iReferencia = headers.indexOf("referencia");
+      const iReferencia = headers.findIndex((h) => h.includes("referencia") || h.includes("ref"));
       const iDataSol = headers.findIndex((h) => h.includes("solicitacao"));
       const iVigencia = headers.indexOf("vigencia");
       const iEncerramento = headers.indexOf("encerramento");
