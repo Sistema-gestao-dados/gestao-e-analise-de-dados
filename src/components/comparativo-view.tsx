@@ -25,7 +25,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { FileSpreadsheet, FileText, GitCompare, ArrowUpDown, Printer } from "lucide-react";
 import { MultiSelect } from "@/components/multi-select";
-import * as XLSX from "xlsx";
+// xlsx-js-style (fork da SheetJS community, mesma API) em vez de "xlsx" puro:
+// a "xlsx" comunidade NÃO escreve estilo de célula (cor de fundo/fonte) no
+// arquivo gerado — só a versão paga faz isso. Testado: `.s` era silenciosamente
+// ignorado no XLSX salvo. Precisamos de cor pro cabeçalho azul do PDF/Excel
+// "por Unidade" ficarem iguais.
+import * as XLSX from "xlsx-js-style";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { PdfPreviewDialog, type PdfOrientation } from "@/components/pdf-preview-dialog";
@@ -221,6 +226,70 @@ function fmtPct(n: number | null): string {
 function fmtDelta(n: number, fmt: (n: number) => string): string {
   if (n === 0) return fmt(0);
   return `${n > 0 ? "+" : ""}${fmt(n)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Exportação "por Unidade" (PDF retrato + Excel) — modelo pedido pelo usuário:
+// um bloco por Unidade, cada um com Serviços/Frota/Partidas/KM (Atual,
+// Proposta, Δ, Δ%), cabeçalho azul e total em azul claro, e um resumo final
+// por Unidade. Só usado no modo "por linha" (agruparPorGrupo === false).
+// ---------------------------------------------------------------------------
+const PDF_BLUE: [number, number, number] = [68, 114, 196]; // #4472C4
+const PDF_BLUE_LIGHT: [number, number, number] = [219, 234, 254]; // #DBEAFE
+const PDF_LINE_BLUE: [number, number, number] = [37, 99, 235]; // #2563eb
+const XLSX_BLUE = "4472C4";
+const XLSX_BLUE_LIGHT = "DBEAFE";
+const XLSX_LINE_BLUE = "2563EB";
+
+const METRIC_KEYS = ["servicos", "frota", "partidas", "km"] as const;
+type MetricKeyName = (typeof METRIC_KEYS)[number];
+
+const UNIDADE_REPORT_METRICS: { key: MetricKeyName; label: string; fmt: (n: number) => string; deltaLabel: string; pctLabel: string }[] = [
+  { key: "servicos", label: "Serviços", fmt: fmtInt, deltaLabel: "Δ", pctLabel: "%" },
+  { key: "frota", label: "Frota", fmt: fmtInt, deltaLabel: "Δ", pctLabel: "Δ%" },
+  { key: "partidas", label: "Partidas", fmt: fmtInt, deltaLabel: "Δ", pctLabel: "Δ%" },
+  // KM usa "DIF" em vez de "Δ" — igual ao modelo manual do usuário.
+  { key: "km", label: "KM", fmt: (n) => fmtKm(n), deltaLabel: "DIF", pctLabel: "Δ%" },
+];
+const UNIDADE_TOTAL_COLS = 1 + UNIDADE_REPORT_METRICS.length * 4; // Linha/Unidade + 4 grupos x 4 subcolunas
+const UNIDADE_REAL_HEADER_ROW = ["Linha", ...UNIDADE_REPORT_METRICS.flatMap((m) => ["Atual", "Proposta", m.deltaLabel, m.pctLabel])];
+// Mesmo cabeçalho, mas sem o caractere "Δ" — a fonte padrão do jsPDF
+// (Helvetica/WinAnsi) não tem glifo pra letra grega, vira "mojibake" no PDF.
+// Excel usa UNIDADE_REAL_HEADER_ROW (Δ de verdade); PDF usa esta.
+const UNIDADE_REAL_HEADER_ROW_PDF = UNIDADE_REAL_HEADER_ROW.map((s) => s.replace(/Δ/g, "Dif"));
+const UNIDADE_SUBHEADER_ROW = ["", ...UNIDADE_REPORT_METRICS.flatMap((m) => [m.label, "", "", ""])];
+
+function fromAgg(r: AggRow | null): Record<MetricKeyName, number> {
+  return { servicos: r?.totalServico ?? 0, frota: r?.frota ?? 0, partidas: r?.partidas ?? 0, km: r?.km ?? 0 };
+}
+function fromBreakdown(r: BreakdownVal | null): Record<MetricKeyName, number> {
+  return { servicos: r?.servicos ?? 0, frota: r?.frota ?? 0, partidas: r?.partidas ?? 0, km: r?.km ?? 0 };
+}
+
+/** Linha crua (números, não formatada) — usada direto no Excel e como base pro PDF (via cellForUnidade). */
+function buildRawRow(label: string, av: Record<MetricKeyName, number>, pv: Record<MetricKeyName, number>): (string | number)[] {
+  const cells: (string | number)[] = [label];
+  for (const key of METRIC_KEYS) {
+    const a = av[key] ?? 0;
+    const p = pv[key] ?? 0;
+    const pct = diffPct(a, p);
+    cells.push(a, p, p - a, pct == null ? "" : Number(pct.toFixed(1)));
+  }
+  return cells;
+}
+
+function cellForUnidade(v: string | number, i: number): string {
+  if (i === 0) return String(v);
+  const idx = (i - 1) % 4;
+  const metricIdx = Math.floor((i - 1) / 4);
+  const m = UNIDADE_REPORT_METRICS[metricIdx];
+  if (idx === 3) return fmtPct(v === "" ? null : Number(v));
+  if (idx === 2) return fmtDelta(Number(v), m.fmt);
+  return m.fmt(Number(v));
+}
+
+function buildDisplayRow(label: string, av: Record<MetricKeyName, number>, pv: Record<MetricKeyName, number>): string[] {
+  return buildRawRow(label, av, pv).map((v, i) => cellForUnidade(v, i));
 }
 
 /**
@@ -621,6 +690,50 @@ export function ComparativoView() {
 
   const loading = viagensQ.isLoading || linhasQ.isLoading || kmQ.isLoading || multiQ.isLoading;
 
+  // Linhas do comparativo (merged) agrupadas por Unidade — mesma lógica de
+  // maioria já usada em unidadePorLinha (ordenar por Unidade). Só faz
+  // sentido no modo "por linha" (agruparPorGrupo=false): em modo "por
+  // grupo" as linhas de merged já são grupos de linha, não linhas soltas.
+  const unidadeBlocks = useMemo(() => {
+    const map = new Map<string, { linha: string; a: AggRow | null; p: AggRow | null }[]>();
+    for (const row of merged) {
+      const un = unidadePorLinha.get(row.linha) ?? "Sem unidade";
+      if (!map.has(un)) map.set(un, []);
+      map.get(un)!.push(row);
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => a[0].localeCompare(b[0], "pt-BR"))
+      .map(([unidade, rows]) => ({ unidade, rows }));
+  }, [merged, unidadePorLinha]);
+
+  // Total de uma Unidade: reaproveita resumoPorUnidade (já dedupa frota por
+  // veículo distinto, diferente de somar o campo frota linha a linha). Cai
+  // pra soma simples só se por algum motivo a chave não existir lá.
+  function totalDaUnidade(unidade: string, rows: { a: AggRow | null; p: AggRow | null }[]): { atual: BreakdownVal; proposta: BreakdownVal } {
+    const found = resumoPorUnidade.find((r) => r.chave === unidade);
+    if (found) return found;
+    const zero: BreakdownVal = { servicos: 0, frota: 0, partidas: 0, km: 0, custo: 0 };
+    const soma = (lado: "a" | "p") => rows.reduce((s, r) => {
+      const row = r[lado];
+      return { servicos: s.servicos + (row?.totalServico ?? 0), frota: s.frota + (row?.frota ?? 0), partidas: s.partidas + (row?.partidas ?? 0), km: s.km + (row?.km ?? 0), custo: 0 };
+    }, zero);
+    return { atual: soma("a"), proposta: soma("p") };
+  }
+
+  const resumoUnidadeTotal = useMemo(() => {
+    const zero: BreakdownVal = { servicos: 0, frota: 0, partidas: 0, km: 0, custo: 0 };
+    const soma = (lado: "atual" | "proposta") => resumoPorUnidade.reduce((s, r) => ({
+      servicos: s.servicos + r[lado].servicos, frota: s.frota + r[lado].frota, partidas: s.partidas + r[lado].partidas, km: s.km + r[lado].km, custo: s.custo + r[lado].custo,
+    }), zero);
+    return { atual: soma("atual"), proposta: soma("proposta") };
+  }, [resumoPorUnidade]);
+
+  function tituloComparativo(): string {
+    const label = applied && applied.p.dia !== "__all" ? applied.p.dia : "PROPOSTA";
+    const data = new Date().toLocaleDateString("pt-BR");
+    return `RELATÓRIO COMPARATIVO — ATUAL vs ${label.toUpperCase()} ${data}`;
+  }
+
   function buildExportRows() {
     const header1: string[] = [agruparPorGrupo ? "Grupo de Linha" : "Linha"];
     const header2: string[] = [""];
@@ -660,7 +773,7 @@ export function ComparativoView() {
     return m.fmt(Number(v));
   }
 
-  function exportXLSX() {
+  function exportXLSXFlat() {
     const { header1, header2, body, tot } = buildExportRows();
     const wb = XLSX.utils.book_new();
     const aoa: (string | number)[][] = [
@@ -688,7 +801,87 @@ export function ComparativoView() {
     void logAudit({ action: "export", entity: "relatorio_comparativo", details: { format: "xlsx", rows: merged.length } });
   }
 
-  function buildPDF(orientation: PdfOrientation) {
+  // Excel "por Unidade": um bloco por Unidade (título, sub-cabeçalho
+  // mesclado, cabeçalho azul, linhas, total azul claro) + resumo final por
+  // Unidade — mesmo layout do PDF novo. Usa xlsx-js-style pra cor de célula.
+  function exportXLSXPorUnidade() {
+    type RowKind = "title" | "subtitle" | "blank" | "unidade" | "subheader" | "header" | "body" | "total" | "resumoBody" | "resumoTotal";
+    const rows: (string | number)[][] = [];
+    const kinds: RowKind[] = [];
+    const merges: { s: { r: number; c: number }; e: { r: number; c: number } }[] = [];
+    const push = (r: (string | number)[], k: RowKind) => { rows.push(r); kinds.push(k); };
+    const addSubheaderMerges = (r: number) => {
+      let c = 1;
+      for (let i = 0; i < UNIDADE_REPORT_METRICS.length; i++) {
+        merges.push({ s: { r, c }, e: { r, c: c + 3 } });
+        c += 4;
+      }
+    };
+
+    push([tituloComparativo()], "title");
+    merges.push({ s: { r: 0, c: 0 }, e: { r: 0, c: UNIDADE_TOTAL_COLS - 1 } });
+    push([`Gerado em ${new Date().toLocaleString("pt-BR")} — ${merged.length} linha(s)`], "subtitle");
+    merges.push({ s: { r: 1, c: 0 }, e: { r: 1, c: UNIDADE_TOTAL_COLS - 1 } });
+    push([], "blank");
+
+    for (const block of unidadeBlocks) {
+      push([block.unidade], "unidade");
+      merges.push({ s: { r: rows.length - 1, c: 0 }, e: { r: rows.length - 1, c: UNIDADE_TOTAL_COLS - 1 } });
+      push(UNIDADE_SUBHEADER_ROW, "subheader");
+      addSubheaderMerges(rows.length - 1);
+      push(UNIDADE_REAL_HEADER_ROW, "header");
+      for (const r of block.rows) push(buildRawRow(r.linha, fromAgg(r.a), fromAgg(r.p)), "body");
+      const tot = totalDaUnidade(block.unidade, block.rows);
+      push(buildRawRow("TOTAL", fromBreakdown(tot.atual), fromBreakdown(tot.proposta)), "total");
+      push([], "blank");
+    }
+
+    push(["RESUMO POR UNIDADE"], "unidade");
+    merges.push({ s: { r: rows.length - 1, c: 0 }, e: { r: rows.length - 1, c: UNIDADE_TOTAL_COLS - 1 } });
+    push(UNIDADE_SUBHEADER_ROW, "subheader");
+    addSubheaderMerges(rows.length - 1);
+    push(["Unidade", ...UNIDADE_REAL_HEADER_ROW.slice(1)], "header");
+    for (const r of resumoPorUnidade) push(buildRawRow(r.chave, fromBreakdown(r.atual), fromBreakdown(r.proposta)), "resumoBody");
+    push(buildRawRow("TOTAL GERAL", fromBreakdown(resumoUnidadeTotal.atual), fromBreakdown(resumoUnidadeTotal.proposta)), "resumoTotal");
+
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws["!merges"] = merges;
+    ws["!cols"] = Array.from({ length: UNIDADE_TOTAL_COLS }, (_, i) => ({ wch: i === 0 ? 22 : 11 }));
+
+    const FILL_BLUE = { patternType: "solid", fgColor: { rgb: XLSX_BLUE } };
+    const FILL_LIGHTBLUE = { patternType: "solid", fgColor: { rgb: XLSX_BLUE_LIGHT } };
+    const THIN = { style: "thin", color: { rgb: "B4B4B4" } };
+    const border = { top: THIN, bottom: THIN, left: THIN, right: THIN };
+
+    rows.forEach((row, r) => {
+      const kind = kinds[r];
+      if (kind === "blank") return;
+      for (let c = 0; c < UNIDADE_TOTAL_COLS; c++) {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        const cell = (ws as any)[addr];
+        if (!cell) continue;
+        if (kind === "title") cell.s = { font: { bold: true, sz: 13, color: { rgb: XLSX_LINE_BLUE } }, alignment: { horizontal: "center" } };
+        else if (kind === "subtitle") cell.s = { font: { sz: 9, color: { rgb: "666666" } }, alignment: { horizontal: "center" } };
+        else if (kind === "unidade") cell.s = { font: { bold: true, sz: 11 }, alignment: { horizontal: "left" } };
+        else if (kind === "subheader") cell.s = { font: { bold: true }, alignment: { horizontal: "center" } };
+        else if (kind === "header") cell.s = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: FILL_BLUE, alignment: { horizontal: c === 0 ? "left" : "center" }, border };
+        else if (kind === "body" || kind === "resumoBody") cell.s = { font: c === 0 ? { bold: true, color: { rgb: XLSX_LINE_BLUE } } : { color: { rgb: "000000" } }, alignment: { horizontal: c === 0 ? "left" : "right" }, border };
+        else if (kind === "total" || kind === "resumoTotal") cell.s = { font: { bold: true, color: { rgb: "000000" } }, fill: FILL_LIGHTBLUE, alignment: { horizontal: c === 0 ? "left" : "right" }, border };
+      }
+    });
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Comparativo");
+    XLSX.writeFile(wb, `relatorio_comparativo_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    void logAudit({ action: "export", entity: "relatorio_comparativo", details: { format: "xlsx", rows: merged.length, layout: "por_unidade" } });
+  }
+
+  function exportXLSX() {
+    if (agruparPorGrupo) exportXLSXFlat();
+    else exportXLSXPorUnidade();
+  }
+
+  function buildPDFFlat(orientation: PdfOrientation) {
       const { header1, header2, body, tot } = buildExportRows();
       const probe = new jsPDF({ orientation, unit: "mm", format: "a4" });
       const pageW = probe.internal.pageSize.getWidth();
@@ -702,7 +895,9 @@ export function ComparativoView() {
         f.versao !== "__all" ? `Versão ${f.versao}` : null,
       ].filter(Boolean).join(" · ");
       const subtitleTxt = applied
-        ? `Atual: ${periodoTxt(applied.a)}  →  Proposta: ${periodoTxt(applied.p)} — ${merged.length} ${agruparPorGrupo ? "grupo(s)" : "linha(s)"}`
+        // "->" em vez de "→": a fonte padrão do jsPDF (Helvetica/WinAnsi) não
+        // tem o caractere de seta Unicode — vira "mojibake" no PDF gerado.
+        ? `Atual: ${periodoTxt(applied.a)}  ->  Proposta: ${periodoTxt(applied.p)} — ${merged.length} ${agruparPorGrupo ? "grupo(s)" : "linha(s)"}`
         : `${merged.length} ${agruparPorGrupo ? "grupo(s)" : "linha(s)"} — mesma base do Resumo por Linha`;
 
       function drawHeader(d: InstanceType<typeof jsPDF>) {
@@ -780,6 +975,162 @@ export function ComparativoView() {
       return doc2;
   }
 
+  // PDF "por Unidade": um bloco (autoTable) por Unidade — nome em negrito,
+  // sub-cabeçalho mesclado (Serviços/Frota/Partidas/KM), cabeçalho azul,
+  // linhas da Unidade, total em azul claro — seguido do resumo final por
+  // Unidade. `pageBreak: "avoid"` tenta manter cada Unidade inteira numa
+  // página só; se não couber nem numa página em branco, ela pagina
+  // normalmente (repetindo o cabeçalho), o que é aceitável pro caso de
+  // Unidades com muitas linhas.
+  function buildPDFPorUnidade(orientation: PdfOrientation) {
+    const titleTxt = tituloComparativo();
+    const probe = new jsPDF({ orientation, unit: "mm", format: "a4" });
+    const pageW = probe.internal.pageSize.getWidth();
+    const pageH = probe.internal.pageSize.getHeight();
+    const HEADER_H = 16;
+    // -3mm de folga: a medição de largura via getTextWidth fica levemente
+    // abaixo do que o autoTable calcula internamente (padding/fonte), e sem
+    // essa folga a última coluna estourava por ~2mm.
+    const usableW = pageW - 16 - 3;
+
+    const periodoTxt = (f: Filters) => [
+      f.dia !== "__all" ? f.dia : "Todos os dias",
+      f.versao !== "__all" ? `Versão ${f.versao}` : null,
+    ].filter(Boolean).join(" · ");
+    const subtitleTxt = applied
+      ? `Atual: ${periodoTxt(applied.a)}  ->  Proposta: ${periodoTxt(applied.p)} — ${merged.length} linha(s) em ${unidadeBlocks.length} unidade(s)`
+      : `${merged.length} linha(s)`;
+
+    function drawHeader(d: InstanceType<typeof jsPDF>) {
+      d.setTextColor(...PDF_LINE_BLUE); d.setFont("helvetica", "bold"); d.setFontSize(11);
+      d.text(titleTxt, 10, 8);
+      d.setFont("helvetica", "normal"); d.setFontSize(7); d.setTextColor(100);
+      d.text(`Gerado em ${new Date().toLocaleString("pt-BR")}`, pageW - 10, 8, { align: "right" });
+      d.setFontSize(6.8); d.setTextColor(90);
+      d.text(subtitleTxt, 10, 13);
+      d.setDrawColor(...PDF_LINE_BLUE); d.setLineWidth(0.5);
+      d.line(10, 15, pageW - 10, 15);
+      d.setTextColor(20);
+    }
+
+    // Junta todas as linhas de exibição (cabeçalho real + corpo/total de
+    // cada bloco + resumo) pra medir a largura natural de cada uma das 17
+    // colunas de uma vez só — garante que todo bloco use a MESMA largura.
+    const allDisplayRows: string[][] = [UNIDADE_REAL_HEADER_ROW_PDF];
+    for (const block of unidadeBlocks) {
+      for (const r of block.rows) allDisplayRows.push(buildDisplayRow(r.linha, fromAgg(r.a), fromAgg(r.p)));
+      const tot = totalDaUnidade(block.unidade, block.rows);
+      allDisplayRows.push(buildDisplayRow("TOTAL", fromBreakdown(tot.atual), fromBreakdown(tot.proposta)));
+    }
+    for (const r of resumoPorUnidade) allDisplayRows.push(buildDisplayRow(r.chave, fromBreakdown(r.atual), fromBreakdown(r.proposta)));
+    allDisplayRows.push(buildDisplayRow("TOTAL GERAL", fromBreakdown(resumoUnidadeTotal.atual), fromBreakdown(resumoUnidadeTotal.proposta)));
+
+    function naturalColWidths(fontSize: number): number[] {
+      const padX = 1.4;
+      probe.setFontSize(fontSize);
+      // Sempre mede em negrito: cabeçalho e linha de total são bold em toda
+      // coluna, e a coluna 0 do corpo também — medir em fonte normal
+      // subestimava a largura e o texto quebrava linha (ex.: "Proposta").
+      probe.setFont("helvetica", "bold");
+      const widths = new Array(UNIDADE_TOTAL_COLS).fill(0);
+      for (const row of allDisplayRows) {
+        for (let c = 0; c < UNIDADE_TOTAL_COLS; c++) {
+          const w = probe.getTextWidth(String(row[c] ?? ""));
+          if (w > widths[c]) widths[c] = w;
+        }
+      }
+      return widths.map((w) => w + padX * 2);
+    }
+
+    const baseWidths = naturalColWidths(6.5);
+    const baseTotal = baseWidths.reduce((s, w) => s + w, 0);
+    // Só ajusta a largura (não a altura — o relatório pode ocupar quantas
+    // páginas precisar); piso de zoom garante um tamanho de fonte mínimo
+    // legível mesmo se o conteúdo não couber de jeito nenhum.
+    const zoom = Math.max(0.85, Math.min(1.3, usableW / baseTotal));
+    const fontSize = 6.5 * zoom;
+    const widths = baseWidths.map((w) => w * zoom);
+    const scaledTotal = widths.reduce((s, w) => s + w, 0);
+    // Centraliza de verdade: a margem direita passada pra autoTable precisa
+    // bater com a esquerda, senão a largura disponível real fica menor que
+    // scaledTotal e a última coluna estoura por alguns milímetros.
+    const marginLeft = Math.max(5, (pageW - scaledTotal) / 2);
+    const marginRight = Math.max(5, pageW - scaledTotal - marginLeft);
+
+    const columnStyles: Record<number, { cellWidth: number; halign: "left" | "right" }> = {};
+    widths.forEach((w, i) => { columnStyles[i] = { cellWidth: w, halign: i === 0 ? "left" : "right" }; });
+
+    const doc = new jsPDF({ orientation, unit: "mm", format: "a4" });
+    drawHeader(doc);
+    let currentY = HEADER_H + 3;
+
+    function drawBlock(nome: string, linhaRows: string[][], totalRow: string[], firstColLabel = "Linha") {
+      const nameHeadRow = [{ content: nome, colSpan: UNIDADE_TOTAL_COLS, styles: { halign: "left" as const, fontStyle: "bold" as const, fillColor: [255, 255, 255] as [number, number, number], textColor: [20, 20, 20] as [number, number, number] } }];
+      const subHeadRow = [
+        { content: "", styles: { fillColor: [255, 255, 255] as [number, number, number] } },
+        ...UNIDADE_REPORT_METRICS.map((m) => ({ content: m.label, colSpan: 4, styles: { halign: "center" as const, fontStyle: "bold" as const, fillColor: [255, 255, 255] as [number, number, number], textColor: [20, 20, 20] as [number, number, number] } })),
+      ];
+      const headerLabels = [firstColLabel, ...UNIDADE_REAL_HEADER_ROW_PDF.slice(1)];
+      const realHeadRow = headerLabels.map((label, i) => ({ content: label, styles: { fillColor: PDF_BLUE, textColor: [255, 255, 255] as [number, number, number], fontStyle: "bold" as const, halign: (i === 0 ? "left" : "center") as "left" | "center" } }));
+
+      autoTable(doc, {
+        startY: currentY,
+        head: [nameHeadRow, subHeadRow, realHeadRow],
+        body: linhaRows,
+        foot: [totalRow],
+        styles: { fontSize, cellPadding: 1.2 * zoom, valign: "middle", halign: "right", lineColor: [180, 180, 180], lineWidth: 0.18 },
+        columnStyles,
+        footStyles: { fillColor: PDF_BLUE_LIGHT, textColor: [0, 0, 0], fontStyle: "bold" },
+        margin: { left: marginLeft, right: marginRight, top: HEADER_H + 3, bottom: 12 },
+        theme: "grid",
+        tableWidth: "wrap",
+        showFoot: "lastPage",
+        pageBreak: "avoid",
+        rowPageBreak: "avoid",
+        didDrawPage: () => drawHeader(doc),
+        // Coluna "Linha" em azul/negrito só no CORPO (não no total, que já é
+        // preto/negrito via footStyles) — columnStyles não distingue seção.
+        didParseCell: (data: any) => {
+          if (data.section === "body" && data.column.index === 0) {
+            data.cell.styles.textColor = PDF_LINE_BLUE;
+            data.cell.styles.fontStyle = "bold";
+          }
+        },
+      });
+      currentY = (doc as any).lastAutoTable.finalY + 4;
+    }
+
+    for (const block of unidadeBlocks) {
+      const tot = totalDaUnidade(block.unidade, block.rows);
+      drawBlock(
+        block.unidade,
+        block.rows.map((r) => buildDisplayRow(r.linha, fromAgg(r.a), fromAgg(r.p))),
+        buildDisplayRow("TOTAL", fromBreakdown(tot.atual), fromBreakdown(tot.proposta)),
+      );
+    }
+
+    if (resumoPorUnidade.length) {
+      drawBlock(
+        "RESUMO POR UNIDADE",
+        resumoPorUnidade.map((r) => buildDisplayRow(r.chave, fromBreakdown(r.atual), fromBreakdown(r.proposta))),
+        buildDisplayRow("TOTAL GERAL", fromBreakdown(resumoUnidadeTotal.atual), fromBreakdown(resumoUnidadeTotal.proposta)),
+        "Unidade",
+      );
+    }
+
+    const pages = doc.getNumberOfPages();
+    for (let i = 1; i <= pages; i++) {
+      doc.setPage(i);
+      doc.setFontSize(7); doc.setTextColor(120);
+      doc.text(`Página ${i} de ${pages}`, pageW - 10, pageH - 5, { align: "right" });
+    }
+    return doc;
+  }
+
+  function buildPDF(orientation: PdfOrientation) {
+    return agruparPorGrupo ? buildPDFFlat(orientation) : buildPDFPorUnidade(orientation);
+  }
+
   const printData = buildExportRows();
 
   return (
@@ -831,7 +1182,7 @@ export function ComparativoView() {
             build={buildPDF}
             filename={`relatorio_comparativo_${new Date().toISOString().slice(0, 10)}.pdf`}
             disabled={!merged.length}
-            defaultOrientation="landscape"
+            defaultOrientation={agruparPorGrupo ? "landscape" : "portrait"}
             onDownload={(o) => void logAudit({ action: "export", entity: "relatorio_comparativo", details: { format: "pdf", orientation: o, rows: merged.length } })}
             onPrint={(o) => void logAudit({ action: "export", entity: "relatorio_comparativo", details: { format: "print", orientation: o, rows: merged.length } })}
           />
