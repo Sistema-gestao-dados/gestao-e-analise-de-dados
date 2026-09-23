@@ -7,6 +7,7 @@ export type Historico = {
   linha: string;
   versao: number | null;
   dia_tipo: string | null;
+  referencia: string | null;
   data_solicitacao: string | null;
   vigencia: string | null;
   encerramento: string | null;

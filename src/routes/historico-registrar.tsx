@@ -30,7 +30,7 @@ function RegistrarPage() {
   const diaTipos = diaTiposQ.data ?? [];
 
   const [form, setForm] = useState({
-    linha: "", versao: "", dia_tipo: "", novoDiaTipo: "",
+    linha: "", versao: "", dia_tipo: "", novoDiaTipo: "", referencia: "",
     data_solicitacao: "", vigencia: "", encerramento: "", alteracao: "", ativo: true,
   });
   const [saving, setSaving] = useState(false);
@@ -51,6 +51,7 @@ function RegistrarPage() {
         linha: form.linha,
         versao: form.versao ? Number(form.versao) : null,
         dia_tipo: diaTipoFinal || null,
+        referencia: form.referencia.trim() || null,
         data_solicitacao: form.data_solicitacao || null,
         vigencia: form.vigencia || null,
         encerramento: form.encerramento || null,
@@ -104,6 +105,10 @@ function RegistrarPage() {
               {usandoNovoDiaTipo && (
                 <Input className="mt-2" placeholder="Nome do novo dia tipo" value={form.novoDiaTipo} onChange={(e) => setForm((f) => ({ ...f, novoDiaTipo: e.target.value }))} />
               )}
+            </div>
+            <div>
+              <Label>Referência</Label>
+              <Input placeholder="Nº do ofício, protocolo..." value={form.referencia} onChange={(e) => setForm((f) => ({ ...f, referencia: e.target.value }))} />
             </div>
             <div>
               <Label>Ativo</Label>

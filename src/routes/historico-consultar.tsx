@@ -27,7 +27,7 @@ function fmtDate(d?: string | null) {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : d;
 }
 
-const emptyFiltros = { ano: "__all", mes: "__all", dia_tipo: "__all", linha: "__all", empresa: "__all", grupo: "__all", vigencia: "", ativo: "__all" };
+const emptyFiltros = { ano: "__all", mes: "__all", dia_tipo: "__all", linha: "__all", empresa: "__all", grupo: "__all", vigencia: "", ativo: "__all", referencia: "" };
 
 function ConsultarPage() {
   useAuditView("historico_reprogramacao");
@@ -59,6 +59,7 @@ function ConsultarPage() {
       if (filtros.linha !== "__all" && h.linha !== filtros.linha) return false;
       if (filtros.dia_tipo !== "__all" && h.dia_tipo !== filtros.dia_tipo) return false;
       if (filtros.vigencia && h.vigencia !== filtros.vigencia) return false;
+      if (filtros.referencia && !(h.referencia ?? "").toLowerCase().includes(filtros.referencia.toLowerCase())) return false;
       if (filtros.ativo === "S" && !h.ativo) return false;
       if (filtros.ativo === "N" && h.ativo) return false;
       if (filtros.empresa !== "__all" && empresaMap.get(h.linha) !== filtros.empresa) return false;
@@ -189,6 +190,10 @@ function ConsultarPage() {
             <label className="text-xs text-muted-foreground">Vigência exata</label>
             <Input type="date" value={filtros.vigencia} onChange={(e) => setFiltros((f) => ({ ...f, vigencia: e.target.value }))} />
           </div>
+          <div>
+            <label className="text-xs text-muted-foreground">Referência</label>
+            <Input placeholder="Buscar..." value={filtros.referencia} onChange={(e) => setFiltros((f) => ({ ...f, referencia: e.target.value }))} />
+          </div>
         </CardContent>
       </Card>
 
@@ -225,10 +230,12 @@ function ConsultarPage() {
                     <TableHead>Linha</TableHead>
                     <TableHead>Versão</TableHead>
                     <TableHead>Dia Tipo</TableHead>
+                    <TableHead>Referência</TableHead>
+                    <TableHead>Data de solicitação</TableHead>
                     <TableHead>Vigência</TableHead>
                     <TableHead>Encerramento</TableHead>
-                    <TableHead>Ativo</TableHead>
                     <TableHead>Alteração</TableHead>
+                    <TableHead>Ativo</TableHead>
                     <TableHead className="text-right">Ações</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -248,10 +255,23 @@ function ConsultarPage() {
                           {isEditing ? <Input className="w-32" value={editRow.dia_tipo ?? ""} onChange={(e) => setEditRow((r) => ({ ...r, dia_tipo: e.target.value }))} /> : (h.dia_tipo ?? "—")}
                         </TableCell>
                         <TableCell>
+                          {isEditing ? <Input className="w-32" value={editRow.referencia ?? ""} onChange={(e) => setEditRow((r) => ({ ...r, referencia: e.target.value }))} /> : (h.referencia ?? "—")}
+                        </TableCell>
+                        <TableCell>
+                          {isEditing ? <Input className="w-36" type="date" value={editRow.data_solicitacao ?? ""} onChange={(e) => setEditRow((r) => ({ ...r, data_solicitacao: e.target.value }))} /> : fmtDate(h.data_solicitacao)}
+                        </TableCell>
+                        <TableCell>
                           {isEditing ? <Input className="w-36" type="date" value={editRow.vigencia ?? ""} onChange={(e) => setEditRow((r) => ({ ...r, vigencia: e.target.value }))} /> : fmtDate(h.vigencia)}
                         </TableCell>
                         <TableCell>
                           {isEditing ? <Input className="w-36" type="date" value={editRow.encerramento ?? ""} onChange={(e) => setEditRow((r) => ({ ...r, encerramento: e.target.value }))} /> : fmtDate(h.encerramento)}
+                        </TableCell>
+                        <TableCell className="max-w-xs">
+                          {isEditing ? (
+                            <Input value={editRow.alteracao ?? ""} onChange={(e) => setEditRow((r) => ({ ...r, alteracao: e.target.value }))} />
+                          ) : (
+                            <button className="text-left truncate max-w-xs hover:underline" onClick={() => setDetalhe(h)}>{h.alteracao || "—"}</button>
+                          )}
                         </TableCell>
                         <TableCell>
                           {isEditing ? (
@@ -260,13 +280,6 @@ function ConsultarPage() {
                               <SelectContent><SelectItem value="S">Sim</SelectItem><SelectItem value="N">Não</SelectItem></SelectContent>
                             </Select>
                           ) : (h.ativo ? "Sim" : "Não")}
-                        </TableCell>
-                        <TableCell className="max-w-xs">
-                          {isEditing ? (
-                            <Input value={editRow.alteracao ?? ""} onChange={(e) => setEditRow((r) => ({ ...r, alteracao: e.target.value }))} />
-                          ) : (
-                            <button className="text-left truncate max-w-xs hover:underline" onClick={() => setDetalhe(h)}>{h.alteracao || "—"}</button>
-                          )}
                         </TableCell>
                         <TableCell className="text-right whitespace-nowrap">
                           {isEditing ? (
@@ -313,7 +326,7 @@ function ConsultarPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Linha {detalhe?.linha} — versão {detalhe?.versao ?? "—"}</DialogTitle>
-            <DialogDescription>Vigência {fmtDate(detalhe?.vigencia)}</DialogDescription>
+            <DialogDescription>Vigência {fmtDate(detalhe?.vigencia)}{detalhe?.referencia ? ` · Referência ${detalhe.referencia}` : ""}</DialogDescription>
           </DialogHeader>
           <p className="text-sm whitespace-pre-wrap">{detalhe?.alteracao || "Sem descrição."}</p>
         </DialogContent>

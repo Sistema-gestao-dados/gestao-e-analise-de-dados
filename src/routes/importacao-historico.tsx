@@ -106,6 +106,7 @@ function ImportacaoHistoricoPage() {
       const iLinha = headers.indexOf("linha");
       const iVersao = headers.indexOf("versao");
       const iDiaTipo = headers.findIndex((h) => h === "dia_tipo" || h === "dia_tipo");
+      const iReferencia = headers.indexOf("referencia");
       const iDataSol = headers.findIndex((h) => h.includes("solicitacao"));
       const iVigencia = headers.indexOf("vigencia");
       const iEncerramento = headers.indexOf("encerramento");
@@ -127,6 +128,7 @@ function ImportacaoHistoricoPage() {
           linha,
           versao: iVersao !== -1 ? parseVersao(r[iVersao]) : null,
           dia_tipo: diaTipo,
+          referencia: iReferencia !== -1 ? r[iReferencia]?.trim() || null : null,
           data_solicitacao: iDataSol !== -1 ? parseDate(r[iDataSol]) : null,
           vigencia: iVigencia !== -1 ? parseDate(r[iVigencia]) : null,
           encerramento: iEncerramento !== -1 ? parseDate(r[iEncerramento]) : null,
@@ -173,9 +175,9 @@ function ImportacaoHistoricoPage() {
       <Card className="shadow-[var(--shadow-card)]">
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2"><FileUp className="h-4 w-4 text-primary" /> Selecionar CSV</CardTitle>
-          <CardDescription>Colunas aceitas (cabeçalho flexível): Linha, Versão, Dia tipo, Data de solicitação, Vigência, Encerramento, Alteração, Ativo (S/N).</CardDescription>
+          <CardDescription>Colunas aceitas (cabeçalho flexível): Linha, Versão, Dia tipo, Referência, Data de solicitação, Vigência, Encerramento, Alteração, Ativo (S/N).</CardDescription>
           <div className="flex flex-wrap gap-1.5 mt-1">
-            {["Linha", "Versão", "Dia tipo", "Data de solicitação", "Vigência", "Encerramento", "Alteração", "Ativo"].map((c) => (
+            {["Linha", "Versão", "Dia tipo", "Referência", "Data de solicitação", "Vigência", "Encerramento", "Alteração", "Ativo"].map((c) => (
               <Badge key={c} variant="outline" className="text-[10px]">{c}</Badge>
             ))}
           </div>

@@ -365,6 +365,7 @@ export type Database = {
           linha: string
           versao: number | null
           dia_tipo: string | null
+          referencia: string | null
           data_solicitacao: string | null
           vigencia: string | null
           encerramento: string | null
@@ -378,6 +379,7 @@ export type Database = {
           linha: string
           versao?: number | null
           dia_tipo?: string | null
+          referencia?: string | null
           data_solicitacao?: string | null
           vigencia?: string | null
           encerramento?: string | null
@@ -391,6 +393,7 @@ export type Database = {
           linha?: string
           versao?: number | null
           dia_tipo?: string | null
+          referencia?: string | null
           data_solicitacao?: string | null
           vigencia?: string | null
           encerramento?: string | null

@@ -120,12 +120,12 @@ function RelatorioPage() {
       autoTable(doc, {
         startY,
         margin: { left: margin, right: margin },
-        head: [["Linha", "Versão", "Dia tipo", "Vigência", "Encerramento", "Alteração"]],
-        body: filtered.map((h) => [h.linha, h.versao ?? "—", h.dia_tipo ?? "—", fmtDate(h.vigencia), fmtDate(h.encerramento), cleanText(h.alteracao)]),
+        head: [["Linha", "Versão", "Dia tipo", "Referência", "Data solic.", "Vigência", "Encerramento", "Alteração"]],
+        body: filtered.map((h) => [h.linha, h.versao ?? "—", h.dia_tipo ?? "—", h.referencia ?? "—", fmtDate(h.data_solicitacao), fmtDate(h.vigencia), fmtDate(h.encerramento), cleanText(h.alteracao)]),
         styles: { fontSize: 9, cellPadding: 6, valign: "top", lineColor: [226, 232, 240], lineWidth: 0.5, overflow: "linebreak" },
         headStyles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: "bold", halign: "left", overflow: "linebreak", cellPadding: { top: 6, right: 4, bottom: 6, left: 6 } },
         alternateRowStyles: { fillColor: [248, 250, 252] },
-        columnStyles: { 0: { cellWidth: 55, fontStyle: "bold" }, 1: { cellWidth: 55, halign: "center" }, 2: { cellWidth: 70 }, 3: { cellWidth: 70, halign: "center" }, 4: { cellWidth: 90, halign: "center" }, 5: { cellWidth: "auto", overflow: "linebreak" } },
+        columnStyles: { 0: { cellWidth: 50, fontStyle: "bold" }, 1: { cellWidth: 45, halign: "center" }, 2: { cellWidth: 60 }, 3: { cellWidth: 60 }, 4: { cellWidth: 60, halign: "center" }, 5: { cellWidth: 60, halign: "center" }, 6: { cellWidth: 70, halign: "center" }, 7: { cellWidth: "auto", overflow: "linebreak" } },
         didDrawPage: (d: any) => {
           doc.setFontSize(8);
           doc.setTextColor(120);
@@ -170,7 +170,7 @@ function RelatorioPage() {
         <CardContent className="p-0 overflow-x-auto">
           <Table>
             <TableHeader>
-              <TableRow><TableHead>Linha</TableHead><TableHead>Versão</TableHead><TableHead>Dia Tipo</TableHead><TableHead>Vigência</TableHead><TableHead>Encerramento</TableHead><TableHead>Alteração</TableHead></TableRow>
+              <TableRow><TableHead>Linha</TableHead><TableHead>Versão</TableHead><TableHead>Dia Tipo</TableHead><TableHead>Referência</TableHead><TableHead>Data solic.</TableHead><TableHead>Vigência</TableHead><TableHead>Encerramento</TableHead><TableHead>Alteração</TableHead></TableRow>
             </TableHeader>
             <TableBody>
               {filtered.slice(0, 200).map((h: Historico) => (
@@ -178,6 +178,8 @@ function RelatorioPage() {
                   <TableCell className="font-medium">{h.linha}</TableCell>
                   <TableCell>{h.versao ?? "—"}</TableCell>
                   <TableCell>{h.dia_tipo ?? "—"}</TableCell>
+                  <TableCell>{h.referencia ?? "—"}</TableCell>
+                  <TableCell>{fmtDate(h.data_solicitacao)}</TableCell>
                   <TableCell>{fmtDate(h.vigencia)}</TableCell>
                   <TableCell>{fmtDate(h.encerramento)}</TableCell>
                   <TableCell className="max-w-md truncate">{h.alteracao ?? "—"}</TableCell>
