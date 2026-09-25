@@ -392,9 +392,16 @@ export function ResumoView({ mode }: { mode: Mode }) {
   // "grupo" com groupBy="grupo", cada row JÁ é o grupo. No modo "versão"
   // não há noção de Grupo de Linha — mantém o próprio rótulo (equivale à
   // ordenação alfabética de antes).
+  // Grupo de Linha é cadastrado POR DIA TIPO — busca o grupo cadastrado pro
+  // dia tipo aplicado no filtro (S.dia); só cai pro "mais frequente" (sem
+  // olhar dia tipo) se o filtro estiver em "Todos os dias".
   function grupoParaOrdenar(r: AggRow): string {
-    if (mode === "linha") return grupoDuPorLinha.get(r.groupLabel) ?? `zzz_${r.groupLabel}`;
-    return r.groupLabel;
+    if (mode !== "linha") return r.groupLabel;
+    if (S.dia !== "__all") {
+      const g = grupoMap.get(`${r.groupLabel}|${S.dia}`.toLowerCase());
+      if (g) return g;
+    }
+    return grupoDuPorLinha.get(r.groupLabel) ?? `zzz_${r.groupLabel}`;
   }
 
   const rowsPorUnidadeExport = useMemo(() => {
@@ -413,7 +420,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
       });
     }
     return Array.from(grupos, ([unidade, rows]) => ({ unidade, rows })).sort((a, b) => a.unidade.localeCompare(b.unidade, "pt-BR"));
-  }, [rows, unidadePorGrupo, grupoDuPorLinha, mode]);
+  }, [rows, unidadePorGrupo, grupoDuPorLinha, mode, S.dia, grupoMap]);
 
 
 const totals = useMemo(() => {

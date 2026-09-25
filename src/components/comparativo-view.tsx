@@ -663,8 +663,24 @@ export function ComparativoView() {
 
   // Chave de ordenação por Grupo de Linha: no modo agrupado, a própria linha
   // do bloco JÁ é o grupo; no modo por linha, busca o grupo dessa linha.
+  // Grupo de Linha é cadastrado POR DIA TIPO — a mesma linha pode ter um
+  // grupo em "Domingo" e outro em "Eleição 2026" (é o caso de uso: comparar
+  // um dia normal com um dia especial atrelado a um dia tipo diferente).
+  // Por isso não dá pra usar um "grupo mais frequente" cego — busca o grupo
+  // cadastrado pro dia tipo de CADA lado (Atual/Proposta) da comparação, e
+  // só cai pro "mais frequente" se nenhum dos dois tiver dia tipo definido.
   function grupoParaOrdenar(row: { linha: string }): string {
     if (agruparPorGrupo) return row.linha;
+    const diaA = applied && applied.a.dia !== "__all" ? applied.a.dia : null;
+    const diaP = applied && applied.p.dia !== "__all" ? applied.p.dia : null;
+    if (diaA) {
+      const g = grupoDaLinha(row.linha, diaA);
+      if (!g.startsWith("__sem_grupo__")) return g;
+    }
+    if (diaP) {
+      const g = grupoDaLinha(row.linha, diaP);
+      if (!g.startsWith("__sem_grupo__")) return g;
+    }
     return grupoDuPorLinha.get(row.linha) ?? `zzz_${row.linha}`;
   }
 
@@ -788,7 +804,7 @@ export function ComparativoView() {
           return a.linha.localeCompare(b.linha, "pt-BR", { numeric: true, sensitivity: "base" });
         }),
       }));
-  }, [merged, unidadePorLinha, unidadePorGrupo, agruparPorGrupo, grupoDuPorLinha]);
+  }, [merged, unidadePorLinha, unidadePorGrupo, agruparPorGrupo, grupoDuPorLinha, applied, grupoMap]);
 
   const ZERO_UNIDADE_METRICS: Record<Exclude<MetricKeyName, "custo">, number> = {
     dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0, km: 0, heMin: 0,
