@@ -18,6 +18,19 @@ export function fmtHHMM(min: number): string {
   return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
 }
 
+/**
+ * Partidas de madrugada (ex.: 00:30) que na verdade são a "virada" do
+ * serviço da noite anterior — não o início do dia — precisam ordenar
+ * DEPOIS das partidas da noite (23:xx), não antes das da manhã (04:xx).
+ * Qualquer horário menor que `corteMin` (o "início do dia operacional",
+ * ex.: 03:00) é empurrado +24h só pra fins de ordenação/agrupamento;
+ * `fmtHHMM` já faz `% 1440` na hora de exibir, então volta a mostrar
+ * "00:30" normalmente — só a posição na lista/banda muda.
+ */
+export function normalizarVirada(min: number, corteMin: number): number {
+  return min < corteMin ? min + 1440 : min;
+}
+
 export type Banda = { inicio: number; fim: number; intervalo: number; qtdPartidas: number };
 
 /**

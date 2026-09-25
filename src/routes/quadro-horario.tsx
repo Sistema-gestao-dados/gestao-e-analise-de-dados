@@ -3,10 +3,24 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAllViagens } from "@/lib/viagens";
 import { buildServiceUnits } from "@/lib/resumo";
-import { agruparBandas, fmtHHMM, parseHHMMToMin, type Banda } from "@/lib/quadro-horario";
+import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
+import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
+import {
+  buildEmpresaOverrideMap,
+  resolveUnidadeViagem,
+  resolveGrupoViagem,
+} from "@/lib/empresa-estacao";
+import {
+  agruparBandas,
+  fmtHHMM,
+  parseHHMMToMin,
+  normalizarVirada,
+  type Banda,
+} from "@/lib/quadro-horario";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -50,8 +64,20 @@ const SENTIDOS: Sentido[] = ["Ida", "Volta"];
 type Corrido = { min: number; hhmm: string; intervalo: number | null };
 type SentidoResult = { partidas: number[]; corrido: Corrido[] };
 type LinhaResult = { linha: string; frota: number; porSentido: Record<Sentido, SentidoResult> };
-type Applied = { linha: string[]; dia: string; versao: string; tipoServico: string };
+type Applied = {
+  linha: string[];
+  dia: string;
+  versao: string;
+  tipoServico: string;
+  movimento: string;
+  categoria: string;
+  unidade: string;
+  grupo: string;
+  corteVirada: string;
+};
 type BandaComOrigem = Banda & { origemLabel: "IDA" | "VOLTA" };
+
+const CORTE_VIRADA_PADRAO = "03:00";
 
 function FiltroSelect({
   label,
@@ -129,25 +155,57 @@ function QuadroHorarioPage() {
   const [fDia, setFDia] = usePersistentState("quadro.fDia", "__all");
   const [fVersao, setFVersao] = usePersistentState("quadro.fVersao", "__all");
   const [fTipoServico, setFTipoServico] = usePersistentState("quadro.fTipoServico", "__all");
+  const [fMovimento, setFMovimento] = usePersistentState("quadro.fMovimento", "Comercial");
+  const [fCategoria, setFCategoria] = usePersistentState("quadro.fCategoria", "Viagem");
+  const [fUnidade, setFUnidade] = usePersistentState("quadro.fUnidade", "__all");
+  const [fGrupo, setFGrupo] = usePersistentState("quadro.fGrupo", "__all");
+  const [fCorteVirada, setFCorteVirada] = usePersistentState(
+    "quadro.fCorteVirada",
+    CORTE_VIRADA_PADRAO,
+  );
+  const [somenteAtivos, setSomenteAtivos] = usePersistentState("quadro.somenteAtivos", false);
   const [tolerancia, setTolerancia] = usePersistentState("quadro.tolerancia", 5);
   const [applied, setApplied] = useState<Applied | null>(null);
   const [gerarResumo, setGerarResumo] = useState(false);
 
   const viagensQ = useQuery({ queryKey: ["viagens-all"], queryFn: fetchAllViagens });
+  const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
+  const empresaEstacaoQ = useQuery({ queryKey: ["empresa-estacao"], queryFn: fetchEmpresaEstacao });
+  const ativosQ = useQuery({ queryKey: ["projetos-ativos"], queryFn: fetchProjetosAtivos });
   const viagensRaw = viagensQ.data ?? [];
+  const linhas = linhasQ.data ?? [];
+  const empresaEstacao = empresaEstacaoQ.data ?? [];
+  const ativos = ativosQ.data ?? [];
   const loading = viagensQ.isLoading;
+
+  const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
+  const empresaOverrideMap = useMemo(
+    () => buildEmpresaOverrideMap(empresaEstacao),
+    [empresaEstacao],
+  );
+  const viagens = useMemo(
+    () => (somenteAtivos ? filterViagensAtivas(viagensRaw, ativos) : viagensRaw),
+    [viagensRaw, ativos, somenteAtivos],
+  );
 
   const opts = useMemo(
     () => ({
-      linha: Array.from(new Set(viagensRaw.map((v) => v.linha).filter(Boolean))).sort(),
+      linha: Array.from(new Set(viagens.map((v) => v.linha).filter(Boolean))).sort(),
       dia: Array.from(
-        new Set(viagensRaw.map((v) => v.tipo_operacao).filter(Boolean) as string[]),
+        new Set(viagens.map((v) => v.tipo_operacao).filter(Boolean) as string[]),
       ).sort(),
       versao: Array.from(
-        new Set(viagensRaw.map((v) => v.versao_programacao).filter(Boolean) as string[]),
+        new Set(viagens.map((v) => v.versao_programacao).filter(Boolean) as string[]),
       ).sort(),
+      unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
+      grupo: Array.from(
+        new Set([
+          ...(linhas.map((l) => l.ordem).filter(Boolean) as string[]),
+          ...(empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[]),
+        ]),
+      ).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
     }),
-    [viagensRaw],
+    [viagens, linhas, empresaEstacao],
   );
 
   function aplicarFiltros() {
@@ -163,37 +221,59 @@ function QuadroHorarioPage() {
       toast.error("Selecione a Versão");
       return;
     }
-    setApplied({ linha: fLinha, dia: fDia, versao: fVersao, tipoServico: fTipoServico });
+    setApplied({
+      linha: fLinha,
+      dia: fDia,
+      versao: fVersao,
+      tipoServico: fTipoServico,
+      movimento: fMovimento,
+      categoria: fCategoria,
+      unidade: fUnidade,
+      grupo: fGrupo,
+      corteVirada: fCorteVirada,
+    });
     setGerarResumo(false);
   }
 
-  // Partidas comerciais (as que valem pra horário de passageiro) da
-  // linha+dia+versão(+tipo serviço opcional) selecionados, uma por Sentido.
+  // Partidas que valem pra horário de passageiro: só Movimento/Categoria
+  // selecionados (padrão: Comercial + Viagem — exclui deslocamento/soltura/
+  // recolha, que não são horário público) da linha+dia+versão escolhidos.
   const filtered = useMemo(() => {
     if (!applied) return [];
-    return viagensRaw.filter(
+    return viagens.filter(
       (v) =>
         applied.linha.includes(v.linha) &&
         v.tipo_operacao === applied.dia &&
         v.versao_programacao === applied.versao &&
         (applied.tipoServico === "__all" ||
           (v.tipo_servico ?? "").toUpperCase() === applied.tipoServico) &&
-        (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL",
+        (applied.movimento === "__all" || (v.tipo_movimento ?? "").trim() === applied.movimento) &&
+        (applied.categoria === "__all" ||
+          (v.categoria_movimento ?? "").trim() === applied.categoria) &&
+        (applied.unidade === "__all" ||
+          resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) === applied.unidade) &&
+        (applied.grupo === "__all" ||
+          resolveGrupoViagem(v, linhaMap, empresaOverrideMap) === applied.grupo),
     );
-  }, [viagensRaw, applied]);
+  }, [viagens, applied, linhaMap, empresaOverrideMap]);
 
   const resultados = useMemo<LinhaResult[]>(() => {
     if (!applied) return [];
+    const corteMin = parseHHMMToMin(applied.corteVirada) ?? parseHHMMToMin(CORTE_VIRADA_PADRAO)!;
     // Frota: veículo físico (vehicleKey) que atende essa linha nesse dia+versão,
     // reaproveitando a mesma lógica já validada de Resumo por Linha/Jornada —
-    // sem filtrar por sentido/comercial aqui, pra não perder veículo que só
+    // sem filtrar por movimento/categoria aqui, pra não perder veículo que só
     // aparece em deslocamento noutro trecho da mesma linha.
-    const viagensDiaVersao = viagensRaw.filter(
+    const viagensDiaVersao = viagens.filter(
       (v) =>
         v.tipo_operacao === applied.dia &&
         v.versao_programacao === applied.versao &&
         (applied.tipoServico === "__all" ||
-          (v.tipo_servico ?? "").toUpperCase() === applied.tipoServico),
+          (v.tipo_servico ?? "").toUpperCase() === applied.tipoServico) &&
+        (applied.unidade === "__all" ||
+          resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) === applied.unidade) &&
+        (applied.grupo === "__all" ||
+          resolveGrupoViagem(v, linhaMap, empresaOverrideMap) === applied.grupo),
     );
     const units = buildServiceUnits(viagensDiaVersao, () => 0);
     const unitsArr = Array.from(units.values());
@@ -204,12 +284,16 @@ function QuadroHorarioPage() {
       ).size;
       const porSentido = {} as Record<Sentido, SentidoResult>;
       for (const sentido of SENTIDOS) {
+        // Horários de madrugada (< corte, ex. 03:00) são "virada" da noite
+        // anterior — empurrados +24h só pra ordenar/agrupar DEPOIS da noite,
+        // nunca antes da manhã. fmtHHMM devolve a hora normal na exibição.
         const partidas = Array.from(
           new Set(
             filtered
               .filter((v) => v.linha === linha && (v.sentido ?? "").trim() === sentido)
               .map((v) => parseHHMMToMin(v.partida))
-              .filter((m): m is number => m != null),
+              .filter((m): m is number => m != null)
+              .map((m) => normalizarVirada(m, corteMin)),
           ),
         ).sort((a, b) => a - b);
         const corrido: Corrido[] = partidas.map((m, i) => ({
@@ -221,7 +305,7 @@ function QuadroHorarioPage() {
       }
       return { linha, frota, porSentido };
     });
-  }, [applied, filtered, viagensRaw]);
+  }, [applied, filtered, viagens, linhaMap, empresaOverrideMap]);
 
   const bandasPorLinha = useMemo(() => {
     const m = new Map<string, BandaComOrigem[]>();
@@ -279,9 +363,46 @@ function QuadroHorarioPage() {
             onChange={setFTipoServico}
             options={["TU", "DIR"]}
           />
+          <FiltroSelect
+            label="Movimento"
+            value={fMovimento}
+            onChange={setFMovimento}
+            options={["Soltura", "Comercial", "Recolha", "Deslocamento"]}
+          />
+          <FiltroSelect
+            label="Categoria"
+            value={fCategoria}
+            onChange={setFCategoria}
+            options={["Deslocamento", "Viagem"]}
+          />
+          <FiltroSelect
+            label="Unidade"
+            value={fUnidade}
+            onChange={setFUnidade}
+            options={opts.unidade}
+          />
+          <FiltroSelect label="Grupo" value={fGrupo} onChange={setFGrupo} options={opts.grupo} />
+          <div>
+            <label className="text-xs text-muted-foreground">Corte da virada (madrugada)</label>
+            <Input
+              type="time"
+              className="w-28"
+              value={fCorteVirada}
+              onChange={(e) => setFCorteVirada(e.target.value || CORTE_VIRADA_PADRAO)}
+            />
+          </div>
+          <label className="flex items-center gap-2 text-xs cursor-pointer select-none pb-2">
+            <Checkbox checked={somenteAtivos} onCheckedChange={(v) => setSomenteAtivos(!!v)} />
+            Somente projeto ativo
+          </label>
           <Button size="sm" onClick={aplicarFiltros} disabled={loading}>
             Consultar
           </Button>
+          <p className="text-xs text-muted-foreground w-full">
+            Padrão: só partidas Comerciais de Categoria "Viagem" contam como horário de passageiro.
+            Partidas antes de {fCorteVirada || CORTE_VIRADA_PADRAO} são tratadas como virada da
+            noite anterior e entram no fim da sequência, não no início.
+          </p>
         </CardContent>
       </Card>
 
