@@ -1,5 +1,5 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-import { LayoutDashboard, Bus, Upload, Search, History, Gauge, Layers, Route as RouteIcon, FileUp, Activity, Users, ShieldAlert, ClipboardList, ListChecks, GitCompare, Clock, BarChart3, FileText, Ticket, Building2, FilePlus2, TrendingUp, ChevronDown, SearchCheck, Timer, DollarSign, CalendarClock, CalendarDays } from "lucide-react";
+import { LayoutDashboard, Bus, Upload, Search, History, Gauge, Layers, Route as RouteIcon, FileUp, Activity, Users, ShieldAlert, ClipboardList, ListChecks, GitCompare, Clock, BarChart3, FileText, Ticket, Building2, FilePlus2, TrendingUp, ChevronDown, SearchCheck, Timer, DollarSign, CalendarClock, CalendarDays, Table2 } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -27,6 +27,7 @@ export const groups: { label: string; items: Item[] }[] = [
       { title: "Relatório Comparativo", url: "/relatorio-comparativo", icon: GitCompare, perm: "relatorio_comparativo" },
       { title: "Jornada de Trabalho", url: "/jornada", icon: Clock, perm: "jornada" },
       { title: "Intra Jornada (TU)", url: "/intra-jornada", icon: Timer, perm: "intra_jornada" },
+      { title: "Quadro de Horário", url: "/quadro-horario", icon: Table2, perm: "quadro_horario" },
       { title: "Pesquisa", url: "/pesquisa", icon: Search, perm: "pesquisa" },
     ],
   },
