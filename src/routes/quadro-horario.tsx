@@ -69,7 +69,8 @@ type Applied = {
   versao: string;
   tipoServico: string;
   movimento: string;
-  categoria: string;
+  categoriaMovimento: string;
+  categoriaLinha: string;
   unidade: string;
   grupo: string;
   corteVirada: string;
@@ -155,7 +156,14 @@ function QuadroHorarioPage() {
   const [fVersao, setFVersao] = usePersistentState("quadro.fVersao", "__all");
   const [fTipoServico, setFTipoServico] = usePersistentState("quadro.fTipoServico", "__all");
   const [fMovimento, setFMovimento] = usePersistentState("quadro.fMovimento", "Comercial");
-  const [fCategoria, setFCategoria] = usePersistentState("quadro.fCategoria", "Viagem");
+  const [fCategoriaMovimento, setFCategoriaMovimento] = usePersistentState(
+    "quadro.fCategoriaMovimento",
+    "Viagem",
+  );
+  const [fCategoriaLinha, setFCategoriaLinha] = usePersistentState(
+    "quadro.fCategoriaLinha",
+    "__all",
+  );
   const [fUnidade, setFUnidade] = usePersistentState("quadro.fUnidade", "__all");
   const [fGrupo, setFGrupo] = usePersistentState("quadro.fGrupo", "__all");
   const [fCorteVirada, setFCorteVirada] = usePersistentState(
@@ -192,6 +200,9 @@ function QuadroHorarioPage() {
         new Set(viagens.map((v) => v.versao_programacao).filter(Boolean) as string[]),
       ).sort(),
       unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
+      categoriaLinha: Array.from(
+        new Set(linhas.map((l) => l.categoria).filter(Boolean) as string[]),
+      ).sort(),
       grupo: Array.from(
         new Set([
           ...(linhas.map((l) => l.ordem).filter(Boolean) as string[]),
@@ -203,10 +214,6 @@ function QuadroHorarioPage() {
   );
 
   function aplicarFiltros() {
-    if (fLinha.length === 0) {
-      toast.error("Selecione ao menos uma Linha");
-      return;
-    }
     if (fDia === "__all") {
       toast.error("Selecione o Dia Tipo");
       return;
@@ -217,7 +224,8 @@ function QuadroHorarioPage() {
       versao: fVersao,
       tipoServico: fTipoServico,
       movimento: fMovimento,
-      categoria: fCategoria,
+      categoriaMovimento: fCategoriaMovimento,
+      categoriaLinha: fCategoriaLinha,
       unidade: fUnidade,
       grupo: fGrupo,
       corteVirada: fCorteVirada,
@@ -240,17 +248,22 @@ function QuadroHorarioPage() {
   // Partidas que valem pra horário de passageiro: só Movimento/Categoria
   // selecionados (padrão: Comercial + Viagem — exclui deslocamento/soltura/
   // recolha, que não são horário público) da linha+dia+versão escolhidos.
+  // Linha é opcional: se nada for selecionado, entra qualquer linha que
+  // bata com os outros filtros (Dia Tipo, Grupo, Unidade, Categoria da
+  // Linha etc.) — não precisa escolher linha por linha.
   const filtered = useMemo(() => {
     if (!applied) return [];
     return viagensVersaoResolvida.filter(
       (v) =>
-        applied.linha.includes(v.linha) &&
+        (applied.linha.length === 0 || applied.linha.includes(v.linha)) &&
         v.tipo_operacao === applied.dia &&
         (applied.tipoServico === "__all" ||
           (v.tipo_servico ?? "").toUpperCase() === applied.tipoServico) &&
         (applied.movimento === "__all" || (v.tipo_movimento ?? "").trim() === applied.movimento) &&
-        (applied.categoria === "__all" ||
-          (v.categoria_movimento ?? "").trim() === applied.categoria) &&
+        (applied.categoriaMovimento === "__all" ||
+          (v.categoria_movimento ?? "").trim() === applied.categoriaMovimento) &&
+        (applied.categoriaLinha === "__all" ||
+          linhaMap.get(v.linha)?.categoria === applied.categoriaLinha) &&
         (applied.unidade === "__all" ||
           resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) === applied.unidade) &&
         (applied.grupo === "__all" ||
@@ -261,6 +274,12 @@ function QuadroHorarioPage() {
   const resultados = useMemo<LinhaResult[]>(() => {
     if (!applied) return [];
     const corteMin = parseHHMMToMin(applied.corteVirada) ?? parseHHMMToMin(CORTE_VIRADA_PADRAO)!;
+    // Linhas-alvo: as selecionadas manualmente, ou — se nenhuma — todas as
+    // que sobraram em `filtered` depois dos outros filtros.
+    const linhasAlvo =
+      applied.linha.length > 0
+        ? applied.linha
+        : Array.from(new Set(filtered.map((v) => v.linha))).sort();
     // Frota: veículo físico (vehicleKey) que atende essa linha nesse dia+versão,
     // reaproveitando a mesma lógica já validada de Resumo por Linha/Jornada —
     // sem filtrar por movimento/categoria aqui, pra não perder veículo que só
@@ -278,7 +297,7 @@ function QuadroHorarioPage() {
     const units = buildServiceUnits(viagensDiaVersao, () => 0);
     const unitsArr = Array.from(units.values());
 
-    return applied.linha.map((linha) => {
+    return linhasAlvo.map((linha) => {
       const frota = new Set(
         unitsArr.filter((u) => u.viagensPorLinha.has(linha)).map((u) => u.vehicleKey),
       ).size;
@@ -370,10 +389,16 @@ function QuadroHorarioPage() {
             options={["Soltura", "Comercial", "Recolha", "Deslocamento"]}
           />
           <FiltroSelect
-            label="Categoria"
-            value={fCategoria}
-            onChange={setFCategoria}
+            label="Categoria Movimento"
+            value={fCategoriaMovimento}
+            onChange={setFCategoriaMovimento}
             options={["Deslocamento", "Viagem"]}
+          />
+          <FiltroSelect
+            label="Categoria da Linha"
+            value={fCategoriaLinha}
+            onChange={setFCategoriaLinha}
+            options={opts.categoriaLinha}
           />
           <FiltroSelect
             label="Unidade"
@@ -395,11 +420,13 @@ function QuadroHorarioPage() {
             Consultar
           </Button>
           <p className="text-xs text-muted-foreground w-full">
-            Padrão: só partidas Comerciais de Categoria "Viagem" contam como horário de passageiro.
-            Versão "Todas" usa automaticamente o projeto ativo (versão vigente) de cada linha+dia
-            tipo — só escolha uma Versão específica se quiser ver uma versão fora de vigência.
-            Partidas antes de {fCorteVirada || CORTE_VIRADA_PADRAO} são tratadas como virada da
-            noite anterior e entram no fim da sequência, não no início.
+            Padrão: só partidas Comerciais de Categoria Movimento "Viagem" contam como horário de
+            passageiro. Linha é opcional — sem selecionar nenhuma, gera o quadro pra todas as linhas
+            que baterem com Dia Tipo/Grupo/Unidade/Categoria da Linha/Movimento escolhidos. Versão
+            "Todas" usa automaticamente o projeto ativo (versão vigente) de cada linha+dia tipo — só
+            escolha uma Versão específica se quiser ver uma versão fora de vigência. Partidas antes
+            de {fCorteVirada || CORTE_VIRADA_PADRAO} são tratadas como virada da noite anterior e
+            entram no fim da sequência, não no início.
           </p>
         </CardContent>
       </Card>
