@@ -640,6 +640,34 @@ export function ComparativoView() {
     return out;
   }, [basesAplicadas, linhaMap, empresaOverrideMap, grupoMap]);
 
+  // Grupo de Linha "primário" de cada linha (independente de dia tipo) —
+  // usado só pra ordenação secundária dentro de cada Unidade nos relatórios
+  // "por Unidade" (PDF/Excel): dentro da Unidade, agrupa as linhas do mesmo
+  // Grupo de Linha juntas (ex.: 01, 01A, 49A), em vez de alfabética pura.
+  const grupoDuPorLinha = useMemo(() => {
+    const tally = new Map<string, Map<string, number>>();
+    for (const m of multi) {
+      if (!m.grupo_du) continue;
+      const t = tally.get(m.linha) ?? new Map<string, number>();
+      t.set(m.grupo_du, (t.get(m.grupo_du) ?? 0) + 1);
+      tally.set(m.linha, t);
+    }
+    const out = new Map<string, string>();
+    for (const [linha, t] of tally) {
+      let best: string | null = null, bestN = -1;
+      for (const [g, n] of t) if (n > bestN) { best = g; bestN = n; }
+      if (best) out.set(linha, best);
+    }
+    return out;
+  }, [multi]);
+
+  // Chave de ordenação por Grupo de Linha: no modo agrupado, a própria linha
+  // do bloco JÁ é o grupo; no modo por linha, busca o grupo dessa linha.
+  function grupoParaOrdenar(row: { linha: string }): string {
+    if (agruparPorGrupo) return row.linha;
+    return grupoDuPorLinha.get(row.linha) ?? `zzz_${row.linha}`;
+  }
+
   // Custo por linha (Atual x Proposta) pra tabela principal — aqui sempre é
   // por linha, então a chave é direto j.linha, sem precisar do mapeamento
   // mais complexo usado nos resumos por Empresa/Grupo/Unidade.
@@ -749,8 +777,18 @@ export function ComparativoView() {
     }
     return Array.from(map.entries())
       .sort((a, b) => a[0].localeCompare(b[0], "pt-BR"))
-      .map(([unidade, rows]) => ({ unidade, rows }));
-  }, [merged, unidadePorLinha, unidadePorGrupo, agruparPorGrupo]);
+      .map(([unidade, rowsDaUnidade]) => ({
+        unidade,
+        // Dentro da Unidade: agrupa por Grupo de Linha (01, 01A, 49A...) e só
+        // depois por linha — não alfabética pura, que espalharia linhas do
+        // mesmo grupo se os códigos não começarem parecido.
+        rows: [...rowsDaUnidade].sort((a, b) => {
+          const ga = grupoParaOrdenar(a), gb = grupoParaOrdenar(b);
+          if (ga !== gb) return ga.localeCompare(gb, "pt-BR", { numeric: true, sensitivity: "base" });
+          return a.linha.localeCompare(b.linha, "pt-BR", { numeric: true, sensitivity: "base" });
+        }),
+      }));
+  }, [merged, unidadePorLinha, unidadePorGrupo, agruparPorGrupo, grupoDuPorLinha]);
 
   const ZERO_UNIDADE_METRICS: Record<Exclude<MetricKeyName, "custo">, number> = {
     dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0, km: 0, heMin: 0,

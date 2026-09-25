@@ -367,6 +367,36 @@ export function ResumoView({ mode }: { mode: Mode }) {
   // exportação (Excel/PDF) usam — mesmo formato "por Unidade" nos dois
   // modos (Resumo por Linha e Resumo Operacional), só muda a granularidade
   // de `rows` (linha individual ou grupo/versão, já vem pronta de `rows`).
+  // Grupo de Linha "primário" de cada linha (independente de dia tipo) —
+  // usado só pra ordenação secundária dentro de cada Unidade: dentro da
+  // Unidade, agrupa as linhas do mesmo Grupo de Linha juntas (ex.: 01, 01A,
+  // 49A), em vez de alfabética pura por código de linha.
+  const grupoDuPorLinha = useMemo(() => {
+    const tally = new Map<string, Map<string, number>>();
+    for (const m of multi) {
+      if (!m.grupo_du) continue;
+      const t = tally.get(m.linha) ?? new Map<string, number>();
+      t.set(m.grupo_du, (t.get(m.grupo_du) ?? 0) + 1);
+      tally.set(m.linha, t);
+    }
+    const out = new Map<string, string>();
+    for (const [linha, t] of tally) {
+      let best: string | null = null, bestN = -1;
+      for (const [g, n] of t) if (n > bestN) { best = g; bestN = n; }
+      if (best) out.set(linha, best);
+    }
+    return out;
+  }, [multi]);
+
+  // No modo "linha", cada row É uma linha (busca o grupo dela). No modo
+  // "grupo" com groupBy="grupo", cada row JÁ é o grupo. No modo "versão"
+  // não há noção de Grupo de Linha — mantém o próprio rótulo (equivale à
+  // ordenação alfabética de antes).
+  function grupoParaOrdenar(r: AggRow): string {
+    if (mode === "linha") return grupoDuPorLinha.get(r.groupLabel) ?? `zzz_${r.groupLabel}`;
+    return r.groupLabel;
+  }
+
   const rowsPorUnidadeExport = useMemo(() => {
     const grupos = new Map<string, AggRow[]>();
     for (const r of rows) {
@@ -375,9 +405,15 @@ export function ResumoView({ mode }: { mode: Mode }) {
       arr.push(r);
       grupos.set(un, arr);
     }
-    for (const arr of grupos.values()) arr.sort((a, b) => a.groupLabel.localeCompare(b.groupLabel, "pt-BR", { numeric: true }));
+    for (const arr of grupos.values()) {
+      arr.sort((a, b) => {
+        const ga = grupoParaOrdenar(a), gb = grupoParaOrdenar(b);
+        if (ga !== gb) return ga.localeCompare(gb, "pt-BR", { numeric: true, sensitivity: "base" });
+        return a.groupLabel.localeCompare(b.groupLabel, "pt-BR", { numeric: true, sensitivity: "base" });
+      });
+    }
     return Array.from(grupos, ([unidade, rows]) => ({ unidade, rows })).sort((a, b) => a.unidade.localeCompare(b.unidade, "pt-BR"));
-  }, [rows, unidadePorGrupo]);
+  }, [rows, unidadePorGrupo, grupoDuPorLinha, mode]);
 
 
 const totals = useMemo(() => {
