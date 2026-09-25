@@ -716,6 +716,9 @@ export function ComparativoView() {
         const ua = unidadeMap.get(a.linha) ?? "";
         const ub = unidadeMap.get(b.linha) ?? "";
         if (ua !== ub) return ua.localeCompare(ub, "pt-BR");
+        // 2ª ordem, dentro da mesma Unidade: Grupo de Linha (01, 01A, 49A...).
+        const ga = grupoParaOrdenar(a), gb = grupoParaOrdenar(b);
+        if (ga !== gb) return ga.localeCompare(gb, "pt-BR", { numeric: true, sensitivity: "base" });
       }
       if (a.order !== b.order) return a.order.localeCompare(b.order, "pt-BR", { numeric: true, sensitivity: "base" });
       return a.linha.localeCompare(b.linha);
@@ -726,7 +729,7 @@ export function ComparativoView() {
       );
     }
     return arr;
-  }, [atualRows, propostaRows, onlyDiff, ordenarPor, unidadePorLinha, unidadePorGrupo, agruparPorGrupo, chavesRepetidas, paiRows]);
+  }, [atualRows, propostaRows, onlyDiff, ordenarPor, unidadePorLinha, unidadePorGrupo, agruparPorGrupo, chavesRepetidas, paiRows, applied, grupoMap]);
 
   const totals = useMemo(() => {
     const base = { a: {} as Record<string, number>, p: {} as Record<string, number> };

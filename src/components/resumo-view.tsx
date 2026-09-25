@@ -359,9 +359,12 @@ export function ResumoView({ mode }: { mode: Mode }) {
       const ua = unidadePorGrupo.get(a.groupKey) ?? "";
       const ub = unidadePorGrupo.get(b.groupKey) ?? "";
       if (ua !== ub) return ua.localeCompare(ub, "pt-BR");
-      return a.groupLabel.localeCompare(b.groupLabel, "pt-BR");
+      // 2ª ordem, dentro da mesma Unidade: Grupo de Linha (01, 01A, 49A...).
+      const ga = grupoParaOrdenar(a), gb = grupoParaOrdenar(b);
+      if (ga !== gb) return ga.localeCompare(gb, "pt-BR", { numeric: true, sensitivity: "base" });
+      return a.groupLabel.localeCompare(b.groupLabel, "pt-BR", { numeric: true, sensitivity: "base" });
     });
-  }, [rows, ordenarPor, unidadePorGrupo]);
+  }, [rows, ordenarPor, unidadePorGrupo, S.dia, grupoMap]);
 
   // Linhas/grupos agrupados por Unidade, na ordem que os relatórios de
   // exportação (Excel/PDF) usam — mesmo formato "por Unidade" nos dois
