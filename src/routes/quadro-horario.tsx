@@ -20,7 +20,6 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -163,7 +162,6 @@ function QuadroHorarioPage() {
     "quadro.fCorteVirada",
     CORTE_VIRADA_PADRAO,
   );
-  const [somenteAtivos, setSomenteAtivos] = usePersistentState("quadro.somenteAtivos", false);
   const [tolerancia, setTolerancia] = usePersistentState("quadro.tolerancia", 5);
   const [applied, setApplied] = useState<Applied | null>(null);
   const [gerarResumo, setGerarResumo] = useState(false);
@@ -172,7 +170,7 @@ function QuadroHorarioPage() {
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
   const empresaEstacaoQ = useQuery({ queryKey: ["empresa-estacao"], queryFn: fetchEmpresaEstacao });
   const ativosQ = useQuery({ queryKey: ["projetos-ativos"], queryFn: fetchProjetosAtivos });
-  const viagensRaw = viagensQ.data ?? [];
+  const viagens = viagensQ.data ?? [];
   const linhas = linhasQ.data ?? [];
   const empresaEstacao = empresaEstacaoQ.data ?? [];
   const ativos = ativosQ.data ?? [];
@@ -182,10 +180,6 @@ function QuadroHorarioPage() {
   const empresaOverrideMap = useMemo(
     () => buildEmpresaOverrideMap(empresaEstacao),
     [empresaEstacao],
-  );
-  const viagens = useMemo(
-    () => (somenteAtivos ? filterViagensAtivas(viagensRaw, ativos) : viagensRaw),
-    [viagensRaw, ativos, somenteAtivos],
   );
 
   const opts = useMemo(
@@ -217,10 +211,6 @@ function QuadroHorarioPage() {
       toast.error("Selecione o Dia Tipo");
       return;
     }
-    if (fVersao === "__all") {
-      toast.error("Selecione a Versão");
-      return;
-    }
     setApplied({
       linha: fLinha,
       dia: fDia,
@@ -235,16 +225,27 @@ function QuadroHorarioPage() {
     setGerarResumo(false);
   }
 
+  // Versão: se não foi escolhida manualmente, usa a versão ATIVA (projeto
+  // vigente cadastrado em /versoes-ativas) de cada linha+dia tipo — não
+  // obriga selecionar Versão toda vez que já existe um projeto ativo.
+  // Combinação linha+dia sem projeto ativo nenhum simplesmente fica vazia
+  // (mesma regra de filterViagensAtivas, usada em Jornada/Dashboard/etc.).
+  const viagensVersaoResolvida = useMemo(() => {
+    if (!applied) return [];
+    return applied.versao === "__all"
+      ? filterViagensAtivas(viagens, ativos)
+      : viagens.filter((v) => v.versao_programacao === applied.versao);
+  }, [viagens, ativos, applied]);
+
   // Partidas que valem pra horário de passageiro: só Movimento/Categoria
   // selecionados (padrão: Comercial + Viagem — exclui deslocamento/soltura/
   // recolha, que não são horário público) da linha+dia+versão escolhidos.
   const filtered = useMemo(() => {
     if (!applied) return [];
-    return viagens.filter(
+    return viagensVersaoResolvida.filter(
       (v) =>
         applied.linha.includes(v.linha) &&
         v.tipo_operacao === applied.dia &&
-        v.versao_programacao === applied.versao &&
         (applied.tipoServico === "__all" ||
           (v.tipo_servico ?? "").toUpperCase() === applied.tipoServico) &&
         (applied.movimento === "__all" || (v.tipo_movimento ?? "").trim() === applied.movimento) &&
@@ -255,7 +256,7 @@ function QuadroHorarioPage() {
         (applied.grupo === "__all" ||
           resolveGrupoViagem(v, linhaMap, empresaOverrideMap) === applied.grupo),
     );
-  }, [viagens, applied, linhaMap, empresaOverrideMap]);
+  }, [viagensVersaoResolvida, applied, linhaMap, empresaOverrideMap]);
 
   const resultados = useMemo<LinhaResult[]>(() => {
     if (!applied) return [];
@@ -264,10 +265,9 @@ function QuadroHorarioPage() {
     // reaproveitando a mesma lógica já validada de Resumo por Linha/Jornada —
     // sem filtrar por movimento/categoria aqui, pra não perder veículo que só
     // aparece em deslocamento noutro trecho da mesma linha.
-    const viagensDiaVersao = viagens.filter(
+    const viagensDiaVersao = viagensVersaoResolvida.filter(
       (v) =>
         v.tipo_operacao === applied.dia &&
-        v.versao_programacao === applied.versao &&
         (applied.tipoServico === "__all" ||
           (v.tipo_servico ?? "").toUpperCase() === applied.tipoServico) &&
         (applied.unidade === "__all" ||
@@ -305,7 +305,7 @@ function QuadroHorarioPage() {
       }
       return { linha, frota, porSentido };
     });
-  }, [applied, filtered, viagens, linhaMap, empresaOverrideMap]);
+  }, [applied, filtered, viagensVersaoResolvida, linhaMap, empresaOverrideMap]);
 
   const bandasPorLinha = useMemo(() => {
     const m = new Map<string, BandaComOrigem[]>();
@@ -355,7 +355,7 @@ function QuadroHorarioPage() {
             value={fVersao}
             onChange={setFVersao}
             options={opts.versao}
-            placeholder="Selecione"
+            placeholder="Todas (projeto ativo)"
           />
           <FiltroSelect
             label="Tipo Serv."
@@ -391,15 +391,13 @@ function QuadroHorarioPage() {
               onChange={(e) => setFCorteVirada(e.target.value || CORTE_VIRADA_PADRAO)}
             />
           </div>
-          <label className="flex items-center gap-2 text-xs cursor-pointer select-none pb-2">
-            <Checkbox checked={somenteAtivos} onCheckedChange={(v) => setSomenteAtivos(!!v)} />
-            Somente projeto ativo
-          </label>
           <Button size="sm" onClick={aplicarFiltros} disabled={loading}>
             Consultar
           </Button>
           <p className="text-xs text-muted-foreground w-full">
             Padrão: só partidas Comerciais de Categoria "Viagem" contam como horário de passageiro.
+            Versão "Todas" usa automaticamente o projeto ativo (versão vigente) de cada linha+dia
+            tipo — só escolha uma Versão específica se quiser ver uma versão fora de vigência.
             Partidas antes de {fCorteVirada || CORTE_VIRADA_PADRAO} são tratadas como virada da
             noite anterior e entram no fim da sequência, não no início.
           </p>
