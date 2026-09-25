@@ -37,50 +37,65 @@ export type Banda = { inicio: number; fim: number; intervalo: number; qtdPartida
  * Agrupa uma sequência ORDENADA de horários de partida (minutos desde 0h,
  * sem duplicar) em bandas de intervalo aproximadamente constante.
  *
- * Cada novo intervalo é comparado com a MÉDIA acumulada da banda atual (não
- * com o primeiro valor) — assim um desvio isolado não "puxa" a média e
- * mascara uma mudança real de cadência. Quando o desvio passa da
- * tolerância, a banda fecha e o intervalo que estourou vira o primeiro da
- * banda seguinte.
+ * Cada novo intervalo é comparado com a MÉDIA acumulada do cluster atual
+ * (não com o primeiro valor) — assim um desvio isolado não "puxa" a média
+ * e mascara uma mudança real de cadência. Quando o desvio passa da
+ * tolerância, o cluster fecha e o intervalo que estourou vira o primeiro
+ * do cluster seguinte.
  *
- * `fim` de cada banda é sempre uma partida REAL: o início da próxima banda
- * (ou, na última banda, a própria última partida da lista) — nunca um
- * horário projetado além do que foi realmente programado. Isso garante a
- * regra de negócio: o quadro resumido não pode terminar depois do último
- * horário real da linha.
+ * IMPORTANTE: `fim` de cada banda é sempre `inicio + intervalo * qtdPartidas`
+ * — nunca um valor solto que não bate com o Intervalo mostrado (arredondar
+ * a média e ainda usar a última partida real como Fim pode gerar um Fim
+ * que não corresponde a nenhum múltiplo do Intervalo, ex.: Início 05:10 +
+ * Intervalo 109 × 9 = 21:31, mas mostrar Fim 21:35 por ser a partida real
+ * — inconsistente). Pra manter isso e AINDA garantir que o Fim da ÚLTIMA
+ * banda nunca passe do último horário real da linha, as bandas são
+ * encadeadas: o Início de cada banda é o Fim (já ajustado) da anterior — só
+ * a primeira banda começa exatamente na primeira partida real do dia.
  */
 export function agruparBandas(partidasOrdenadas: number[], toleranciaMin = 5): Banda[] {
   const n = partidasOrdenadas.length;
   if (n < 2) return [];
-  const intervalos = Array.from(
+  const intervalosReais = Array.from(
     { length: n - 1 },
     (_, i) => partidasOrdenadas[i + 1] - partidasOrdenadas[i],
   );
 
-  const bandas: Banda[] = [];
+  // 1ª passada: só detecta onde cada cluster começa/termina (por índice),
+  // igual antes — a reconstrução de Início/Fim fica pra 2ª passada.
+  const clusters: { inicioIdx: number; fimIdx: number; qtd: number }[] = [];
   let clusterStart = 0;
   let soma = 0;
   let qtd = 0;
-  for (let k = 0; k < intervalos.length; k++) {
-    if (qtd > 0 && Math.abs(intervalos[k] - soma / qtd) > toleranciaMin) {
-      bandas.push({
-        inicio: partidasOrdenadas[clusterStart],
-        fim: partidasOrdenadas[k],
-        intervalo: Math.round(soma / qtd),
-        qtdPartidas: qtd + 1,
-      });
+  for (let k = 0; k < intervalosReais.length; k++) {
+    if (qtd > 0 && Math.abs(intervalosReais[k] - soma / qtd) > toleranciaMin) {
+      clusters.push({ inicioIdx: clusterStart, fimIdx: k, qtd });
       clusterStart = k;
       soma = 0;
       qtd = 0;
     }
-    soma += intervalos[k];
+    soma += intervalosReais[k];
     qtd += 1;
   }
-  bandas.push({
-    inicio: partidasOrdenadas[clusterStart],
-    fim: partidasOrdenadas[n - 1],
-    intervalo: Math.round(soma / qtd),
-    qtdPartidas: qtd + 1,
-  });
+  clusters.push({ inicioIdx: clusterStart, fimIdx: n - 1, qtd });
+
+  // 2ª passada: reconstrói Início/Fim encadeados a partir da 1ª partida real.
+  const fimRealAbsoluto = partidasOrdenadas[n - 1];
+  const bandas: Banda[] = [];
+  let cursor = partidasOrdenadas[0];
+  for (let ci = 0; ci < clusters.length; ci++) {
+    const c = clusters[ci];
+    const somaReal = partidasOrdenadas[c.fimIdx] - partidasOrdenadas[c.inicioIdx];
+    let intervalo = Math.round(somaReal / c.qtd);
+    let fim = cursor + intervalo * c.qtd;
+    const ultimaBanda = ci === clusters.length - 1;
+    if (ultimaBanda && fim > fimRealAbsoluto) {
+      intervalo = Math.floor(somaReal / c.qtd);
+      fim = cursor + intervalo * c.qtd;
+    }
+    if (ultimaBanda) fim = Math.min(fim, fimRealAbsoluto);
+    bandas.push({ inicio: cursor, fim, intervalo, qtdPartidas: c.qtd + 1 });
+    cursor = fim;
+  }
   return bandas;
 }
