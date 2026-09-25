@@ -367,41 +367,24 @@ export function ResumoView({ mode }: { mode: Mode }) {
   // exportação (Excel/PDF) usam — mesmo formato "por Unidade" nos dois
   // modos (Resumo por Linha e Resumo Operacional), só muda a granularidade
   // de `rows` (linha individual ou grupo/versão, já vem pronta de `rows`).
-  // Grupo de Linha "primário" de cada linha (independente de dia tipo) —
-  // usado só pra ordenação secundária dentro de cada Unidade: dentro da
-  // Unidade, agrupa as linhas do mesmo Grupo de Linha juntas (ex.: 01, 01A,
-  // 49A), em vez de alfabética pura por código de linha.
-  const grupoDuPorLinha = useMemo(() => {
-    const tally = new Map<string, Map<string, number>>();
-    for (const m of multi) {
-      if (!m.grupo_du) continue;
-      const t = tally.get(m.linha) ?? new Map<string, number>();
-      t.set(m.grupo_du, (t.get(m.grupo_du) ?? 0) + 1);
-      tally.set(m.linha, t);
-    }
-    const out = new Map<string, string>();
-    for (const [linha, t] of tally) {
-      let best: string | null = null, bestN = -1;
-      for (const [g, n] of t) if (n > bestN) { best = g; bestN = n; }
-      if (best) out.set(linha, best);
-    }
-    return out;
-  }, [multi]);
-
-  // No modo "linha", cada row É uma linha (busca o grupo dela). No modo
-  // "grupo" com groupBy="grupo", cada row JÁ é o grupo. No modo "versão"
-  // não há noção de Grupo de Linha — mantém o próprio rótulo (equivale à
-  // ordenação alfabética de antes).
+  // Chave de ordenação por Grupo de Linha, usada dentro de cada Unidade:
+  // agrupa as linhas do mesmo Grupo de Linha juntas (ex.: 01, 01A, 49A), em
+  // vez de alfabética pura por código de linha. No modo "grupo" com
+  // groupBy="grupo" cada row JÁ é o grupo; no modo "versão" não há noção de
+  // Grupo de Linha (mantém o próprio rótulo).
+  //
   // Grupo de Linha é cadastrado POR DIA TIPO — busca o grupo cadastrado pro
-  // dia tipo aplicado no filtro (S.dia); só cai pro "mais frequente" (sem
-  // olhar dia tipo) se o filtro estiver em "Todos os dias".
+  // dia tipo aplicado no filtro (S.dia). Sem esse filtro definido (Todos os
+  // dias) ou sem cadastro pra essa linha nesse dia tipo, cai pro fim
+  // (ordenada pelo próprio código) — não tenta adivinhar cruzando outros
+  // dias tipo, que podem ter cadastro diferente/incompleto pra mesma linha.
   function grupoParaOrdenar(r: AggRow): string {
     if (mode !== "linha") return r.groupLabel;
     if (S.dia !== "__all") {
       const g = grupoMap.get(`${r.groupLabel}|${S.dia}`.toLowerCase());
       if (g) return g;
     }
-    return grupoDuPorLinha.get(r.groupLabel) ?? `zzz_${r.groupLabel}`;
+    return `zzz_${r.groupLabel}`;
   }
 
   const rowsPorUnidadeExport = useMemo(() => {
@@ -420,7 +403,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
       });
     }
     return Array.from(grupos, ([unidade, rows]) => ({ unidade, rows })).sort((a, b) => a.unidade.localeCompare(b.unidade, "pt-BR"));
-  }, [rows, unidadePorGrupo, grupoDuPorLinha, mode, S.dia, grupoMap]);
+  }, [rows, unidadePorGrupo, mode, S.dia, grupoMap]);
 
 
 const totals = useMemo(() => {

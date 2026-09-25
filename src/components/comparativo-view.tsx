@@ -641,47 +641,25 @@ export function ComparativoView() {
   }, [basesAplicadas, linhaMap, empresaOverrideMap, grupoMap]);
 
   // Grupo de Linha "primário" de cada linha (independente de dia tipo) —
-  // usado só pra ordenação secundária dentro de cada Unidade nos relatórios
-  // "por Unidade" (PDF/Excel): dentro da Unidade, agrupa as linhas do mesmo
-  // Grupo de Linha juntas (ex.: 01, 01A, 49A), em vez de alfabética pura.
-  const grupoDuPorLinha = useMemo(() => {
-    const tally = new Map<string, Map<string, number>>();
-    for (const m of multi) {
-      if (!m.grupo_du) continue;
-      const t = tally.get(m.linha) ?? new Map<string, number>();
-      t.set(m.grupo_du, (t.get(m.grupo_du) ?? 0) + 1);
-      tally.set(m.linha, t);
-    }
-    const out = new Map<string, string>();
-    for (const [linha, t] of tally) {
-      let best: string | null = null, bestN = -1;
-      for (const [g, n] of t) if (n > bestN) { best = g; bestN = n; }
-      if (best) out.set(linha, best);
-    }
-    return out;
-  }, [multi]);
-
-  // Chave de ordenação por Grupo de Linha: no modo agrupado, a própria linha
-  // do bloco JÁ é o grupo; no modo por linha, busca o grupo dessa linha.
-  // Grupo de Linha é cadastrado POR DIA TIPO — a mesma linha pode ter um
-  // grupo em "Domingo" e outro em "Eleição 2026" (é o caso de uso: comparar
-  // um dia normal com um dia especial atrelado a um dia tipo diferente).
-  // Por isso não dá pra usar um "grupo mais frequente" cego — busca o grupo
-  // cadastrado pro dia tipo de CADA lado (Atual/Proposta) da comparação, e
-  // só cai pro "mais frequente" se nenhum dos dois tiver dia tipo definido.
+  // Chave de ordenação por Grupo de Linha, usada dentro de cada Unidade nos
+  // relatórios "por Unidade" (PDF/Excel): agrupa as linhas do mesmo Grupo de
+  // Linha juntas (ex.: 01, 01A, 49A), em vez de alfabética pura por código
+  // de linha. No modo agrupado, a própria linha do bloco JÁ é o grupo.
+  //
+  // Grupo de Linha é cadastrado POR DIA TIPO, e um dia tipo novo (ex.:
+  // "Eleição 2026") pode ter cadastro próprio incompleto/inconsistente pra
+  // algumas linhas (o cadastro "oficial" de verdade é o do dia tipo "pai" —
+  // ver dia_tipo_heranca). Por isso usa SEMPRE a Proposta 1 (ATUAL) como
+  // base — nunca mistura com o cadastro da Proposta 2. Linha sem grupo
+  // cadastrado na Proposta 1 cai pro fim (ordenada pelo próprio código).
   function grupoParaOrdenar(row: { linha: string }): string {
     if (agruparPorGrupo) return row.linha;
     const diaA = applied && applied.a.dia !== "__all" ? applied.a.dia : null;
-    const diaP = applied && applied.p.dia !== "__all" ? applied.p.dia : null;
     if (diaA) {
       const g = grupoDaLinha(row.linha, diaA);
       if (!g.startsWith("__sem_grupo__")) return g;
     }
-    if (diaP) {
-      const g = grupoDaLinha(row.linha, diaP);
-      if (!g.startsWith("__sem_grupo__")) return g;
-    }
-    return grupoDuPorLinha.get(row.linha) ?? `zzz_${row.linha}`;
+    return `zzz_${row.linha}`;
   }
 
   // Custo por linha (Atual x Proposta) pra tabela principal — aqui sempre é
@@ -804,7 +782,7 @@ export function ComparativoView() {
           return a.linha.localeCompare(b.linha, "pt-BR", { numeric: true, sensitivity: "base" });
         }),
       }));
-  }, [merged, unidadePorLinha, unidadePorGrupo, agruparPorGrupo, grupoDuPorLinha, applied, grupoMap]);
+  }, [merged, unidadePorLinha, unidadePorGrupo, agruparPorGrupo, applied, grupoMap]);
 
   const ZERO_UNIDADE_METRICS: Record<Exclude<MetricKeyName, "custo">, number> = {
     dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0, km: 0, heMin: 0,
