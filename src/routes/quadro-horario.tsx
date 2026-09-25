@@ -9,6 +9,7 @@ import {
   buildEmpresaOverrideMap,
   resolveUnidadeViagem,
   resolveGrupoViagem,
+  resolveEmpresaViagem,
 } from "@/lib/empresa-estacao";
 import {
   agruparBandas,
@@ -73,6 +74,7 @@ type Applied = {
   categoriaLinha: string;
   unidade: string;
   grupo: string;
+  empresa: string;
   corteVirada: string;
 };
 type BandaComOrigem = Banda & { origemLabel: "IDA" | "VOLTA" };
@@ -166,6 +168,7 @@ function QuadroHorarioPage() {
   );
   const [fUnidade, setFUnidade] = usePersistentState("quadro.fUnidade", "__all");
   const [fGrupo, setFGrupo] = usePersistentState("quadro.fGrupo", "__all");
+  const [fEmpresa, setFEmpresa] = usePersistentState("quadro.fEmpresa", "__all");
   const [fCorteVirada, setFCorteVirada] = usePersistentState(
     "quadro.fCorteVirada",
     CORTE_VIRADA_PADRAO,
@@ -209,6 +212,12 @@ function QuadroHorarioPage() {
           ...(empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[]),
         ]),
       ).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
+      empresa: Array.from(
+        new Set([
+          ...(linhas.map((l) => l.empresa).filter(Boolean) as string[]),
+          ...(empresaEstacao.map((e) => e.empresa).filter(Boolean) as string[]),
+        ]),
+      ).sort(),
     }),
     [viagens, linhas, empresaEstacao],
   );
@@ -228,6 +237,7 @@ function QuadroHorarioPage() {
       categoriaLinha: fCategoriaLinha,
       unidade: fUnidade,
       grupo: fGrupo,
+      empresa: fEmpresa,
       corteVirada: fCorteVirada,
     });
     setGerarResumo(false);
@@ -267,7 +277,9 @@ function QuadroHorarioPage() {
         (applied.unidade === "__all" ||
           resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) === applied.unidade) &&
         (applied.grupo === "__all" ||
-          resolveGrupoViagem(v, linhaMap, empresaOverrideMap) === applied.grupo),
+          resolveGrupoViagem(v, linhaMap, empresaOverrideMap) === applied.grupo) &&
+        (applied.empresa === "__all" ||
+          resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) === applied.empresa),
     );
   }, [viagensVersaoResolvida, applied, linhaMap, empresaOverrideMap]);
 
@@ -292,7 +304,9 @@ function QuadroHorarioPage() {
         (applied.unidade === "__all" ||
           resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) === applied.unidade) &&
         (applied.grupo === "__all" ||
-          resolveGrupoViagem(v, linhaMap, empresaOverrideMap) === applied.grupo),
+          resolveGrupoViagem(v, linhaMap, empresaOverrideMap) === applied.grupo) &&
+        (applied.empresa === "__all" ||
+          resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) === applied.empresa),
     );
     const units = buildServiceUnits(viagensDiaVersao, () => 0);
     const unitsArr = Array.from(units.values());
@@ -407,6 +421,12 @@ function QuadroHorarioPage() {
             options={opts.unidade}
           />
           <FiltroSelect label="Grupo" value={fGrupo} onChange={setFGrupo} options={opts.grupo} />
+          <FiltroSelect
+            label="Empresa"
+            value={fEmpresa}
+            onChange={setFEmpresa}
+            options={opts.empresa}
+          />
           <div>
             <label className="text-xs text-muted-foreground">Corte da virada (madrugada)</label>
             <Input
@@ -422,11 +442,11 @@ function QuadroHorarioPage() {
           <p className="text-xs text-muted-foreground w-full">
             Padrão: só partidas Comerciais de Categoria Movimento "Viagem" contam como horário de
             passageiro. Linha é opcional — sem selecionar nenhuma, gera o quadro pra todas as linhas
-            que baterem com Dia Tipo/Grupo/Unidade/Categoria da Linha/Movimento escolhidos. Versão
-            "Todas" usa automaticamente o projeto ativo (versão vigente) de cada linha+dia tipo — só
-            escolha uma Versão específica se quiser ver uma versão fora de vigência. Partidas antes
-            de {fCorteVirada || CORTE_VIRADA_PADRAO} são tratadas como virada da noite anterior e
-            entram no fim da sequência, não no início.
+            que baterem com Dia Tipo/Grupo/Empresa/Unidade/Categoria da Linha/Movimento escolhidos.
+            Versão "Todas" usa automaticamente o projeto ativo (versão vigente) de cada linha+dia
+            tipo — só escolha uma Versão específica se quiser ver uma versão fora de vigência.
+            Partidas antes de {fCorteVirada || CORTE_VIRADA_PADRAO} são tratadas como virada da
+            noite anterior e entram no fim da sequência, não no início.
           </p>
         </CardContent>
       </Card>
