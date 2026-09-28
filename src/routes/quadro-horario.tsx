@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchAllViagens } from "@/lib/viagens";
 import { buildServiceUnits } from "@/lib/resumo";
 import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
-import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import {
   buildEmpresaOverrideMap,
   resolveUnidadeViagem,
@@ -21,6 +20,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -39,7 +39,7 @@ import {
 import { MultiSelect } from "@/components/multi-select";
 import { useAuditView } from "@/lib/use-audit-view";
 import { usePersistentState } from "@/hooks/use-persistent-state";
-import { Table2, FileSpreadsheet, Sparkles } from "lucide-react";
+import { Table2, FileSpreadsheet, Sparkles, AlertTriangle } from "lucide-react";
 import * as XLSX from "xlsx";
 import { logAudit } from "@/lib/audit";
 import { toast } from "sonner";
@@ -63,7 +63,12 @@ const SENTIDOS: Sentido[] = ["Ida", "Volta"];
 
 type Corrido = { min: number; hhmm: string; intervalo: number | null };
 type SentidoResult = { partidas: number[]; corrido: Corrido[] };
-type LinhaResult = { linha: string; frota: number; porSentido: Record<Sentido, SentidoResult> };
+type LinhaResult = {
+  linha: string;
+  frota: number;
+  porSentido: Record<Sentido, SentidoResult>;
+  versoesEncontradas: string[];
+};
 type Applied = {
   linha: string[];
   dia: string;
@@ -180,11 +185,9 @@ function QuadroHorarioPage() {
   const viagensQ = useQuery({ queryKey: ["viagens-all"], queryFn: fetchAllViagens });
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
   const empresaEstacaoQ = useQuery({ queryKey: ["empresa-estacao"], queryFn: fetchEmpresaEstacao });
-  const ativosQ = useQuery({ queryKey: ["projetos-ativos"], queryFn: fetchProjetosAtivos });
   const viagens = viagensQ.data ?? [];
   const linhas = linhasQ.data ?? [];
   const empresaEstacao = empresaEstacaoQ.data ?? [];
-  const ativos = ativosQ.data ?? [];
   const loading = viagensQ.isLoading;
 
   const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
@@ -243,17 +246,18 @@ function QuadroHorarioPage() {
     setGerarResumo(false);
   }
 
-  // Versão: se não foi escolhida manualmente, usa a versão ATIVA (projeto
-  // vigente cadastrado em /versoes-ativas) de cada linha+dia tipo — não
-  // obriga selecionar Versão toda vez que já existe um projeto ativo.
-  // Combinação linha+dia sem projeto ativo nenhum simplesmente fica vazia
-  // (mesma regra de filterViagensAtivas, usada em Jornada/Dashboard/etc.).
+  // Versão: NÃO exige projeto ativo (/versoes-ativas) — pode haver
+  // programação real e válida que não foi marcada como ativa. Sem escolher
+  // uma Versão específica, traz tudo que existir pra aquela linha+dia tipo;
+  // se houver mais de uma versão distinta misturada, um aviso aparece no
+  // card da linha (ver `versoesEncontradas` em `resultados`) pra decidir se
+  // vale a pena escolher uma Versão manualmente.
   const viagensVersaoResolvida = useMemo(() => {
     if (!applied) return [];
     return applied.versao === "__all"
-      ? filterViagensAtivas(viagens, ativos)
+      ? viagens
       : viagens.filter((v) => v.versao_programacao === applied.versao);
-  }, [viagens, ativos, applied]);
+  }, [viagens, applied]);
 
   // Partidas que valem pra horário de passageiro: só Movimento/Categoria
   // selecionados (padrão: Comercial + Viagem — exclui deslocamento/soltura/
@@ -336,7 +340,15 @@ function QuadroHorarioPage() {
         }));
         porSentido[sentido] = { partidas, corrido };
       }
-      return { linha, frota, porSentido };
+      const versoesEncontradas = Array.from(
+        new Set(
+          filtered
+            .filter((v) => v.linha === linha)
+            .map((v) => v.versao_programacao)
+            .filter((v): v is string => Boolean(v)),
+        ),
+      ).sort();
+      return { linha, frota, porSentido, versoesEncontradas };
     });
   }, [applied, filtered, viagensVersaoResolvida, linhaMap, empresaOverrideMap]);
 
@@ -388,7 +400,7 @@ function QuadroHorarioPage() {
             value={fVersao}
             onChange={setFVersao}
             options={opts.versao}
-            placeholder="Todas (projeto ativo)"
+            placeholder="Todas"
           />
           <FiltroSelect
             label="Tipo Serv."
@@ -443,10 +455,11 @@ function QuadroHorarioPage() {
             Padrão: só partidas Comerciais de Categoria Movimento "Viagem" contam como horário de
             passageiro. Linha é opcional — sem selecionar nenhuma, gera o quadro pra todas as linhas
             que baterem com Dia Tipo/Grupo/Empresa/Unidade/Categoria da Linha/Movimento escolhidos.
-            Versão "Todas" usa automaticamente o projeto ativo (versão vigente) de cada linha+dia
-            tipo — só escolha uma Versão específica se quiser ver uma versão fora de vigência.
-            Partidas antes de {fCorteVirada || CORTE_VIRADA_PADRAO} são tratadas como virada da
-            noite anterior e entram no fim da sequência, não no início.
+            Versão "Todas" não exige que o projeto esteja marcado como ativo — traz tudo que existir
+            pra cada linha+dia tipo (não precisa passar por /versoes-ativas antes). Se houver mais
+            de uma versão diferente misturada numa linha, um aviso aparece pra você escolher uma
+            Versão específica. Partidas antes de {fCorteVirada || CORTE_VIRADA_PADRAO} são tratadas
+            como virada da noite anterior e entram no fim da sequência, não no início.
           </p>
         </CardContent>
       </Card>
@@ -477,8 +490,18 @@ function QuadroHorarioPage() {
                   </span>
                 </CardTitle>
                 <CardDescription className="text-xs">
-                  {applied.dia} · Versão {applied.versao}
+                  {applied.dia} · Versão {applied.versao === "__all" ? "Todas" : applied.versao}
                 </CardDescription>
+                {applied.versao === "__all" && r.versoesEncontradas.length > 1 && (
+                  <Badge
+                    variant="outline"
+                    className="gap-1 ring-1 bg-warning/10 text-warning ring-warning/20 w-fit"
+                  >
+                    <AlertTriangle className="h-3 w-3" />
+                    {r.versoesEncontradas.length} versões misturadas nessa linha:{" "}
+                    {r.versoesEncontradas.join(", ")} — selecione uma Versão pra isolar
+                  </Badge>
+                )}
               </CardHeader>
               <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-0">
                 {SENTIDOS.map((sentido) => (
