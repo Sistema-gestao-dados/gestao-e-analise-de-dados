@@ -1,9 +1,10 @@
-// Template Excel ÚNICO para cadastro de Linhas + KM + Grupos de Linhas.
-// Um arquivo, três abas — importa tudo de uma vez só.
+// Template Excel ÚNICO para cadastro de Linhas + KM + Grupos de Linhas +
+// Siglas. Um arquivo, quatro abas — importa tudo de uma vez só.
 
 import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
 import type { Linha, ParametroKm, ParametroMulti } from "@/lib/data";
+import type { SiglaEstacao } from "@/lib/siglas-estacao";
 
 const HEADERS_LINHAS = [
   "linha", "empresa", "unidade", "grupo", "categoria",
@@ -15,6 +16,8 @@ const HEADERS_LINHAS = [
 const HEADERS_KM = ["linha", "origem", "destino", "km", "descricao"] as const;
 
 const HEADERS_GRUPOS = ["linha", "grupo_du", "tipo_dia"] as const;
+
+const HEADERS_SIGLAS = ["sigla", "descricao", "local"] as const;
 
 export type ImportReport = {
   sheet: string;
@@ -37,6 +40,7 @@ export function exportTemplateUnificado(data?: {
   linhas?: Linha[];
   km?: ParametroKm[];
   multi?: ParametroMulti[];
+  siglas?: SiglaEstacao[];
 }) {
   const wb = XLSX.utils.book_new();
 
@@ -78,11 +82,23 @@ export function exportTemplateUnificado(data?: {
   wsGrupos["!cols"] = HEADERS_GRUPOS.map(() => ({ wch: 16 }));
   XLSX.utils.book_append_sheet(wb, wsGrupos, "Grupos");
 
+  // --- Aba Siglas --- (tradução de sigla -> nome completo + Garagem/Ponto,
+  // usada em origem/destino de viagens — hoje só mostram o código cru).
+  const siglasRows = data?.siglas?.length
+    ? data.siglas.map((s) => ({ sigla: s.sigla, descricao: s.descricao, local: s.local }))
+    : [
+        { sigla: "GVA", descricao: "GAR. VISTA ALEGRE", local: "Garagem" },
+        { sigla: "ALC", descricao: "ALCÂNTARA", local: "Ponto" },
+      ];
+  const wsSiglas = XLSX.utils.json_to_sheet(siglasRows, { header: [...HEADERS_SIGLAS] });
+  wsSiglas["!cols"] = HEADERS_SIGLAS.map(() => ({ wch: 20 }));
+  XLSX.utils.book_append_sheet(wb, wsSiglas, "Siglas");
+
   // --- Aba Instruções ---
   const info = XLSX.utils.aoa_to_sheet([
-    ["CADASTRO UNIFICADO — Linhas + KM + Grupos", "", ""],
+    ["CADASTRO UNIFICADO — Linhas + KM + Grupos + Siglas", "", ""],
     ["", "", ""],
-    ["Este arquivo tem 3 abas: Linhas, KM e Grupos.", "", ""],
+    ["Este arquivo tem 4 abas: Linhas, KM, Grupos e Siglas.", "", ""],
     ["Preencha as que quiser — não precisa preencher todas.", "", ""],
     ["Ao importar, cada aba é processada e gravada na tabela correspondente.", "", ""],
     ["", "", ""],
@@ -111,11 +127,18 @@ export function exportTemplateUnificado(data?: {
     ["grupo_du", "Nome do grupo de linhas (dia útil, etc.)", "Sim"],
     ["tipo_dia", "Tipo de dia (Útil, Sábado, Domingo, etc.)", "Sim"],
     ["", "", ""],
+    ["Aba SIGLAS", "", ""],
+    ["Campo", "Descrição", "Obrigatório"],
+    ["sigla", "Código curto usado em Origem/Destino das viagens (ex: GVA, ALC)", "Sim"],
+    ["descricao", "Nome completo do local (ex: GAR. VISTA ALEGRE, ALCÂNTARA)", "Sim"],
+    ["local", "Tipo do local: Garagem ou Ponto", "Sim"],
+    ["", "", ""],
     ["REGRAS GERAIS", "", ""],
     ["Import faz UPSERT (atualiza se já existir, insere se for novo).", "", ""],
     ["Linhas: chave = linha.", "", ""],
     ["KM: chave = linha + origem + destino.", "", ""],
     ["Grupos: chave = linha + grupo_du + tipo_dia.", "", ""],
+    ["Siglas: chave = sigla.", "", ""],
     ["Linhas em branco em qualquer aba são ignoradas.", "", ""],
   ]);
   info["!cols"] = [{ wch: 22 }, { wch: 62 }, { wch: 20 }];
@@ -252,6 +275,56 @@ async function importGruposSheet(rows: Record<string, any>[]): Promise<ImportRep
   return { sheet: "Grupos", total: rows2.length, inserted, updated, errors };
 }
 
+// "siglas_estacao" é tabela nova, ainda não refletida nos tipos gerados do
+// Supabase — mesmo cast local já usado em src/lib/calendario.ts até os
+// tipos serem regenerados.
+function normalizarLocal(v: string): string {
+  const s = v.trim().toUpperCase();
+  if (s.startsWith("GAR")) return "Garagem";
+  if (s.startsWith("PON")) return "Ponto";
+  return v.trim();
+}
+
+async function importSiglasSheet(rows: Record<string, any>[]): Promise<ImportReport> {
+  const errors: string[] = [];
+  const payload: any[] = [];
+  const db = supabase as any;
+
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i];
+    const sigla = String(r.sigla ?? "").trim();
+    const descricao = String(r.descricao ?? "").trim();
+    if (!sigla || !descricao) continue;
+    const local = normalizarLocal(String(r.local ?? ""));
+    if (local !== "Garagem" && local !== "Ponto") {
+      errors.push(`Sigla "${sigla}": local "${r.local}" inválido (use Garagem ou Ponto)`);
+      continue;
+    }
+    payload.push({ sigla, descricao, local });
+  }
+
+  // dedupe por sigla (chave), mantendo a última ocorrência
+  const byKey = new Map<string, any>();
+  payload.forEach((r) => byKey.set(r.sigla.toUpperCase(), r));
+  const rows2 = Array.from(byKey.values());
+
+  const existentesRes = await db.from("siglas_estacao").select("sigla").limit(10000);
+  const existentes = new Set(((existentesRes.data ?? []) as any[]).map((e) => String(e.sigla).toUpperCase()));
+  let inserted = 0, updated = 0;
+  rows2.forEach((r) => {
+    if (existentes.has(r.sigla.toUpperCase())) updated++; else inserted++;
+  });
+
+  const chunkSize = 500;
+  for (let i = 0; i < rows2.length; i += chunkSize) {
+    const chunk = rows2.slice(i, i + chunkSize).map((r) => ({ ...r, updated_at: new Date().toISOString() }));
+    const { error } = await db.from("siglas_estacao").upsert(chunk, { onConflict: "sigla" });
+    if (error) errors.push(error.message);
+  }
+
+  return { sheet: "Siglas", total: rows2.length, inserted, updated, errors };
+}
+
 export async function importTemplateUnificado(file: File): Promise<ImportReportGeral> {
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array" });
@@ -276,8 +349,14 @@ export async function importTemplateUnificado(file: File): Promise<ImportReportG
     sheets.push(await importGruposSheet(rows));
   }
 
+  const wsSiglas = wb.Sheets["Siglas"];
+  if (wsSiglas) {
+    const rows = XLSX.utils.sheet_to_json<Record<string, any>>(wsSiglas, { defval: "" });
+    sheets.push(await importSiglasSheet(rows));
+  }
+
   if (!sheets.length) {
-    throw new Error("Nenhuma aba reconhecida (esperado: Linhas, KM e/ou Grupos)");
+    throw new Error("Nenhuma aba reconhecida (esperado: Linhas, KM, Grupos e/ou Siglas)");
   }
 
   const totalErrors = sheets.reduce((acc, s) => acc + s.errors.length, 0);

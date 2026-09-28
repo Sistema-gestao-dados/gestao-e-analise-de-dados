@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
 import { useAuditView } from "@/lib/use-audit-view";
 import { fetchLinhas, fetchKm, fetchMulti } from "@/lib/data";
+import { fetchSiglasEstacao } from "@/lib/siglas-estacao";
 import { exportTemplateUnificado, importTemplateUnificado, type ImportReportGeral } from "@/lib/cadastro-unificado";
 
 export const Route = createFileRoute("/importacao")({
@@ -93,9 +94,10 @@ function UnifiedImportCard() {
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
   const kmQ = useQuery({ queryKey: ["km"], queryFn: fetchKm });
   const multiQ = useQuery({ queryKey: ["multi"], queryFn: fetchMulti });
+  const siglasQ = useQuery({ queryKey: ["siglas-estacao"], queryFn: fetchSiglasEstacao });
 
   async function handleBaixarModelo() {
-    exportTemplateUnificado({ linhas: linhasQ.data, km: kmQ.data, multi: multiQ.data });
+    exportTemplateUnificado({ linhas: linhasQ.data, km: kmQ.data, multi: multiQ.data, siglas: siglasQ.data });
   }
 
   async function handleFile(file: File) {
@@ -138,9 +140,9 @@ function UnifiedImportCard() {
     <Card className="shadow-[var(--shadow-card)] border-primary/30">
       <CardHeader>
         <CardTitle className="text-base flex items-center gap-2">
-          <Layers className="h-4 w-4 text-primary" />Cadastro Unificado (Linhas + KM + Grupos)
+          <Layers className="h-4 w-4 text-primary" />Cadastro Unificado (Linhas + KM + Grupos + Siglas)
         </CardTitle>
-        <p className="text-sm text-muted-foreground">Um único arquivo Excel com 3 abas. Importe tudo de uma vez só.</p>
+        <p className="text-sm text-muted-foreground">Um único arquivo Excel com 4 abas. Importe tudo de uma vez só.</p>
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-col sm:flex-row gap-2">
