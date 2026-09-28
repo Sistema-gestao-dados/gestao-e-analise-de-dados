@@ -891,9 +891,14 @@ export function ComparativoView() {
   }
 
   // Sem data no título — quem gerou já vê "Gerado em ..." logo abaixo.
+  // Os dois lados seguem a MESMA regra: usa o Dia Tipo selecionado no
+  // filtro daquele lado (Atual e Proposta), em vez de deixar "ATUAL" fixo
+  // enquanto só a Proposta virava o nome do dia tipo (ex.: "ATUAL vs
+  // ELEIÇÃO" em vez de "DOMINGO vs ELEIÇÃO").
   function tituloComparativo(): string {
-    const label = applied && applied.p.dia !== "__all" ? applied.p.dia : "PROPOSTA";
-    return `RELATÓRIO COMPARATIVO — ATUAL vs ${label.toUpperCase()}`;
+    const labelA = applied && applied.a.dia !== "__all" ? applied.a.dia : "ATUAL";
+    const labelP = applied && applied.p.dia !== "__all" ? applied.p.dia : "PROPOSTA";
+    return `RELATÓRIO COMPARATIVO — ${labelA.toUpperCase()} vs ${labelP.toUpperCase()}`;
   }
 
   function buildExportRows() {
@@ -1260,7 +1265,7 @@ export function ComparativoView() {
           diálogo de impressão do navegador (margens/escala/nº de páginas
           ajustados lá, com pré-visualização). */}
       <div className="print-only">
-        <div style={{ fontWeight: 700, fontSize: "14pt", color: "#2563eb" }}>RELATÓRIO COMPARATIVO — ATUAL vs PROPOSTA</div>
+        <div style={{ fontWeight: 700, fontSize: "14pt", color: "#2563eb" }}>{tituloComparativo()}</div>
         <div style={{ fontSize: "8pt", color: "#555", marginBottom: "6pt" }}>
           Gerado em {new Date().toLocaleString("pt-BR")} — {merged.length} {agruparPorGrupo ? "grupo(s)" : "linha(s)"}
         </div>
