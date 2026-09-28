@@ -237,6 +237,13 @@ function fmtDelta(n: number, fmt: (n: number) => string): string {
   return `${n > 0 ? "+" : ""}${fmt(n)}`;
 }
 
+// Com "Ocultar Dif/% zerados" ligado, célula de Dif/% sem diferença real
+// (Atual = Proposta) fica em branco em vez de "0"/"0,0%" — menos poluição
+// visual nas linhas sem mudança.
+function blankIfZero(ocultar: boolean, d: number, txt: string): string {
+  return ocultar && d === 0 ? "" : txt;
+}
+
 // ---------------------------------------------------------------------------
 // Exportação "por Unidade" (PDF + Excel) — modelo pedido pelo usuário: um
 // bloco por Unidade, cada um com as métricas marcadas em "Campos visíveis"
@@ -391,6 +398,9 @@ export function ComparativoView() {
   );
   const visibleMetrics = useMemo(() => new Set(visibleMetricsArr), [visibleMetricsArr]);
   const [showPct, setShowPct] = usePersistentState("comparativo.showPct", true);
+  // Quando ligado, Dif/% iguais a zero (Atual = Proposta) ficam em branco em
+  // vez de "0"/"0,0%" — reduz a poluição visual nas linhas sem diferença.
+  const [ocultarZeros, setOcultarZeros] = usePersistentState("comparativo.ocultarZeros", false);
   const [onlyDiff, setOnlyDiff] = usePersistentState("comparativo.onlyDiff", false);
   const [repetirSeVazio, setRepetirSeVazio] = usePersistentState("comparativo.repetirSeVazio", false);
   const { params: custoParams } = useSalarioMotorista();
@@ -1329,6 +1339,10 @@ export function ComparativoView() {
               Mostrar %
             </label>
             <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <Checkbox checked={ocultarZeros} onCheckedChange={(v) => setOcultarZeros(!!v)} className="h-3.5 w-3.5" />
+              Ocultar Dif/% zerados
+            </label>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
               <Checkbox checked={onlyDiff} onCheckedChange={(v) => setOnlyDiff(!!v)} className="h-3.5 w-3.5" />
               Somente com diferença
             </label>
@@ -1458,9 +1472,9 @@ export function ComparativoView() {
                           <Fragment key={String(m.key)}>
                             <TableCell key={`${String(m.key)}-a`} className="px-2 py-1 text-right tabular-nums border-l">{m.fmt(av)}</TableCell>
                             <TableCell key={`${String(m.key)}-p`} className="px-2 py-1 text-right tabular-nums">{m.fmt(pv)}</TableCell>
-                            <TableCell key={`${String(m.key)}-d`} className={`px-2 py-1 text-right tabular-nums font-semibold ${dCls}`}>{fmtDelta(d, m.fmt)}</TableCell>
+                            <TableCell key={`${String(m.key)}-d`} className={`px-2 py-1 text-right tabular-nums font-semibold ${dCls}`}>{blankIfZero(ocultarZeros, d, fmtDelta(d, m.fmt))}</TableCell>
                             {showPct && (
-                              <TableCell key={`${String(m.key)}-pct`} className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{fmtPct(pct)}</TableCell>
+                              <TableCell key={`${String(m.key)}-pct`} className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{blankIfZero(ocultarZeros, d, fmtPct(pct))}</TableCell>
                             )}
                           </Fragment>
                         );
@@ -1475,8 +1489,8 @@ export function ComparativoView() {
                           <Fragment>
                             <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtMoeda(av)}</TableCell>
                             <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(pv)}</TableCell>
-                            <TableCell className={`px-2 py-1 text-right tabular-nums font-semibold ${dCls}`}>{d >= 0 ? "+" : ""}{fmtMoeda(d)}</TableCell>
-                            {showPct && <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{fmtPct(pct)}</TableCell>}
+                            <TableCell className={`px-2 py-1 text-right tabular-nums font-semibold ${dCls}`}>{blankIfZero(ocultarZeros, d, `${d >= 0 ? "+" : ""}${fmtMoeda(d)}`)}</TableCell>
+                            {showPct && <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{blankIfZero(ocultarZeros, d, fmtPct(pct))}</TableCell>}
                           </Fragment>
                         );
                       })()}
@@ -1494,9 +1508,9 @@ export function ComparativoView() {
                         <Fragment key={String(m.key)}>
                           <TableCell key={`${String(m.key)}-a`} className="px-2 py-1 text-right tabular-nums border-l">{m.fmt(av)}</TableCell>
                           <TableCell key={`${String(m.key)}-p`} className="px-2 py-1 text-right tabular-nums">{m.fmt(pv)}</TableCell>
-                          <TableCell key={`${String(m.key)}-d`} className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{fmtDelta(d, m.fmt)}</TableCell>
+                          <TableCell key={`${String(m.key)}-d`} className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{blankIfZero(ocultarZeros, d, fmtDelta(d, m.fmt))}</TableCell>
                           {showPct && (
-                            <TableCell key={`${String(m.key)}-pct`} className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{fmtPct(pct)}</TableCell>
+                            <TableCell key={`${String(m.key)}-pct`} className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{blankIfZero(ocultarZeros, d, fmtPct(pct))}</TableCell>
                           )}
                         </Fragment>
                       );
@@ -1511,8 +1525,8 @@ export function ComparativoView() {
                         <Fragment>
                           <TableCell className="px-2 py-1 text-right tabular-nums border-l">{fmtMoeda(av)}</TableCell>
                           <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(pv)}</TableCell>
-                          <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{d >= 0 ? "+" : ""}{fmtMoeda(d)}</TableCell>
-                          {showPct && <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{fmtPct(pct)}</TableCell>}
+                          <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{blankIfZero(ocultarZeros, d, `${d >= 0 ? "+" : ""}${fmtMoeda(d)}`)}</TableCell>
+                          {showPct && <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{blankIfZero(ocultarZeros, d, fmtPct(pct))}</TableCell>}
                         </Fragment>
                       );
                     })()}
@@ -1524,9 +1538,9 @@ export function ComparativoView() {
         </CardContent>
       </Card>
 
-      <ResumoComparativoTable titulo="Resumo Gerencial por Empresa" rows={resumoPorEmpresa} showPct={showPct} />
-      <ResumoComparativoTable titulo="Resumo Gerencial por Grupo" rows={resumoPorGrupo} showPct={showPct} />
-      <ResumoComparativoTable titulo="Resumo Gerencial por Unidade" rows={resumoPorUnidade} showPct={showPct} />
+      <ResumoComparativoTable titulo="Resumo Gerencial por Empresa" rows={resumoPorEmpresa} showPct={showPct} ocultarZeros={ocultarZeros} />
+      <ResumoComparativoTable titulo="Resumo Gerencial por Grupo" rows={resumoPorGrupo} showPct={showPct} ocultarZeros={ocultarZeros} />
+      <ResumoComparativoTable titulo="Resumo Gerencial por Unidade" rows={resumoPorUnidade} showPct={showPct} ocultarZeros={ocultarZeros} />
       </div>
     </div>
   );
@@ -1541,7 +1555,7 @@ const BREAKDOWN_METRICS: { key: keyof BreakdownVal; label: string; fmt: (n: numb
   { key: "km", label: "KM", fmt: (n) => fmtKm(n) },
 ];
 
-function ResumoComparativoTable({ titulo, rows, showPct }: { titulo: string; rows: { chave: string; atual: BreakdownVal; proposta: BreakdownVal }[]; showPct: boolean }) {
+function ResumoComparativoTable({ titulo, rows, showPct, ocultarZeros }: { titulo: string; rows: { chave: string; atual: BreakdownVal; proposta: BreakdownVal }[]; showPct: boolean; ocultarZeros: boolean }) {
   if (rows.length === 0) return null;
   const comCusto = rows.some((r) => r.atual.custo > 0 || r.proposta.custo > 0);
   const metrics = comCusto ? [...BREAKDOWN_METRICS, { key: "custo" as const, label: "Custo M.O.", fmt: fmtMoeda }] : BREAKDOWN_METRICS;
@@ -1586,8 +1600,8 @@ function ResumoComparativoTable({ titulo, rows, showPct }: { titulo: string; row
                       <Fragment key={String(m.key)}>
                         <TableCell className="px-2 py-1 text-right tabular-nums border-l">{m.fmt(av)}</TableCell>
                         <TableCell className="px-2 py-1 text-right tabular-nums">{m.fmt(pv)}</TableCell>
-                        <TableCell className={`px-2 py-1 text-right tabular-nums font-semibold ${dCls}`}>{fmtDelta(d, m.fmt)}</TableCell>
-                        {showPct && <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{fmtPct(pct)}</TableCell>}
+                        <TableCell className={`px-2 py-1 text-right tabular-nums font-semibold ${dCls}`}>{blankIfZero(ocultarZeros, d, fmtDelta(d, m.fmt))}</TableCell>
+                        {showPct && <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{blankIfZero(ocultarZeros, d, fmtPct(pct))}</TableCell>}
                       </Fragment>
                     );
                   })}
@@ -1605,8 +1619,8 @@ function ResumoComparativoTable({ titulo, rows, showPct }: { titulo: string; row
                     <Fragment key={String(m.key)}>
                       <TableCell className="px-2 py-1 text-right tabular-nums border-l">{m.fmt(av)}</TableCell>
                       <TableCell className="px-2 py-1 text-right tabular-nums">{m.fmt(pv)}</TableCell>
-                      <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{fmtDelta(d, m.fmt)}</TableCell>
-                      {showPct && <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{fmtPct(pct)}</TableCell>}
+                      <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{blankIfZero(ocultarZeros, d, fmtDelta(d, m.fmt))}</TableCell>
+                      {showPct && <TableCell className={`px-2 py-1 text-right tabular-nums ${dCls}`}>{blankIfZero(ocultarZeros, d, fmtPct(pct))}</TableCell>}
                     </Fragment>
                   );
                 })}
