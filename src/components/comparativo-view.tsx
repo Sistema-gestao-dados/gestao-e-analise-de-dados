@@ -640,6 +640,38 @@ export function ComparativoView() {
     return out;
   }, [basesAplicadas, linhaMap, empresaOverrideMap, grupoMap]);
 
+  // Categoria/Tipo de cada linha (Municipal/Intermunicipal..., campo
+  // `linhas.categoria`) — 2ª camada de ordenação dentro da Unidade (Unidade
+  // -> Categoria -> Grupo de Linha -> Linha), antes do Grupo de Linha.
+  // Campo simples do cadastro, não depende de dia tipo (ao contrário do
+  // Grupo de Linha). No modo agrupado, usa a categoria predominante entre
+  // as linhas do grupo (maioria, a partir das viagens de ambos os
+  // cenários) — mesma ideia de unidadePorGrupo.
+  const categoriaPorGrupo = useMemo(() => {
+    const tally = new Map<string, Map<string, number>>();
+    for (const v of [...basesAplicadas.atual, ...basesAplicadas.proposta]) {
+      const cat = linhaMap.get(v.linha)?.categoria;
+      if (!cat) continue;
+      const raw = grupoDaLinha(v.linha, v.tipo_operacao ?? "");
+      const label = raw.startsWith("__sem_grupo__") ? `(sem grupo) ${v.linha}` : raw;
+      const m = tally.get(label) ?? new Map<string, number>();
+      m.set(cat, (m.get(cat) ?? 0) + 1);
+      tally.set(label, m);
+    }
+    const out = new Map<string, string>();
+    for (const [key, m] of tally) {
+      let best: string | null = null, bestN = -1;
+      for (const [cat, n] of m) if (n > bestN) { best = cat; bestN = n; }
+      if (best) out.set(key, best);
+    }
+    return out;
+  }, [basesAplicadas, linhaMap, grupoMap]);
+
+  function categoriaParaOrdenar(row: { linha: string }): string {
+    if (agruparPorGrupo) return categoriaPorGrupo.get(row.linha) ?? "";
+    return linhaMap.get(row.linha)?.categoria ?? "";
+  }
+
   // Grupo de Linha "primário" de cada linha (independente de dia tipo) —
   // Chave de ordenação por Grupo de Linha, usada dentro de cada Unidade nos
   // relatórios "por Unidade" (PDF/Excel): agrupa as linhas do mesmo Grupo de
@@ -716,7 +748,11 @@ export function ComparativoView() {
         const ua = unidadeMap.get(a.linha) ?? "";
         const ub = unidadeMap.get(b.linha) ?? "";
         if (ua !== ub) return ua.localeCompare(ub, "pt-BR");
-        // 2ª ordem, dentro da mesma Unidade: Grupo de Linha (01, 01A, 49A...).
+        // 2ª ordem, dentro da mesma Unidade: Categoria/Tipo da linha
+        // (Municipal/Intermunicipal...).
+        const ca = categoriaParaOrdenar(a), cb = categoriaParaOrdenar(b);
+        if (ca !== cb) return ca.localeCompare(cb, "pt-BR");
+        // 3ª ordem, dentro da mesma Unidade/Categoria: Grupo de Linha (01, 01A, 49A...).
         const ga = grupoParaOrdenar(a), gb = grupoParaOrdenar(b);
         if (ga !== gb) return ga.localeCompare(gb, "pt-BR", { numeric: true, sensitivity: "base" });
       }
@@ -729,7 +765,7 @@ export function ComparativoView() {
       );
     }
     return arr;
-  }, [atualRows, propostaRows, onlyDiff, ordenarPor, unidadePorLinha, unidadePorGrupo, agruparPorGrupo, chavesRepetidas, paiRows, applied, grupoMap]);
+  }, [atualRows, propostaRows, onlyDiff, ordenarPor, unidadePorLinha, unidadePorGrupo, categoriaPorGrupo, agruparPorGrupo, chavesRepetidas, paiRows, applied, grupoMap, linhaMap]);
 
   const totals = useMemo(() => {
     const base = { a: {} as Record<string, number>, p: {} as Record<string, number> };
@@ -776,16 +812,19 @@ export function ComparativoView() {
       .sort((a, b) => a[0].localeCompare(b[0], "pt-BR"))
       .map(([unidade, rowsDaUnidade]) => ({
         unidade,
-        // Dentro da Unidade: agrupa por Grupo de Linha (01, 01A, 49A...) e só
-        // depois por linha — não alfabética pura, que espalharia linhas do
-        // mesmo grupo se os códigos não começarem parecido.
+        // Dentro da Unidade: Categoria/Tipo da linha, depois Grupo de Linha
+        // (01, 01A, 49A...) e só então por linha — não alfabética pura, que
+        // espalharia linhas do mesmo grupo se os códigos não começarem
+        // parecido.
         rows: [...rowsDaUnidade].sort((a, b) => {
+          const ca = categoriaParaOrdenar(a), cb = categoriaParaOrdenar(b);
+          if (ca !== cb) return ca.localeCompare(cb, "pt-BR");
           const ga = grupoParaOrdenar(a), gb = grupoParaOrdenar(b);
           if (ga !== gb) return ga.localeCompare(gb, "pt-BR", { numeric: true, sensitivity: "base" });
           return a.linha.localeCompare(b.linha, "pt-BR", { numeric: true, sensitivity: "base" });
         }),
       }));
-  }, [merged, unidadePorLinha, unidadePorGrupo, agruparPorGrupo, applied, grupoMap]);
+  }, [merged, unidadePorLinha, unidadePorGrupo, categoriaPorGrupo, agruparPorGrupo, applied, grupoMap, linhaMap]);
 
   const ZERO_UNIDADE_METRICS: Record<Exclude<MetricKeyName, "custo">, number> = {
     dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0, km: 0, heMin: 0,

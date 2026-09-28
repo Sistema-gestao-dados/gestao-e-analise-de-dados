@@ -351,6 +351,55 @@ export function ResumoView({ mode }: { mode: Mode }) {
     return out;
   }, [units, mode, S.groupBy, S.criterio, S.dia, grupoMap, filtered, linhaMap, empresaOverrideMap, unidadePorServico]);
 
+  // Categoria/Tipo de cada linha (Municipal/Intermunicipal..., campo
+  // `linhas.categoria`) — 2ª camada de ordenação dentro da Unidade (Unidade
+  // -> Categoria -> Grupo de Linha -> Linha), antes do Grupo de Linha.
+  // Campo simples do cadastro (não depende de dia tipo). Em modo "grupo"/
+  // "versão" usa a categoria predominante (maioria) entre as linhas do
+  // grupo/versão — mesma ideia de unidadePorGrupo.
+  const categoriaPorGrupo = useMemo(() => {
+    if (mode === "linha") {
+      const tally = new Map<string, Map<string, number>>();
+      for (const v of filtered) {
+        const cat = linhaMap.get(v.linha)?.categoria;
+        if (!cat) continue;
+        const m = tally.get(v.linha) ?? new Map<string, number>();
+        m.set(cat, (m.get(cat) ?? 0) + 1);
+        tally.set(v.linha, m);
+      }
+      const out = new Map<string, string>();
+      for (const [key, m] of tally) {
+        let best: string | null = null, bestN = -1;
+        for (const [cat, n] of m) if (n > bestN) { best = cat; bestN = n; }
+        if (best) out.set(key, best);
+      }
+      return out;
+    }
+    const tally = new Map<string, Map<string, number>>();
+    for (const u of units.values()) {
+      const linhaDom = dominantLinha(u, S.criterio);
+      const cat = linhaMap.get(linhaDom)?.categoria;
+      if (!cat) continue;
+      let key: string;
+      if (S.groupBy === "grupo") {
+        const td = S.dia !== "__all" ? S.dia : u.tipo_operacao;
+        key = grupoMap.get(`${linhaDom}|${td}`.toLowerCase()) ?? `(sem grupo) ${linhaDom}`;
+      } else {
+        key = u.versao;
+      }
+      const m = tally.get(key) ?? new Map<string, number>();
+      m.set(cat, (m.get(cat) ?? 0) + 1);
+      tally.set(key, m);
+    }
+    const out = new Map<string, string>();
+    for (const [key, m] of tally) {
+      let best: string | null = null, bestN = -1;
+      for (const [cat, n] of m) if (n > bestN) { best = cat; bestN = n; }
+      if (best) out.set(key, best);
+    }
+    return out;
+  }, [units, mode, S.groupBy, S.criterio, S.dia, grupoMap, filtered, linhaMap]);
+
   const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">(`resumo.${mode}.ordenarPor`, "padrao");
 
   const displayRows = useMemo(() => {
@@ -359,12 +408,16 @@ export function ResumoView({ mode }: { mode: Mode }) {
       const ua = unidadePorGrupo.get(a.groupKey) ?? "";
       const ub = unidadePorGrupo.get(b.groupKey) ?? "";
       if (ua !== ub) return ua.localeCompare(ub, "pt-BR");
-      // 2ª ordem, dentro da mesma Unidade: Grupo de Linha (01, 01A, 49A...).
+      // 2ª ordem, dentro da mesma Unidade: Categoria/Tipo da linha
+      // (Municipal/Intermunicipal...).
+      const ca = categoriaPorGrupo.get(a.groupKey) ?? "", cb = categoriaPorGrupo.get(b.groupKey) ?? "";
+      if (ca !== cb) return ca.localeCompare(cb, "pt-BR");
+      // 3ª ordem, dentro da mesma Unidade/Categoria: Grupo de Linha (01, 01A, 49A...).
       const ga = grupoParaOrdenar(a), gb = grupoParaOrdenar(b);
       if (ga !== gb) return ga.localeCompare(gb, "pt-BR", { numeric: true, sensitivity: "base" });
       return a.groupLabel.localeCompare(b.groupLabel, "pt-BR", { numeric: true, sensitivity: "base" });
     });
-  }, [rows, ordenarPor, unidadePorGrupo, S.dia, grupoMap]);
+  }, [rows, ordenarPor, unidadePorGrupo, categoriaPorGrupo, S.dia, grupoMap]);
 
   // Linhas/grupos agrupados por Unidade, na ordem que os relatórios de
   // exportação (Excel/PDF) usam — mesmo formato "por Unidade" nos dois
@@ -400,13 +453,15 @@ export function ResumoView({ mode }: { mode: Mode }) {
     }
     for (const arr of grupos.values()) {
       arr.sort((a, b) => {
+        const ca = categoriaPorGrupo.get(a.groupKey) ?? "", cb = categoriaPorGrupo.get(b.groupKey) ?? "";
+        if (ca !== cb) return ca.localeCompare(cb, "pt-BR");
         const ga = grupoParaOrdenar(a), gb = grupoParaOrdenar(b);
         if (ga !== gb) return ga.localeCompare(gb, "pt-BR", { numeric: true, sensitivity: "base" });
         return a.groupLabel.localeCompare(b.groupLabel, "pt-BR", { numeric: true, sensitivity: "base" });
       });
     }
     return Array.from(grupos, ([unidade, rows]) => ({ unidade, rows })).sort((a, b) => a.unidade.localeCompare(b.unidade, "pt-BR"));
-  }, [rows, unidadePorGrupo, mode, S.dia, grupoMap]);
+  }, [rows, unidadePorGrupo, categoriaPorGrupo, mode, S.dia, grupoMap]);
 
 
 const totals = useMemo(() => {
