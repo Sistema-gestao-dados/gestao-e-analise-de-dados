@@ -309,6 +309,13 @@ async function importSiglasSheet(rows: Record<string, any>[]): Promise<ImportRep
   const rows2 = Array.from(byKey.values());
 
   const existentesRes = await db.from("siglas_estacao").select("sigla").limit(10000);
+  if (existentesRes.error) {
+    // Tabela ainda não existe nesse banco (migração não aplicada) ou outro
+    // erro de acesso — não dá pra saber inserido/atualizado sem essa
+    // consulta, então nem tenta: melhor 0/0 com o erro real do que uma
+    // contagem inventada como se tivesse funcionado.
+    return { sheet: "Siglas", total: rows2.length, inserted: 0, updated: 0, errors: [existentesRes.error.message] };
+  }
   const existentes = new Set(((existentesRes.data ?? []) as any[]).map((e) => String(e.sigla).toUpperCase()));
   let inserted = 0, updated = 0;
   rows2.forEach((r) => {
