@@ -284,6 +284,9 @@ function fromAgg(r: AggRow | null): Record<Exclude<MetricKeyName, "custo">, numb
  * Linha crua (números, não formatada) — usada direto no Excel e como base
  * pro PDF (via cellForUnidade). `pctAsFraction` é só pro Excel: formato
  * nativo de porcentagem espera a FRAÇÃO (0,20), não a escala percentual (20).
+ * `ocultarZeros`: Dif/% viram string vazia ("") quando a diferença é zero —
+ * mesmo sentinela já usado pro "% indefinido" (Atual=0), mas nunca colidem:
+ * Dif=0 sempre dá %=0 (nunca null), então os dois casos não se sobrepõem.
  */
 function buildRawRow(
   metrics: UnidadeMetric[],
@@ -291,30 +294,38 @@ function buildRawRow(
   av: Record<MetricKeyName, number>,
   pv: Record<MetricKeyName, number>,
   pctAsFraction = false,
+  ocultarZeros = false,
 ): (string | number)[] {
   const cells: (string | number)[] = [label];
   for (const m of metrics) {
     const a = m.round(av[m.key] ?? 0);
     const p = m.round(pv[m.key] ?? 0);
+    const d = m.round(p - a);
     const pct = diffPct(a, p);
-    const pctCell = pct == null ? "" : pctAsFraction ? Number((pct / 100).toFixed(4)) : Number(pct.toFixed(1));
-    cells.push(a, p, m.round(p - a), pctCell);
+    const hide = ocultarZeros && d === 0;
+    const pctCell = hide || pct == null ? "" : pctAsFraction ? Number((pct / 100).toFixed(4)) : Number(pct.toFixed(1));
+    cells.push(a, p, hide ? "" : d, pctCell);
   }
   return cells;
 }
 
-function cellForUnidade(metrics: UnidadeMetric[], v: string | number, i: number): string {
+// Recebe a LINHA inteira (não só a célula) pra poder checar, na coluna %,
+// se a Dif vizinha (i - 1) foi ocultada — só assim dá pra diferenciar
+// "% ocultado por Dif zerada" (fica em branco) de "% indefinido" (fica "—").
+function cellForUnidade(metrics: UnidadeMetric[], row: (string | number)[], i: number): string {
+  const v = row[i];
   if (i === 0) return String(v);
   const idx = (i - 1) % 4;
   const metricIdx = Math.floor((i - 1) / 4);
   const m = metrics[metricIdx];
-  if (idx === 3) return fmtPct(v === "" ? null : Number(v));
-  if (idx === 2) return fmtDelta(Number(v), m.fmt);
+  if (idx === 3) return row[i - 1] === "" ? "" : fmtPct(v === "" ? null : Number(v));
+  if (idx === 2) return v === "" ? "" : fmtDelta(Number(v), m.fmt);
   return m.fmt(Number(v));
 }
 
-function buildDisplayRow(metrics: UnidadeMetric[], label: string, av: Record<MetricKeyName, number>, pv: Record<MetricKeyName, number>): string[] {
-  return buildRawRow(metrics, label, av, pv).map((v, i) => cellForUnidade(metrics, v, i));
+function buildDisplayRow(metrics: UnidadeMetric[], label: string, av: Record<MetricKeyName, number>, pv: Record<MetricKeyName, number>, ocultarZeros = false): string[] {
+  const row = buildRawRow(metrics, label, av, pv, false, ocultarZeros);
+  return row.map((_, i) => cellForUnidade(metrics, row, i));
 }
 
 /**
@@ -923,8 +934,10 @@ export function ComparativoView() {
       for (const m of shownMetrics) {
         const av = m.round((a?.[m.key] as number) ?? 0);
         const pv = m.round((p?.[m.key] as number) ?? 0);
-        row.push(av, pv, m.round(pv - av));
-        if (showPct) row.push(diffPct(av, pv));
+        const d = m.round(pv - av);
+        const hide = ocultarZeros && d === 0;
+        row.push(av, pv, hide ? null : d);
+        if (showPct) row.push(hide ? null : diffPct(av, pv));
       }
       return row;
     });
@@ -932,20 +945,26 @@ export function ComparativoView() {
     for (const m of shownMetrics) {
       const av = m.round(totals.a[m.key as string]);
       const pv = m.round(totals.p[m.key as string]);
-      tot.push(av, pv, m.round(pv - av));
-      if (showPct) tot.push(diffPct(av, pv));
+      const d = m.round(pv - av);
+      const hide = ocultarZeros && d === 0;
+      tot.push(av, pv, hide ? null : d);
+      if (showPct) tot.push(hide ? null : diffPct(av, pv));
     }
     return { header1, header2, body, tot };
   }
 
-  // Compartilhada entre exportXLSX/exportPDF e a view de impressão.
-  function cellFor(v: any, i: number) {
+  // Usada só pela view de impressão (printData) — exportXLSX/exportPDF
+  // reais usam buildRawRow/cellForUnidade (layout "por Unidade"). Recebe a
+  // LINHA inteira (não só a célula) pra, na coluna %, checar se a Dif
+  // vizinha (i - 1) foi ocultada por "Ocultar Dif/% zerados".
+  function cellFor(row: (string | number | null)[], i: number) {
+    const v = row[i];
     if (i === 0) return String(v);
     const idx = (i - 1) % colsPerMetric;
     const metricIdx = Math.floor((i - 1) / colsPerMetric);
     const m = shownMetrics[metricIdx];
-    if (showPct && idx === 3) return fmtPct(typeof v === "number" ? v : null);
-    if (idx === 2) return fmtDelta(Number(v), m.fmt);
+    if (showPct && idx === 3) return row[i - 1] === null ? "" : fmtPct(typeof v === "number" ? v : null);
+    if (idx === 2) return v === null ? "" : fmtDelta(Number(v), m.fmt);
     return m.fmt(Number(v));
   }
 
@@ -968,7 +987,7 @@ export function ComparativoView() {
       }
     };
     const rowXlsx = (label: string, av: Record<MetricKeyName, number>, pv: Record<MetricKeyName, number>) =>
-      buildRawRow(metrics, label, av, pv, true);
+      buildRawRow(metrics, label, av, pv, true, ocultarZeros);
 
     const firstColLabel = agruparPorGrupo ? "Grupo de Linha" : "Linha";
 
@@ -1095,13 +1114,13 @@ export function ComparativoView() {
     const allDisplayRows: string[][] = [headerRow];
     for (const block of unidadeBlocks) {
       for (const r of block.rows) {
-        allDisplayRows.push(buildDisplayRow(metrics, r.linha, rowMetrics(r.a, custoPorLinha.atual.get(r.linha) ?? 0), rowMetrics(r.p, custoPorLinha.proposta.get(r.linha) ?? 0)));
+        allDisplayRows.push(buildDisplayRow(metrics, r.linha, rowMetrics(r.a, custoPorLinha.atual.get(r.linha) ?? 0), rowMetrics(r.p, custoPorLinha.proposta.get(r.linha) ?? 0), ocultarZeros));
       }
       const tot = totalDaUnidade(block.unidade, block.rows);
-      allDisplayRows.push(buildDisplayRow(metrics, "TOTAL", tot.atual, tot.proposta));
+      allDisplayRows.push(buildDisplayRow(metrics, "TOTAL", tot.atual, tot.proposta, ocultarZeros));
     }
-    for (const r of unidadeTotais) allDisplayRows.push(buildDisplayRow(metrics, r.chave, r.atual, r.proposta));
-    allDisplayRows.push(buildDisplayRow(metrics, "TOTAL GERAL", resumoUnidadeTotal.atual, resumoUnidadeTotal.proposta));
+    for (const r of unidadeTotais) allDisplayRows.push(buildDisplayRow(metrics, r.chave, r.atual, r.proposta, ocultarZeros));
+    allDisplayRows.push(buildDisplayRow(metrics, "TOTAL GERAL", resumoUnidadeTotal.atual, resumoUnidadeTotal.proposta, ocultarZeros));
 
     function naturalColWidths(fontSize: number): number[] {
       const padX = 1.4;
@@ -1185,8 +1204,8 @@ export function ComparativoView() {
       const tot = totalDaUnidade(block.unidade, block.rows);
       drawBlock(
         block.unidade,
-        block.rows.map((r) => buildDisplayRow(metrics, r.linha, rowMetrics(r.a, custoPorLinha.atual.get(r.linha) ?? 0), rowMetrics(r.p, custoPorLinha.proposta.get(r.linha) ?? 0))),
-        buildDisplayRow(metrics, "TOTAL", tot.atual, tot.proposta),
+        block.rows.map((r) => buildDisplayRow(metrics, r.linha, rowMetrics(r.a, custoPorLinha.atual.get(r.linha) ?? 0), rowMetrics(r.p, custoPorLinha.proposta.get(r.linha) ?? 0), ocultarZeros)),
+        buildDisplayRow(metrics, "TOTAL", tot.atual, tot.proposta, ocultarZeros),
         firstColLabel,
       );
     }
@@ -1194,8 +1213,8 @@ export function ComparativoView() {
     if (unidadeTotais.length) {
       drawBlock(
         "RESUMO POR UNIDADE",
-        unidadeTotais.map((r) => buildDisplayRow(metrics, r.chave, r.atual, r.proposta)),
-        buildDisplayRow(metrics, "TOTAL GERAL", resumoUnidadeTotal.atual, resumoUnidadeTotal.proposta),
+        unidadeTotais.map((r) => buildDisplayRow(metrics, r.chave, r.atual, r.proposta, ocultarZeros)),
+        buildDisplayRow(metrics, "TOTAL GERAL", resumoUnidadeTotal.atual, resumoUnidadeTotal.proposta, ocultarZeros),
         "Unidade",
       );
     }
@@ -1288,7 +1307,7 @@ export function ComparativoView() {
             {printData.body.map((r, ri) => (
               <tr key={ri}>
                 {r.map((v, i) => (
-                  <td key={i} style={i === 0 ? { textAlign: "left", fontWeight: 600 } : undefined}>{cellFor(v, i)}</td>
+                  <td key={i} style={i === 0 ? { textAlign: "left", fontWeight: 600 } : undefined}>{cellFor(r, i)}</td>
                 ))}
               </tr>
             ))}
@@ -1296,7 +1315,7 @@ export function ComparativoView() {
           <tfoot>
             <tr>
               {printData.tot.map((v, i) => (
-                <td key={i} style={i === 0 ? { textAlign: "left" } : undefined}>{cellFor(v, i)}</td>
+                <td key={i} style={i === 0 ? { textAlign: "left" } : undefined}>{cellFor(printData.tot, i)}</td>
               ))}
             </tr>
           </tfoot>
