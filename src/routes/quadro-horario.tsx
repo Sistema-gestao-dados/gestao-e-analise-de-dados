@@ -2,8 +2,8 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAllViagens } from "@/lib/viagens";
-import { buildServiceUnits } from "@/lib/resumo";
 import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
+import { fetchSiglasEstacao, buildSiglaMap, resolveSigla } from "@/lib/siglas-estacao";
 import {
   buildEmpresaOverrideMap,
   resolveUnidadeViagem,
@@ -39,8 +39,11 @@ import {
 import { MultiSelect } from "@/components/multi-select";
 import { useAuditView } from "@/lib/use-audit-view";
 import { usePersistentState } from "@/hooks/use-persistent-state";
-import { Table2, FileSpreadsheet, Sparkles, AlertTriangle } from "lucide-react";
-import * as XLSX from "xlsx";
+import { Table2, FileSpreadsheet, FileText, Sparkles, AlertTriangle } from "lucide-react";
+import * as XLSX from "xlsx-js-style";
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+import { PDF_BLUE, PDF_LINE_BLUE, XLSX_BLUE } from "@/lib/report-style";
 import { logAudit } from "@/lib/audit";
 import { toast } from "sonner";
 
@@ -62,10 +65,17 @@ type Sentido = "Ida" | "Volta";
 const SENTIDOS: Sentido[] = ["Ida", "Volta"];
 
 type Corrido = { min: number; hhmm: string; intervalo: number | null };
-type SentidoResult = { partidas: number[]; corrido: Corrido[] };
+type SentidoResult = {
+  partidas: number[];
+  corrido: Corrido[];
+  // Nome do ponto de origem/destino por extenso (traduzido via cadastro de
+  // Siglas — src/lib/siglas-estacao.ts). Cai pra sigla crua se não tiver
+  // tradução cadastrada, nunca fica em branco.
+  origemNome: string;
+  destinoNome: string;
+};
 type LinhaResult = {
   linha: string;
-  frota: number;
   porSentido: Record<Sentido, SentidoResult>;
   versoesEncontradas: string[];
 };
@@ -82,9 +92,29 @@ type Applied = {
   empresa: string;
   corteVirada: string;
 };
-type BandaComOrigem = Banda & { origemLabel: "IDA" | "VOLTA" };
+type BandaComOrigem = Banda & { sentido: Sentido; origemNome: string; destinoNome: string };
 
 const CORTE_VIRADA_PADRAO = "03:00";
+
+/** Valor mais frequente numa lista (ex.: sigla de origem entre as viagens
+ *  de um sentido) — ignora vazios. Empate resolve pelo primeiro encontrado. */
+function maisFrequente(valores: (string | null | undefined)[]): string {
+  const tally = new Map<string, number>();
+  for (const v of valores) {
+    const s = (v ?? "").trim();
+    if (!s) continue;
+    tally.set(s, (tally.get(s) ?? 0) + 1);
+  }
+  let best = "";
+  let bestN = -1;
+  for (const [s, n] of tally) {
+    if (n > bestN) {
+      best = s;
+      bestN = n;
+    }
+  }
+  return best;
+}
 
 function FiltroSelect({
   label,
@@ -119,41 +149,124 @@ function FiltroSelect({
   );
 }
 
+const RESUMO_HEADER = ["Origem", "Destino", "Dia da Semana", "Início", "Fim", "Intervalo (min)"];
+
+// Um bloco por linha — título em negrito, cabeçalho azul repetido, linhas
+// de banda, e uma linha em branco antes do próximo bloco. Antes, todas as
+// linhas iam pra uma tabela única e contínua (um cabeçalho só lá em cima,
+// tudo colado) — ficava difícil separar visualmente onde uma linha acaba e
+// a próxima começa quando o quadro tinha várias linhas selecionadas.
 function exportResumoXLSX(
   applied: Applied,
   resultados: LinhaResult[],
   bandasPorLinha: Map<string, BandaComOrigem[]>,
 ) {
-  const rows: Record<string, string | number>[] = [];
+  type RowKind = "title" | "header" | "body" | "blank";
+  const rows: (string | number)[][] = [];
+  const kinds: RowKind[] = [];
+  const merges: { s: { r: number; c: number }; e: { r: number; c: number } }[] = [];
+  const totalCols = RESUMO_HEADER.length;
+
   for (const r of resultados) {
     const bandas = bandasPorLinha.get(r.linha) ?? [];
-    for (const b of bandas.filter((x) => x.origemLabel === "IDA")) {
-      rows.push({
-        Linha: r.linha,
-        Frota: r.frota,
-        Origem: "IDA",
-        "Dia da Semana": applied.dia,
-        Início: fmtHHMM(b.inicio),
-        Fim: fmtHHMM(b.fim),
-        "Intervalo (min)": b.intervalo,
-      });
+    if (bandas.length === 0) continue;
+    rows.push([`Linha ${r.linha} — Quadro de Horário Simplificado`]);
+    kinds.push("title");
+    merges.push({ s: { r: rows.length - 1, c: 0 }, e: { r: rows.length - 1, c: totalCols - 1 } });
+    rows.push([...RESUMO_HEADER]);
+    kinds.push("header");
+    for (const b of bandas) {
+      rows.push([b.origemNome, b.destinoNome, applied.dia, fmtHHMM(b.inicio), fmtHHMM(b.fim), b.intervalo]);
+      kinds.push("body");
     }
-    for (const b of bandas.filter((x) => x.origemLabel === "VOLTA")) {
-      rows.push({
-        Linha: r.linha,
-        Frota: r.frota,
-        Origem: "VOLTA",
-        "Dia da Semana": applied.dia,
-        Início: fmtHHMM(b.inicio),
-        Fim: fmtHHMM(b.fim),
-        "Intervalo (min)": b.intervalo,
-      });
-    }
+    rows.push([]);
+    kinds.push("blank");
   }
-  const ws = XLSX.utils.json_to_sheet(rows);
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!merges"] = merges;
+  ws["!cols"] = RESUMO_HEADER.map((_, i) => ({ wch: i === 0 || i === 1 ? 22 : 16 }));
+
+  const FILL_BLUE = { patternType: "solid", fgColor: { rgb: XLSX_BLUE } };
+  rows.forEach((_, r) => {
+    const kind = kinds[r];
+    if (kind === "blank") return;
+    for (let c = 0; c < totalCols; c++) {
+      const addr = XLSX.utils.encode_cell({ r, c });
+      const cell = (ws as any)[addr];
+      if (!cell) continue;
+      if (kind === "title") cell.s = { font: { bold: true, sz: 12, color: { rgb: XLSX_BLUE } } };
+      else if (kind === "header") cell.s = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: FILL_BLUE, alignment: { horizontal: "center" } };
+      else cell.s = { alignment: { horizontal: c === 0 || c === 1 ? "left" : "center" } };
+    }
+  });
+
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Quadro de Horário");
   XLSX.writeFile(wb, `quadro_horario_${applied.dia}_${new Date().toISOString().slice(0, 10)}.xlsx`);
+}
+
+// PDF: mesma ideia — um bloco (autoTable) por linha, nome em negrito,
+// cabeçalho azul, espaço antes do próximo bloco. `didDrawPage` reaplica o
+// título/subtítulo do relatório em toda página nova (quando um bloco não
+// cabe inteiro numa página só).
+function exportResumoPDF(
+  applied: Applied,
+  resultados: LinhaResult[],
+  bandasPorLinha: Map<string, BandaComOrigem[]>,
+) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+  const pageW = doc.internal.pageSize.getWidth();
+  const titleTxt = "QUADRO DE HORÁRIO SIMPLIFICADO";
+  const subtitleTxt = `${applied.dia} — Gerado em ${new Date().toLocaleString("pt-BR")}`;
+
+  function drawHeader() {
+    doc.setTextColor(...PDF_LINE_BLUE);
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.text(titleTxt, pageW / 2, 12, { align: "center" });
+    doc.setFontSize(8);
+    doc.setTextColor(90);
+    doc.setFont("helvetica", "normal");
+    doc.text(subtitleTxt, pageW / 2, 18, { align: "center" });
+    doc.setDrawColor(...PDF_LINE_BLUE);
+    doc.setLineWidth(0.5);
+    doc.line(12, 21, pageW - 12, 21);
+    doc.setTextColor(20);
+  }
+
+  drawHeader();
+  let currentY = 26;
+
+  for (const r of resultados) {
+    const bandas = bandasPorLinha.get(r.linha) ?? [];
+    if (bandas.length === 0) continue;
+    const nameHeadRow = [
+      {
+        content: `Linha ${r.linha} — Quadro de Horário Simplificado`,
+        colSpan: RESUMO_HEADER.length,
+        styles: { halign: "left" as const, fontStyle: "bold" as const, fillColor: [255, 255, 255] as [number, number, number], textColor: PDF_LINE_BLUE, fontSize: 10 },
+      },
+    ];
+    const realHeadRow = RESUMO_HEADER.map((label) => ({
+      content: label,
+      styles: { fillColor: PDF_BLUE, textColor: [255, 255, 255] as [number, number, number], fontStyle: "bold" as const, halign: "center" as const },
+    }));
+    autoTable(doc, {
+      startY: currentY,
+      head: [nameHeadRow, realHeadRow],
+      body: bandas.map((b) => [b.origemNome, b.destinoNome, applied.dia, fmtHHMM(b.inicio), fmtHHMM(b.fim), `${b.intervalo} min`]),
+      styles: { fontSize: 9, cellPadding: 1.6, valign: "middle", halign: "center", lineColor: [180, 180, 180], lineWidth: 0.18 },
+      columnStyles: { 0: { halign: "left" }, 1: { halign: "left" } },
+      margin: { left: 12, right: 12, top: 24, bottom: 12 },
+      theme: "grid",
+      pageBreak: "auto",
+      didDrawPage: drawHeader,
+    });
+    currentY = (doc as any).lastAutoTable.finalY + 8;
+  }
+
+  doc.save(`quadro_horario_${applied.dia}_${new Date().toISOString().slice(0, 10)}.pdf`);
 }
 
 function QuadroHorarioPage() {
@@ -185,6 +298,7 @@ function QuadroHorarioPage() {
   const viagensQ = useQuery({ queryKey: ["viagens-all"], queryFn: fetchAllViagens });
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
   const empresaEstacaoQ = useQuery({ queryKey: ["empresa-estacao"], queryFn: fetchEmpresaEstacao });
+  const siglasQ = useQuery({ queryKey: ["siglas-estacao"], queryFn: fetchSiglasEstacao });
   const viagens = viagensQ.data ?? [];
   const linhas = linhasQ.data ?? [];
   const empresaEstacao = empresaEstacaoQ.data ?? [];
@@ -195,6 +309,11 @@ function QuadroHorarioPage() {
     () => buildEmpresaOverrideMap(empresaEstacao),
     [empresaEstacao],
   );
+  // Tradução sigla -> {descricao, local} (cadastro em /importacao, aba
+  // "Siglas" do Cadastro Unificado). Não altera nem sobrescreve nada do que
+  // foi importado — só lê pra exibir o nome por extenso no lugar da sigla
+  // crua de viagens.origem/destino.
+  const siglaMap = useMemo(() => buildSiglaMap(siglasQ.data ?? []), [siglasQ.data]);
 
   const opts = useMemo(
     () => ({
@@ -296,38 +415,19 @@ function QuadroHorarioPage() {
       applied.linha.length > 0
         ? applied.linha
         : Array.from(new Set(filtered.map((v) => v.linha))).sort();
-    // Frota: veículo físico (vehicleKey) que atende essa linha nesse dia+versão,
-    // reaproveitando a mesma lógica já validada de Resumo por Linha/Jornada —
-    // sem filtrar por movimento/categoria aqui, pra não perder veículo que só
-    // aparece em deslocamento noutro trecho da mesma linha.
-    const viagensDiaVersao = viagensVersaoResolvida.filter(
-      (v) =>
-        v.tipo_operacao === applied.dia &&
-        (applied.tipoServico === "__all" ||
-          (v.tipo_servico ?? "").toUpperCase() === applied.tipoServico) &&
-        (applied.unidade === "__all" ||
-          resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) === applied.unidade) &&
-        (applied.grupo === "__all" ||
-          resolveGrupoViagem(v, linhaMap, empresaOverrideMap) === applied.grupo) &&
-        (applied.empresa === "__all" ||
-          resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) === applied.empresa),
-    );
-    const units = buildServiceUnits(viagensDiaVersao, () => 0);
-    const unitsArr = Array.from(units.values());
 
     return linhasAlvo.map((linha) => {
-      const frota = new Set(
-        unitsArr.filter((u) => u.viagensPorLinha.has(linha)).map((u) => u.vehicleKey),
-      ).size;
       const porSentido = {} as Record<Sentido, SentidoResult>;
       for (const sentido of SENTIDOS) {
+        const viagensSentido = filtered.filter(
+          (v) => v.linha === linha && (v.sentido ?? "").trim() === sentido,
+        );
         // Horários de madrugada (< corte, ex. 03:00) são "virada" da noite
         // anterior — empurrados +24h só pra ordenar/agrupar DEPOIS da noite,
         // nunca antes da manhã. fmtHHMM devolve a hora normal na exibição.
         const partidas = Array.from(
           new Set(
-            filtered
-              .filter((v) => v.linha === linha && (v.sentido ?? "").trim() === sentido)
+            viagensSentido
               .map((v) => parseHHMMToMin(v.partida))
               .filter((m): m is number => m != null)
               .map((m) => normalizarVirada(m, corteMin)),
@@ -338,7 +438,15 @@ function QuadroHorarioPage() {
           hhmm: fmtHHMM(m),
           intervalo: i === 0 ? null : m - partidas[i - 1],
         }));
-        porSentido[sentido] = { partidas, corrido };
+        // Sigla de origem/destino mais frequente entre as viagens desse
+        // sentido (o par costuma ser constante numa linha, mas usa maioria
+        // por segurança) -> traduz pro nome por extenso via cadastro de
+        // Siglas. Sem tradução cadastrada, mostra a sigla crua mesmo.
+        const origemSigla = maisFrequente(viagensSentido.map((v) => v.origem));
+        const destinoSigla = maisFrequente(viagensSentido.map((v) => v.destino));
+        const origemNome = resolveSigla(siglaMap, origemSigla)?.descricao ?? origemSigla;
+        const destinoNome = resolveSigla(siglaMap, destinoSigla)?.descricao ?? destinoSigla;
+        porSentido[sentido] = { partidas, corrido, origemNome, destinoNome };
       }
       const versoesEncontradas = Array.from(
         new Set(
@@ -348,19 +456,29 @@ function QuadroHorarioPage() {
             .filter((v): v is string => Boolean(v)),
         ),
       ).sort();
-      return { linha, frota, porSentido, versoesEncontradas };
+      return { linha, porSentido, versoesEncontradas };
     });
-  }, [applied, filtered, viagensVersaoResolvida, linhaMap, empresaOverrideMap]);
+  }, [applied, filtered, siglaMap]);
 
   const bandasPorLinha = useMemo(() => {
     const m = new Map<string, BandaComOrigem[]>();
     if (!gerarResumo) return m;
     for (const r of resultados) {
       const ida: BandaComOrigem[] = agruparBandas(r.porSentido.Ida.partidas, tolerancia).map(
-        (b) => ({ ...b, origemLabel: "IDA" }),
+        (b) => ({
+          ...b,
+          sentido: "Ida" as const,
+          origemNome: r.porSentido.Ida.origemNome,
+          destinoNome: r.porSentido.Ida.destinoNome,
+        }),
       );
       const volta: BandaComOrigem[] = agruparBandas(r.porSentido.Volta.partidas, tolerancia).map(
-        (b) => ({ ...b, origemLabel: "VOLTA" }),
+        (b) => ({
+          ...b,
+          sentido: "Volta" as const,
+          origemNome: r.porSentido.Volta.origemNome,
+          destinoNome: r.porSentido.Volta.destinoNome,
+        }),
       );
       m.set(r.linha, [...ida, ...volta]);
     }
@@ -483,11 +601,8 @@ function QuadroHorarioPage() {
           {resultados.map((r) => (
             <Card key={r.linha} className="shadow-[var(--shadow-card)]">
               <CardHeader className="pb-2">
-                <CardTitle className="text-base flex items-center justify-between">
+                <CardTitle className="text-base">
                   <span>Linha {r.linha} — Horário Corrido</span>
-                  <span className="text-xs font-semibold text-muted-foreground">
-                    FROTA: {r.frota}
-                  </span>
                 </CardTitle>
                 <CardDescription className="text-xs">
                   {applied.dia} · Versão {applied.versao === "__all" ? "Todas" : applied.versao}
@@ -506,8 +621,8 @@ function QuadroHorarioPage() {
               <CardContent className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-0">
                 {SENTIDOS.map((sentido) => (
                   <div key={sentido}>
-                    <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                      {sentido === "Ida" ? "IDA" : "VOLTA"}
+                    <p className="text-xs font-semibold text-muted-foreground mb-1">
+                      {r.porSentido[sentido].origemNome || "?"} → {r.porSentido[sentido].destinoNome || "?"}
                     </p>
                     {r.porSentido[sentido].corrido.length === 0 ? (
                       <p className="text-xs text-muted-foreground">Sem partidas.</p>
@@ -577,6 +692,27 @@ function QuadroHorarioPage() {
                   <FileSpreadsheet className="h-4 w-4 mr-1" /> Excel
                 </Button>
               )}
+              {gerarResumo && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    exportResumoPDF(applied, resultados, bandasPorLinha);
+                    void logAudit({
+                      action: "export",
+                      entity: "quadro_horario",
+                      details: {
+                        format: "pdf",
+                        linhas: applied.linha,
+                        dia: applied.dia,
+                        versao: applied.versao,
+                      },
+                    });
+                  }}
+                >
+                  <FileText className="h-4 w-4 mr-1" /> PDF
+                </Button>
+              )}
               <p className="text-xs text-muted-foreground w-full md:w-auto md:ml-2">
                 Agrupa partidas seguidas com intervalo parecido (dentro da tolerância) num único
                 bloco. O fim de cada bloco é sempre um horário real programado — nunca projetado
@@ -595,7 +731,6 @@ function QuadroHorarioPage() {
                     <CardTitle className="text-base">
                       Linha {r.linha} — Quadro de Horário Simplificado
                     </CardTitle>
-                    <p className="text-sm font-bold">FROTA: {r.frota}</p>
                   </CardHeader>
                   <CardContent className="pt-0">
                     <div className="overflow-auto">
@@ -603,6 +738,7 @@ function QuadroHorarioPage() {
                         <TableHeader>
                           <TableRow>
                             <TableHead>Origem</TableHead>
+                            <TableHead>Destino</TableHead>
                             <TableHead>Dia da Semana</TableHead>
                             <TableHead>Início</TableHead>
                             <TableHead>Fim</TableHead>
@@ -612,7 +748,8 @@ function QuadroHorarioPage() {
                         <TableBody>
                           {bandas.map((b, i) => (
                             <TableRow key={i}>
-                              <TableCell className="font-medium">{b.origemLabel}</TableCell>
+                              <TableCell className="font-medium">{b.origemNome || "?"}</TableCell>
+                              <TableCell className="font-medium">{b.destinoNome || "?"}</TableCell>
                               <TableCell>{applied.dia}</TableCell>
                               <TableCell className="tabular-nums">{fmtHHMM(b.inicio)}</TableCell>
                               <TableCell className="tabular-nums">{fmtHHMM(b.fim)}</TableCell>
