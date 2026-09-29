@@ -68,11 +68,10 @@ type Corrido = { min: number; hhmm: string; intervalo: number | null };
 type SentidoResult = {
   partidas: number[];
   corrido: Corrido[];
-  // Nome do ponto de origem/destino por extenso (traduzido via cadastro de
-  // Siglas — src/lib/siglas-estacao.ts). Cai pra sigla crua se não tiver
-  // tradução cadastrada, nunca fica em branco.
+  // Nome do ponto de origem por extenso (traduzido via cadastro de Siglas —
+  // src/lib/siglas-estacao.ts). Cai pra sigla crua se não tiver tradução
+  // cadastrada, nunca fica em branco.
   origemNome: string;
-  destinoNome: string;
 };
 type LinhaResult = {
   linha: string;
@@ -92,7 +91,7 @@ type Applied = {
   empresa: string;
   corteVirada: string;
 };
-type BandaComOrigem = Banda & { sentido: Sentido; origemNome: string; destinoNome: string };
+type BandaComOrigem = Banda & { sentido: Sentido; origemNome: string };
 
 const CORTE_VIRADA_PADRAO = "03:00";
 
@@ -149,7 +148,7 @@ function FiltroSelect({
   );
 }
 
-const RESUMO_HEADER = ["Origem", "Destino", "Dia da Semana", "Início", "Fim", "Intervalo (min)"];
+const RESUMO_HEADER = ["Origem", "Dia da Semana", "Início", "Fim", "Intervalo (min)"];
 
 // Um bloco por linha — título em negrito, cabeçalho azul repetido, linhas
 // de banda, e uma linha em branco antes do próximo bloco. Antes, todas as
@@ -176,7 +175,7 @@ function exportResumoXLSX(
     rows.push([...RESUMO_HEADER]);
     kinds.push("header");
     for (const b of bandas) {
-      rows.push([b.origemNome, b.destinoNome, applied.dia, fmtHHMM(b.inicio), fmtHHMM(b.fim), b.intervalo]);
+      rows.push([b.origemNome, applied.dia, fmtHHMM(b.inicio), fmtHHMM(b.fim), b.intervalo]);
       kinds.push("body");
     }
     rows.push([]);
@@ -197,7 +196,7 @@ function exportResumoXLSX(
       if (!cell) continue;
       if (kind === "title") cell.s = { font: { bold: true, sz: 12, color: { rgb: XLSX_BLUE } } };
       else if (kind === "header") cell.s = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: FILL_BLUE, alignment: { horizontal: "center" } };
-      else cell.s = { alignment: { horizontal: c === 0 || c === 1 ? "left" : "center" } };
+      else cell.s = { alignment: { horizontal: c === 0 ? "left" : "center" } };
     }
   });
 
@@ -255,9 +254,9 @@ function exportResumoPDF(
     autoTable(doc, {
       startY: currentY,
       head: [nameHeadRow, realHeadRow],
-      body: bandas.map((b) => [b.origemNome, b.destinoNome, applied.dia, fmtHHMM(b.inicio), fmtHHMM(b.fim), `${b.intervalo} min`]),
+      body: bandas.map((b) => [b.origemNome, applied.dia, fmtHHMM(b.inicio), fmtHHMM(b.fim), `${b.intervalo} min`]),
       styles: { fontSize: 9, cellPadding: 1.6, valign: "middle", halign: "center", lineColor: [180, 180, 180], lineWidth: 0.18 },
-      columnStyles: { 0: { halign: "left" }, 1: { halign: "left" } },
+      columnStyles: { 0: { halign: "left" } },
       margin: { left: 12, right: 12, top: 24, bottom: 12 },
       theme: "grid",
       pageBreak: "auto",
@@ -438,15 +437,13 @@ function QuadroHorarioPage() {
           hhmm: fmtHHMM(m),
           intervalo: i === 0 ? null : m - partidas[i - 1],
         }));
-        // Sigla de origem/destino mais frequente entre as viagens desse
-        // sentido (o par costuma ser constante numa linha, mas usa maioria
-        // por segurança) -> traduz pro nome por extenso via cadastro de
-        // Siglas. Sem tradução cadastrada, mostra a sigla crua mesmo.
+        // Sigla de origem mais frequente entre as viagens desse sentido (o
+        // ponto costuma ser constante numa linha, mas usa maioria por
+        // segurança) -> traduz pro nome por extenso via cadastro de Siglas.
+        // Sem tradução cadastrada, mostra a sigla crua mesmo.
         const origemSigla = maisFrequente(viagensSentido.map((v) => v.origem));
-        const destinoSigla = maisFrequente(viagensSentido.map((v) => v.destino));
         const origemNome = resolveSigla(siglaMap, origemSigla)?.descricao ?? origemSigla;
-        const destinoNome = resolveSigla(siglaMap, destinoSigla)?.descricao ?? destinoSigla;
-        porSentido[sentido] = { partidas, corrido, origemNome, destinoNome };
+        porSentido[sentido] = { partidas, corrido, origemNome };
       }
       const versoesEncontradas = Array.from(
         new Set(
@@ -465,20 +462,10 @@ function QuadroHorarioPage() {
     if (!gerarResumo) return m;
     for (const r of resultados) {
       const ida: BandaComOrigem[] = agruparBandas(r.porSentido.Ida.partidas, tolerancia).map(
-        (b) => ({
-          ...b,
-          sentido: "Ida" as const,
-          origemNome: r.porSentido.Ida.origemNome,
-          destinoNome: r.porSentido.Ida.destinoNome,
-        }),
+        (b) => ({ ...b, sentido: "Ida" as const, origemNome: r.porSentido.Ida.origemNome }),
       );
       const volta: BandaComOrigem[] = agruparBandas(r.porSentido.Volta.partidas, tolerancia).map(
-        (b) => ({
-          ...b,
-          sentido: "Volta" as const,
-          origemNome: r.porSentido.Volta.origemNome,
-          destinoNome: r.porSentido.Volta.destinoNome,
-        }),
+        (b) => ({ ...b, sentido: "Volta" as const, origemNome: r.porSentido.Volta.origemNome }),
       );
       m.set(r.linha, [...ida, ...volta]);
     }
@@ -622,7 +609,7 @@ function QuadroHorarioPage() {
                 {SENTIDOS.map((sentido) => (
                   <div key={sentido}>
                     <p className="text-xs font-semibold text-muted-foreground mb-1">
-                      {r.porSentido[sentido].origemNome || "?"} → {r.porSentido[sentido].destinoNome || "?"}
+                      {r.porSentido[sentido].origemNome || "?"}
                     </p>
                     {r.porSentido[sentido].corrido.length === 0 ? (
                       <p className="text-xs text-muted-foreground">Sem partidas.</p>
@@ -738,7 +725,6 @@ function QuadroHorarioPage() {
                         <TableHeader>
                           <TableRow>
                             <TableHead>Origem</TableHead>
-                            <TableHead>Destino</TableHead>
                             <TableHead>Dia da Semana</TableHead>
                             <TableHead>Início</TableHead>
                             <TableHead>Fim</TableHead>
@@ -749,7 +735,6 @@ function QuadroHorarioPage() {
                           {bandas.map((b, i) => (
                             <TableRow key={i}>
                               <TableCell className="font-medium">{b.origemNome || "?"}</TableCell>
-                              <TableCell className="font-medium">{b.destinoNome || "?"}</TableCell>
                               <TableCell>{applied.dia}</TableCell>
                               <TableCell className="tabular-nums">{fmtHHMM(b.inicio)}</TableCell>
                               <TableCell className="tabular-nums">{fmtHHMM(b.fim)}</TableCell>
