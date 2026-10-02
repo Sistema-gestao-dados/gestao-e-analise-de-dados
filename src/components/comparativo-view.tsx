@@ -467,10 +467,21 @@ export function ComparativoView() {
   // programação especial pra ele e repete o pai inteiro. Se o grupo TEVE
   // alguma viagem na Proposta 2 (mesmo que só em 1 das linhas dele), quem
   // ficou sem dado nesse grupo foi ZERADO DE PROPÓSITO — não repete.
+  //
+  // IMPORTANTE: os dois lados dessa checagem (quem tem dado / quem repete)
+  // usam o MESMO dia tipo pra resolver o Grupo de Linha — sempre o do PAI
+  // (paiDaProposta), nunca o da Proposta 2 (applied.p.dia). Um dia tipo
+  // novo/especial (ex.: "Férias dezembro 2026") normalmente não tem cadastro
+  // de Grupo de Linha próprio (ninguém registra parametro_multilinha pra um
+  // período avulso) — resolver pelo dia tipo da Proposta 2 fazia a viagem de
+  // uma linha cair como "sem grupo" (chave só dela, independente da linha),
+  // sem bater com o grupo de verdade, e podia bloquear o grupo errado por
+  // coincidência de rótulo. Mesma classe de bug já corrigida pra ordenação
+  // (commit 2667c52) — aqui também precisa de uma fonte única e confiável.
   const { linhasRepetidas, gruposRepetidos } = useMemo(() => {
     if (!repetirSeVazio || !paiFiltroSet || !applied) return { linhasRepetidas: new Set<string>(), gruposRepetidos: new Set<string>() };
     const gruposComDadoNoFilho = new Set<string>();
-    for (const v of propostaFiltradoBase) gruposComDadoNoFilho.add(grupoDaLinha(v.linha, applied.p.dia));
+    for (const v of propostaFiltradoBase) gruposComDadoNoFilho.add(grupoDaLinha(v.linha, paiDaProposta!));
     const linhas = new Set<string>();
     const grupos = new Set<string>();
     for (const v of paiViagens) {
