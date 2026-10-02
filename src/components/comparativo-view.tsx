@@ -466,8 +466,19 @@ export function ComparativoView() {
   // rótulo. Mesma classe de bug já corrigida pra ordenação (commit 2667c52).
   const { linhasRepetidas, gruposRepetidos } = useMemo(() => {
     if (!repetirSeVazio || !atualDia || !applied) return { linhasRepetidas: new Set<string>(), gruposRepetidos: new Set<string>() };
+    // "Teve dado na Proposta 2" precisa seguir a MESMA Regra 14 (linha
+    // dominante da unidade de serviço) que decide o que conta como um
+    // Serviço de verdade nas métricas exibidas — não presença bruta de
+    // viagem. Uma viagem avulsa gravada contra a linha "18" por um veículo
+    // cujo serviço é na prática de outra linha (predominância) NÃO vira
+    // "serviço" de linha 18 em nenhuma métrica — mas contava como "grupo
+    // teve dado" aqui, bloqueando o grupo inteiro de repetir sem nenhum
+    // serviço de verdade atribuído a ele.
+    const unitsProposta = buildServiceUnits(propostaFiltradoBase, () => 0);
     const gruposComDadoNoFilho = new Set<string>();
-    for (const v of propostaFiltradoBase) gruposComDadoNoFilho.add(grupoDaLinha(v.linha, atualDia));
+    for (const u of unitsProposta.values()) {
+      gruposComDadoNoFilho.add(grupoDaLinha(dominantLinha(u, criterio), atualDia));
+    }
     const linhas = new Set<string>();
     const grupos = new Set<string>();
     for (const v of atualFiltradoBase) {
@@ -475,7 +486,7 @@ export function ComparativoView() {
       if (!gruposComDadoNoFilho.has(g)) { linhas.add(v.linha); grupos.add(g); }
     }
     return { linhasRepetidas: linhas, gruposRepetidos: grupos };
-  }, [repetirSeVazio, atualDia, applied, propostaFiltradoBase, atualFiltradoBase, grupoMap]);
+  }, [repetirSeVazio, atualDia, applied, propostaFiltradoBase, atualFiltradoBase, grupoMap, criterio]);
 
   // Usado nos resumos por Empresa/Grupo/Unidade e no custo — esses somam
   // várias linhas juntas, então preenchemos com as viagens de verdade da
