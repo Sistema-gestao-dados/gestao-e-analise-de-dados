@@ -99,10 +99,13 @@ function NotFoundComponent() {
 const CHUNK_ERROR_PATTERN = /failed to fetch dynamically imported module|error loading dynamically imported module|importing a module script failed/i;
 const CHUNK_RELOAD_GUARD_KEY = "chunk-error-reload";
 
-function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
+function ErrorComponent({ error, reset }: { error: unknown; reset: () => void }) {
   console.error(error);
+  // TanStack Start 1.168.60 tipou o `error` do errorComponent como `unknown`
+  // (alinhado ao try/catch nativo do TS) — antes vinha sempre como `Error`.
+  const err = error instanceof Error ? error : new Error(String(error));
   const router = useRouter();
-  const isChunkError = CHUNK_ERROR_PATTERN.test(error.message);
+  const isChunkError = CHUNK_ERROR_PATTERN.test(err.message);
   const alreadyTriedReload =
     typeof sessionStorage !== "undefined" && sessionStorage.getItem(CHUNK_RELOAD_GUARD_KEY) === "1";
 
@@ -135,7 +138,7 @@ function ErrorComponent({ error, reset }: { error: Error; reset: () => void }) {
         <p className="mt-2 text-sm text-muted-foreground">
           {isChunkError
             ? "Uma nova versão foi publicada, mas o recarregamento automático não resolveu. Recarregue a página manualmente (Ctrl+Shift+R)."
-            : error.message}
+            : err.message}
         </p>
         <div className="mt-6 flex justify-center gap-2">
           <button
