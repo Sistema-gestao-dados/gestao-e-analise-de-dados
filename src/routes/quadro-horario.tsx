@@ -207,6 +207,57 @@ function exportResumoXLSX(
   XLSX.writeFile(wb, `quadro_horario_${applied.dia}_${new Date().toISOString().slice(0, 10)}.xlsx`);
 }
 
+const RESUMO_LINHA_HEADER = [
+  "Linha",
+  "1ª Saída",
+  "Última Saída",
+  "Intervalo Pico (min)",
+  "Intervalo Fora Pico (min)",
+  "Intervalo Médio (min)",
+];
+
+function exportResumoLinhaXLSX(
+  applied: Applied,
+  resultados: LinhaResult[],
+  resumosPorLinha: Map<string, ReturnType<typeof calcularResumoLinha>>,
+) {
+  const rows: (string | number)[][] = [RESUMO_LINHA_HEADER];
+  for (const r of resultados) {
+    const res = resumosPorLinha.get(r.linha);
+    if (!res) continue;
+    rows.push([
+      r.linha,
+      res.primeiraSaida == null ? "" : fmtHHMM(res.primeiraSaida),
+      res.ultimaSaida == null ? "" : fmtHHMM(res.ultimaSaida),
+      res.intervaloPico ?? "",
+      res.intervaloForaPico ?? "",
+      res.intervaloMedio ?? "",
+    ]);
+  }
+
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!cols"] = RESUMO_LINHA_HEADER.map((_, i) => ({ wch: i === 0 ? 10 : 18 }));
+  const FILL_BLUE = { patternType: "solid", fgColor: { rgb: XLSX_BLUE } };
+  for (let c = 0; c < RESUMO_LINHA_HEADER.length; c++) {
+    const addr = XLSX.utils.encode_cell({ r: 0, c });
+    const cell = (ws as any)[addr];
+    if (cell) {
+      cell.s = {
+        font: { bold: true, color: { rgb: "FFFFFF" } },
+        fill: FILL_BLUE,
+        alignment: { horizontal: "center" },
+      };
+    }
+  }
+
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Resumo por Linha");
+  XLSX.writeFile(
+    wb,
+    `quadro_horario_resumo_linha_${applied.dia}_${new Date().toISOString().slice(0, 10)}.xlsx`,
+  );
+}
+
 // PDF: mesma ideia — um bloco (autoTable) por linha, nome em negrito,
 // cabeçalho azul, espaço antes do próximo bloco. `didDrawPage` reaplica o
 // título/subtítulo do relatório em toda página nova (quando um bloco não
@@ -740,7 +791,29 @@ function QuadroHorarioPage() {
           {mostrarResumoLinha && (
             <Card className="shadow-[var(--shadow-card)]">
               <CardHeader className="pb-2">
-                <CardTitle className="text-base">1ª/Última Saída e Intervalos por Linha</CardTitle>
+                <CardTitle className="text-base flex items-center justify-between">
+                  <span>1ª/Última Saída e Intervalos por Linha</span>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      exportResumoLinhaXLSX(applied, resultados, resumosPorLinha);
+                      void logAudit({
+                        action: "export",
+                        entity: "quadro_horario",
+                        details: {
+                          format: "xlsx",
+                          relatorio: "resumo_linha",
+                          linhas: applied.linha,
+                          dia: applied.dia,
+                          versao: applied.versao,
+                        },
+                      });
+                    }}
+                  >
+                    <FileSpreadsheet className="h-4 w-4 mr-1" /> Excel
+                  </Button>
+                </CardTitle>
                 <CardDescription className="text-xs">
                   Pico = menor intervalo (maior frequência); Fora Pico (entrepico) = próxima faixa
                   de frequência acima do pico; Médio = intervalo médio ao longo do dia inteiro.
