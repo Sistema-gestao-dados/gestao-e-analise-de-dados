@@ -95,8 +95,17 @@ function UnifiedImportCard() {
   const kmQ = useQuery({ queryKey: ["km"], queryFn: fetchKm });
   const multiQ = useQuery({ queryKey: ["multi"], queryFn: fetchMulti });
   const siglasQ = useQuery({ queryKey: ["siglas-estacao"], queryFn: fetchSiglasEstacao });
+  // Enquanto qualquer uma dessas 4 consultas ainda não carregou, `.data` fica
+  // undefined e exportTemplateUnificado cai no exemplo genérico de 1 linha
+  // pra aquela aba — parecia "sumir" dado real quando só não tinha chegado
+  // ainda (KM em especial, com milhares de linhas, demora mais que Linhas).
+  const carregandoDadosAtuais = linhasQ.isLoading || kmQ.isLoading || multiQ.isLoading || siglasQ.isLoading;
 
   async function handleBaixarModelo() {
+    if (carregandoDadosAtuais) {
+      toast.error("Ainda carregando os dados atuais — aguarde um instante e tente de novo.");
+      return;
+    }
     exportTemplateUnificado({ linhas: linhasQ.data, km: kmQ.data, multi: multiQ.data, siglas: siglasQ.data });
   }
 
@@ -146,8 +155,21 @@ function UnifiedImportCard() {
       </CardHeader>
       <CardContent className="space-y-3">
         <div className="flex flex-col sm:flex-row gap-2">
-          <Button variant="outline" onClick={handleBaixarModelo} className="flex-1">
-            <FileDown className="h-4 w-4 mr-2" />Baixar modelo (com dados atuais)
+          <Button
+            variant="outline"
+            onClick={handleBaixarModelo}
+            className="flex-1"
+            disabled={carregandoDadosAtuais}
+          >
+            {carregandoDadosAtuais ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />Carregando dados atuais...
+              </>
+            ) : (
+              <>
+                <FileDown className="h-4 w-4 mr-2" />Baixar modelo (com dados atuais)
+              </>
+            )}
           </Button>
           <input
             ref={ref}
