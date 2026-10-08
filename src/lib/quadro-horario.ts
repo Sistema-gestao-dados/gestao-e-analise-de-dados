@@ -1,10 +1,13 @@
 // Quadro de Horário — lógica pura (sem UI), pra poder testar isolado.
-// Duas partes:
+// Três partes:
 //  1) "Horário corrido": lista ordenada de partidas + intervalo até a
 //     próxima, por Linha/Sentido/Dia Tipo/Versão.
 //  2) "Quadro resumido" (botão "Gerar Quadro Resumido"): agrupa sequências
 //     de partidas com intervalo parecido num único "banda" (Início/Fim/
 //     Intervalo), no formato enviado ao DETRO.
+//  3) "Resumo por linha" (flag "Pico/Entrepico"): 1ª/última saída e os
+//     intervalos de pico/entrepico/médio — ficha técnica resumida por
+//     linha, formato de planilha enviado ao DETRO.
 
 export function parseHHMMToMin(value: string | null | undefined): number | null {
   if (!value) return null;
@@ -98,4 +101,75 @@ export function agruparBandas(partidasOrdenadas: number[], toleranciaMin = 5): B
     cursor = fim;
   }
   return bandas;
+}
+
+export type ResumoLinha = {
+  primeiraSaida: number | null;
+  ultimaSaida: number | null;
+  intervaloPico: number | null;
+  intervaloForaPico: number | null;
+  intervaloMedio: number | null;
+};
+
+/**
+ * "Ficha técnica" resumida da linha: 1ª saída, última saída, e os
+ * intervalos de Pico / Fora Pico (entrepico) / Médio — mesmo formato de
+ * planilha enviado ao DETRO (1ª Saída, Última Saída, Intervalo Pico,
+ * Intervalo Fora Pico).
+ *
+ * Usa o Sentido Ida como referência pros horários/intervalos (mais simples
+ * que misturar os dois sentidos, que têm cadência própria) — EXCETO a
+ * Última Saída, que olha os dois sentidos (a Volta costuma terminar mais
+ * tarde que a Ida, e "última saída da linha" é a última partida real,
+ * independente de sentido).
+ *
+ * Pico = banda(s) de MENOR intervalo entre as partidas de Ida (maior
+ * frequência = horário de pico); se houver mais de uma banda empatada no
+ * mínimo (ex.: pico da manhã + pico da tarde), tira a média delas.
+ * Fora Pico (entrepico) = a próxima faixa de frequência acima do pico (o
+ * 2º menor intervalo distinto entre as bandas) — não "a banda que dura
+ * mais tempo", que podia pegar a redução do fim da noite (que tende a ter
+ * o intervalo mais largo do dia, não o entrepico de verdade) em vez da
+ * cadência do meio do dia.
+ * Médio = intervalo médio ao longo do dia inteiro (último − primeiro,
+ * dividido pela quantidade de intervalos).
+ * Todos os intervalos arredondam PRA CIMA (Math.ceil), a pedido explícito
+ * — o quadro nunca deve prometer um intervalo mais curto do que o real.
+ */
+export function calcularResumoLinha(
+  partidasIda: number[],
+  partidasVolta: number[],
+  toleranciaMin = 5,
+): ResumoLinha {
+  const todasPartidas = [...partidasIda, ...partidasVolta];
+  if (todasPartidas.length === 0) {
+    return { primeiraSaida: null, ultimaSaida: null, intervaloPico: null, intervaloForaPico: null, intervaloMedio: null };
+  }
+  const primeiraSaida = partidasIda.length > 0 ? Math.min(...partidasIda) : Math.min(...todasPartidas);
+  const ultimaSaida = Math.max(...todasPartidas);
+
+  const bandas = agruparBandas(partidasIda, toleranciaMin);
+  let intervaloPico: number | null = null;
+  let intervaloForaPico: number | null = null;
+  if (bandas.length > 0) {
+    const minIntervalo = Math.min(...bandas.map((b) => b.intervalo));
+    const bandasPico = bandas.filter((b) => b.intervalo === minIntervalo);
+    intervaloPico = Math.ceil(bandasPico.reduce((s, b) => s + b.intervalo, 0) / bandasPico.length);
+
+    const valoresAcimaDoPico = bandas.map((b) => b.intervalo).filter((v) => v > minIntervalo);
+    if (valoresAcimaDoPico.length > 0) {
+      const segundoMenor = Math.min(...valoresAcimaDoPico);
+      const bandasForaPico = bandas.filter((b) => b.intervalo === segundoMenor);
+      intervaloForaPico = Math.ceil(
+        bandasForaPico.reduce((s, b) => s + b.intervalo, 0) / bandasForaPico.length,
+      );
+    }
+  }
+
+  const intervaloMedio =
+    partidasIda.length > 1
+      ? Math.ceil((partidasIda[partidasIda.length - 1] - partidasIda[0]) / (partidasIda.length - 1))
+      : null;
+
+  return { primeiraSaida, ultimaSaida, intervaloPico, intervaloForaPico, intervaloMedio };
 }

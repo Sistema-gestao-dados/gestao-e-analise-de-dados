@@ -15,12 +15,14 @@ import {
   fmtHHMM,
   parseHHMMToMin,
   normalizarVirada,
+  calcularResumoLinha,
   type Banda,
 } from "@/lib/quadro-horario";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -293,6 +295,10 @@ function QuadroHorarioPage() {
   const [tolerancia, setTolerancia] = usePersistentState("quadro.tolerancia", 5);
   const [applied, setApplied] = useState<Applied | null>(null);
   const [gerarResumo, setGerarResumo] = useState(false);
+  const [mostrarResumoLinha, setMostrarResumoLinha] = usePersistentState(
+    "quadro.mostrarResumoLinha",
+    false,
+  );
 
   const viagensQ = useQuery({ queryKey: ["viagens-all"], queryFn: fetchAllViagens });
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
@@ -471,6 +477,22 @@ function QuadroHorarioPage() {
     }
     return m;
   }, [gerarResumo, resultados, tolerancia]);
+
+  // 1ª/última saída e intervalos de Pico/Fora Pico/Médio por linha — ficha
+  // técnica resumida (mesmo formato de planilha enviado ao DETRO). Usa a
+  // mesma Tolerância de agrupamento do Quadro Resumido; não depende de
+  // "Gerar Quadro Resumido" estar ligado, funciona isolado.
+  const resumosPorLinha = useMemo(() => {
+    const m = new Map<string, ReturnType<typeof calcularResumoLinha>>();
+    if (!mostrarResumoLinha) return m;
+    for (const r of resultados) {
+      m.set(
+        r.linha,
+        calcularResumoLinha(r.porSentido.Ida.partidas, r.porSentido.Volta.partidas, tolerancia),
+      );
+    }
+    return m;
+  }, [mostrarResumoLinha, resultados, tolerancia]);
 
   return (
     <div className="space-y-4">
@@ -658,6 +680,13 @@ function QuadroHorarioPage() {
               <Button size="sm" onClick={() => setGerarResumo(true)}>
                 <Sparkles className="h-4 w-4 mr-1" /> Gerar Quadro Resumido
               </Button>
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer select-none pb-2">
+                <Checkbox
+                  checked={mostrarResumoLinha}
+                  onCheckedChange={(v) => setMostrarResumoLinha(!!v)}
+                />
+                1ª/Última Saída e Intervalos (Pico/Entrepico)
+              </label>
               {gerarResumo && (
                 <Button
                   size="sm"
@@ -707,6 +736,62 @@ function QuadroHorarioPage() {
               </p>
             </CardContent>
           </Card>
+
+          {mostrarResumoLinha && (
+            <Card className="shadow-[var(--shadow-card)]">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base">1ª/Última Saída e Intervalos por Linha</CardTitle>
+                <CardDescription className="text-xs">
+                  Pico = menor intervalo (maior frequência); Fora Pico (entrepico) = próxima faixa
+                  de frequência acima do pico; Médio = intervalo médio ao longo do dia inteiro.
+                  Calculado pelo Sentido Ida — Última Saída olha os dois sentidos. Intervalos
+                  arredondados pra cima.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="pt-0">
+                <div className="overflow-auto">
+                  <Table className="text-sm">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Linha</TableHead>
+                        <TableHead>1ª Saída</TableHead>
+                        <TableHead>Última Saída</TableHead>
+                        <TableHead className="text-right">Intervalo Pico</TableHead>
+                        <TableHead className="text-right">Intervalo Fora Pico</TableHead>
+                        <TableHead className="text-right">Intervalo Médio</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {resultados.map((r) => {
+                        const res = resumosPorLinha.get(r.linha);
+                        if (!res) return null;
+                        return (
+                          <TableRow key={`resumo-linha-${r.linha}`}>
+                            <TableCell className="font-medium">{r.linha}</TableCell>
+                            <TableCell className="tabular-nums">
+                              {res.primeiraSaida == null ? "—" : fmtHHMM(res.primeiraSaida)}
+                            </TableCell>
+                            <TableCell className="tabular-nums">
+                              {res.ultimaSaida == null ? "—" : fmtHHMM(res.ultimaSaida)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {res.intervaloPico == null ? "—" : `${res.intervaloPico} min`}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {res.intervaloForaPico == null ? "—" : `${res.intervaloForaPico} min`}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {res.intervaloMedio == null ? "—" : `${res.intervaloMedio} min`}
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {gerarResumo &&
             resultados.map((r) => {
