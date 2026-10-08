@@ -109,6 +109,7 @@ export type ResumoLinha = {
   intervaloPico: number | null;
   intervaloForaPico: number | null;
   intervaloMedio: number | null;
+  frequenciaMedia: number | null;
 };
 
 /**
@@ -133,6 +134,10 @@ export type ResumoLinha = {
  * cadência do meio do dia.
  * Médio = intervalo médio ao longo do dia inteiro (último − primeiro,
  * dividido pela quantidade de intervalos).
+ * Frequência Média = quantidade de partidas por hora (ex.: 06:00, 06:20,
+ * 06:40 → intervalo de 20min → 60/20 = 3 partidas/hora) — o inverso do
+ * Intervalo Médio EXATO (antes de arredondar pra cima), com 1 casa
+ * decimal.
  * Todos os intervalos arredondam PRA CIMA (Math.ceil), a pedido explícito
  * — o quadro nunca deve prometer um intervalo mais curto do que o real.
  */
@@ -143,7 +148,14 @@ export function calcularResumoLinha(
 ): ResumoLinha {
   const todasPartidas = [...partidasIda, ...partidasVolta];
   if (todasPartidas.length === 0) {
-    return { primeiraSaida: null, ultimaSaida: null, intervaloPico: null, intervaloForaPico: null, intervaloMedio: null };
+    return {
+      primeiraSaida: null,
+      ultimaSaida: null,
+      intervaloPico: null,
+      intervaloForaPico: null,
+      intervaloMedio: null,
+      frequenciaMedia: null,
+    };
   }
   const primeiraSaida = partidasIda.length > 0 ? Math.min(...partidasIda) : Math.min(...todasPartidas);
   const ultimaSaida = Math.max(...todasPartidas);
@@ -166,10 +178,14 @@ export function calcularResumoLinha(
     }
   }
 
-  const intervaloMedio =
-    partidasIda.length > 1
-      ? Math.ceil((partidasIda[partidasIda.length - 1] - partidasIda[0]) / (partidasIda.length - 1))
-      : null;
+  let intervaloMedio: number | null = null;
+  let frequenciaMedia: number | null = null;
+  if (partidasIda.length > 1) {
+    const mediaExata =
+      (partidasIda[partidasIda.length - 1] - partidasIda[0]) / (partidasIda.length - 1);
+    intervaloMedio = Math.ceil(mediaExata);
+    frequenciaMedia = mediaExata > 0 ? Math.round((60 / mediaExata) * 10) / 10 : null;
+  }
 
-  return { primeiraSaida, ultimaSaida, intervaloPico, intervaloForaPico, intervaloMedio };
+  return { primeiraSaida, ultimaSaida, intervaloPico, intervaloForaPico, intervaloMedio, frequenciaMedia };
 }

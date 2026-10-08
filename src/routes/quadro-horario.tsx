@@ -214,6 +214,7 @@ const RESUMO_LINHA_HEADER = [
   "Intervalo Pico (min)",
   "Intervalo Fora Pico (min)",
   "Intervalo Médio (min)",
+  "Frequência Média (partidas/h)",
 ];
 
 function exportResumoLinhaXLSX(
@@ -232,6 +233,7 @@ function exportResumoLinhaXLSX(
       res.intervaloPico ?? "",
       res.intervaloForaPico ?? "",
       res.intervaloMedio ?? "",
+      res.frequenciaMedia ?? "",
     ]);
   }
 
@@ -816,9 +818,10 @@ function QuadroHorarioPage() {
                 </CardTitle>
                 <CardDescription className="text-xs">
                   Pico = menor intervalo (maior frequência); Fora Pico (entrepico) = próxima faixa
-                  de frequência acima do pico; Médio = intervalo médio ao longo do dia inteiro.
-                  Calculado pelo Sentido Ida — Última Saída olha os dois sentidos. Intervalos
-                  arredondados pra cima.
+                  de frequência acima do pico; Médio = intervalo médio ao longo do dia inteiro;
+                  Frequência Média = partidas por hora (60 ÷ Intervalo Médio). Calculado pelo
+                  Sentido Ida — Última Saída olha os dois sentidos. Intervalos arredondados pra
+                  cima.
                 </CardDescription>
               </CardHeader>
               <CardContent className="pt-0">
@@ -832,6 +835,7 @@ function QuadroHorarioPage() {
                         <TableHead className="text-right">Intervalo Pico</TableHead>
                         <TableHead className="text-right">Intervalo Fora Pico</TableHead>
                         <TableHead className="text-right">Intervalo Médio</TableHead>
+                        <TableHead className="text-right">Frequência Média</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -855,6 +859,9 @@ function QuadroHorarioPage() {
                             </TableCell>
                             <TableCell className="text-right tabular-nums">
                               {res.intervaloMedio == null ? "—" : `${res.intervaloMedio} min`}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {res.frequenciaMedia == null ? "—" : `${res.frequenciaMedia}/h`}
                             </TableCell>
                           </TableRow>
                         );
