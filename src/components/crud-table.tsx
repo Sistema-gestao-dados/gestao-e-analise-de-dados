@@ -53,7 +53,7 @@ export type CrudTableProps = {
    *  de criar/editar/excluir — pra telas que têm outro cache separado dos
    *  MESMOS dados (ex.: "viagens" aqui x "viagens-all" nos relatórios, que
    *  buscam via fetchAllViagens). Sem isso, editar/excluir aqui não refletia
-   *  nos relatórios até o staleTime (5min) vencer ou um reload manual. */
+   *  nos relatórios até o staleTime (120min) vencer ou um reload manual. */
   extraInvalidateKeys?: string[];
 };
 

@@ -260,7 +260,7 @@ function ImportTxtEasyBusPage() {
     // "viagens" invalida a tela /viagens (CrudTable) — mas Comparativo,
     // Dashboard, Quadro de Horário, Jornada e Resumo buscam os dados numa
     // chave DIFERENTE ("viagens-all", via fetchAllViagens) que nunca era
-    // invalidada: dado novo só aparecia lá depois de 5min (staleTime) ou
+    // invalidada: dado novo só aparecia lá depois de 120min (staleTime) ou
     // reload manual. Sem essa linha, a importação "sumia" dos relatórios.
     qc.invalidateQueries({ queryKey: ["viagens-all"] });
     // 3ª chave separada: o dropdown "Dia Tipo"/Versão/Arquivo da tela
