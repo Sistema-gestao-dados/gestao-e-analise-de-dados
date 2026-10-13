@@ -39,7 +39,11 @@ export async function fetchAllPaginado<T>(
   opts?: { pageSize?: number; order?: { column: string; ascending?: boolean }; tiebreak?: string },
 ): Promise<T[]> {
   const client = supabase as any;
-  const pageSize = opts?.pageSize ?? 1000;
+  // 6000 bate com o "Max Rows" configurado no Supabase (Data API Settings) —
+  // subir esse número aqui sem subir lá não adianta nada (o servidor corta
+  // sozinho); subir lá sem subir aqui também não ajuda (ainda pede 1000 por
+  // vez). Os dois precisam andar juntos.
+  const pageSize = opts?.pageSize ?? 6000;
   const orderColumn = opts?.order?.column ?? "id";
   const ascending = opts?.order?.ascending ?? true;
   const tiebreak = opts?.tiebreak ?? "id";
