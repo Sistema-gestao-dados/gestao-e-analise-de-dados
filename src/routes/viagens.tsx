@@ -135,6 +135,7 @@ function ViagensPage() {
         table="viagens"
         pk="id"
         queryKey="viagens"
+        extraInvalidateKeys={["viagens-all"]}
         columns={COLUMNS}
         filters={filters}
         clientFilter={clientFilter}

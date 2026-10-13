@@ -171,6 +171,12 @@ function ImportTxtPage() {
       if (semPai.length) { setNovosDias(semPai); setShowWizard(true); }
     } catch { /* silencioso */ }
     qc.invalidateQueries({ queryKey: ["viagens"] });
+    // "viagens" invalida a tela /viagens (CrudTable) — mas Comparativo,
+    // Dashboard, Quadro de Horário, Jornada e Resumo buscam os dados numa
+    // chave DIFERENTE ("viagens-all", via fetchAllViagens) que nunca era
+    // invalidada: dado novo só aparecia lá depois de 5min (staleTime) ou
+    // reload manual. Sem essa linha, a importação "sumia" dos relatórios.
+    qc.invalidateQueries({ queryKey: ["viagens-all"] });
     qc.invalidateQueries({ queryKey: ["importacoes"] });
     qc.invalidateQueries({ queryKey: ["projetos-ativos"] });
     qc.invalidateQueries({ queryKey: ["multi"] });

@@ -49,6 +49,12 @@ export type CrudTableProps = {
   initialPageSize?: number;
   clientFilter?: (row: Row) => boolean;
   toolbarExtras?: (ctx: { filteredRows: Row[] }) => React.ReactNode;
+  /** Chaves extras de react-query pra invalidar junto com `queryKey` depois
+   *  de criar/editar/excluir — pra telas que têm outro cache separado dos
+   *  MESMOS dados (ex.: "viagens" aqui x "viagens-all" nos relatórios, que
+   *  buscam via fetchAllViagens). Sem isso, editar/excluir aqui não refletia
+   *  nos relatórios até o staleTime (5min) vencer ou um reload manual. */
+  extraInvalidateKeys?: string[];
 };
 
 type Row = Record<string, any>;
@@ -64,8 +70,13 @@ export function CrudTable({
   initialPageSize = 25,
   toolbarExtras,
   clientFilter,
+  extraInvalidateKeys = [],
 }: CrudTableProps) {
   const qc = useQueryClient();
+  function invalidateAll() {
+    qc.invalidateQueries({ queryKey: [queryKey] });
+    for (const k of extraInvalidateKeys) qc.invalidateQueries({ queryKey: [k] });
+  }
   const dataQ = useQuery<Row[]>({
     queryKey: [queryKey],
     queryFn: () => fetchAllPaginado<Row>(table, "*", { order: { column: pk } }),
@@ -187,7 +198,7 @@ export function CrudTable({
     toast.success("Registro atualizado");
     void logAudit({ action: "update", entity: table, entity_id: id, details: { before, after: payload } });
     setEditing(null);
-    qc.invalidateQueries({ queryKey: [queryKey] });
+    invalidateAll();
   }
 
   async function saveNew() {
@@ -202,7 +213,7 @@ export function CrudTable({
     toast.success("Registro adicionado");
     void logAudit({ action: "create", entity: table, entity_id: inserted?.[pk] ?? null, details: { after: payload } });
     setCreating(null);
-    qc.invalidateQueries({ queryKey: [queryKey] });
+    invalidateAll();
   }
 
   async function doDelete() {
@@ -226,14 +237,14 @@ export function CrudTable({
     setSaving(false);
     if (firstError) {
       toast.error(`Erro ao excluir após ${deleted} registro(s): ${firstError}`, { id: "bulk-delete" });
-      qc.invalidateQueries({ queryKey: [queryKey] });
+      invalidateAll();
       return;
     }
     toast.success(`${deleted.toLocaleString("pt-BR")} registro(s) excluído(s)`, { id: "bulk-delete" });
     void logAudit({ action: "delete", entity: table, entity_id: `bulk:${deleted}`, details: { count: deleted, sample: beforeRows.slice(0, 5) } });
     setChecked(new Set());
     setConfirmDelete(null);
-    qc.invalidateQueries({ queryKey: [queryKey] });
+    invalidateAll();
   }
 
   return (
