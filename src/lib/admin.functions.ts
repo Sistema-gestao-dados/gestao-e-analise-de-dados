@@ -6,6 +6,7 @@ const emailSchema = z.string().trim().toLowerCase().email().max(200);
 const passwordSchema = z.string().min(6).max(72);
 const nomeSchema = z.string().trim().min(1).max(120);
 const modulosSchema = z.array(z.string().min(1).max(80)).max(200);
+const valoresAcessoSchema = z.array(z.string().min(1).max(120)).max(200);
 
 // PUBLIC: report whether the very first admin still needs to be created.
 export const bootstrapNeeded = createServerFn({ method: "GET" }).handler(async () => {
@@ -62,10 +63,11 @@ export const adminListUsers = createServerFn({ method: "GET" })
     if (list.error) throw new Error(list.error.message);
     const users = list.data.users ?? [];
     const ids = users.map((u) => u.id);
-    const [profRes, rolesRes, permsRes] = await Promise.all([
-      supabaseAdmin.from("profiles").select("user_id, nome, ativo, modulos_restritos").in("user_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
+    const [profRes, rolesRes, permsRes, acessoRes] = await Promise.all([
+      supabaseAdmin.from("profiles").select("user_id, nome, ativo, modulos_restritos, acesso_restrito").in("user_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
       supabaseAdmin.from("user_roles").select("user_id, role").in("user_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
       supabaseAdmin.from("user_module_permissions").select("user_id, modulo").in("user_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
+      (supabaseAdmin as any).from("user_data_access").select("user_id, tipo, valor").in("user_id", ids.length ? ids : ["00000000-0000-0000-0000-000000000000"]),
     ]);
     const profs = new Map((profRes.data ?? []).map((p: any) => [p.user_id, p]));
     const roleMap = new Map<string, Set<string>>();
@@ -80,6 +82,14 @@ export const adminListUsers = createServerFn({ method: "GET" })
       arr.push(p.modulo);
       permsMap.set(p.user_id, arr);
     }
+    const gruposMap = new Map<string, string[]>();
+    const empresasMap = new Map<string, string[]>();
+    for (const a of (acessoRes.data ?? []) as any[]) {
+      const mapa = a.tipo === "grupo" ? gruposMap : empresasMap;
+      const arr = mapa.get(a.user_id) ?? [];
+      arr.push(a.valor);
+      mapa.set(a.user_id, arr);
+    }
     return users.map((u) => {
       const p = profs.get(u.id) as any;
       const roles = roleMap.get(u.id) ?? new Set();
@@ -91,6 +101,9 @@ export const adminListUsers = createServerFn({ method: "GET" })
         isAdmin: roles.has("admin"),
         modulosRestritos: p?.modulos_restritos ?? false,
         modulos: permsMap.get(u.id) ?? [],
+        acessoRestrito: p?.acesso_restrito ?? false,
+        gruposPermitidos: gruposMap.get(u.id) ?? [],
+        empresasPermitidos: empresasMap.get(u.id) ?? [],
         created_at: u.created_at,
       };
     });
@@ -106,6 +119,9 @@ export const adminCreateUser = createServerFn({ method: "POST" })
       isAdmin: z.boolean().default(false),
       modulosRestritos: z.boolean().default(false),
       modulos: modulosSchema.default([]),
+      acessoRestrito: z.boolean().default(false),
+      gruposPermitidos: valoresAcessoSchema.default([]),
+      empresasPermitidos: valoresAcessoSchema.default([]),
     }).parse(raw),
   )
   .handler(async ({ data, context }) => {
@@ -119,12 +135,19 @@ export const adminCreateUser = createServerFn({ method: "POST" })
     });
     if (created.error) throw new Error(created.error.message);
     const uid = created.data.user!.id;
-    await supabaseAdmin.from("profiles").upsert({ user_id: uid, nome: data.nome, ativo: true, modulos_restritos: data.modulosRestritos });
+    await supabaseAdmin.from("profiles").upsert({ user_id: uid, nome: data.nome, ativo: true, modulos_restritos: data.modulosRestritos, acesso_restrito: data.acessoRestrito } as any);
     if (data.isAdmin) {
       await supabaseAdmin.from("user_roles").insert({ user_id: uid, role: "admin" });
     }
     if (data.modulos.length) {
       await supabaseAdmin.from("user_module_permissions").insert(data.modulos.map((modulo) => ({ user_id: uid, modulo })));
+    }
+    const acessoPayload = [
+      ...data.gruposPermitidos.map((valor) => ({ user_id: uid, tipo: "grupo", valor })),
+      ...data.empresasPermitidos.map((valor) => ({ user_id: uid, tipo: "empresa", valor })),
+    ];
+    if (acessoPayload.length) {
+      await (supabaseAdmin as any).from("user_data_access").insert(acessoPayload);
     }
     return { ok: true, userId: uid };
   });
@@ -140,17 +163,21 @@ export const adminUpdateUser = createServerFn({ method: "POST" })
       password: passwordSchema.optional(),
       modulosRestritos: z.boolean().optional(),
       modulos: modulosSchema.optional(),
+      acessoRestrito: z.boolean().optional(),
+      gruposPermitidos: valoresAcessoSchema.optional(),
+      empresasPermitidos: valoresAcessoSchema.optional(),
     }).parse(raw),
   )
   .handler(async ({ data, context }) => {
     await assertCallerAdmin(context.supabase, context.userId);
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    if (data.nome !== undefined || data.ativo !== undefined || data.modulosRestritos !== undefined) {
-      const upd: { nome?: string; ativo?: boolean; modulos_restritos?: boolean } = {};
+    if (data.nome !== undefined || data.ativo !== undefined || data.modulosRestritos !== undefined || data.acessoRestrito !== undefined) {
+      const upd: { nome?: string; ativo?: boolean; modulos_restritos?: boolean; acesso_restrito?: boolean } = {};
       if (data.nome !== undefined) upd.nome = data.nome;
       if (data.ativo !== undefined) upd.ativo = data.ativo;
       if (data.modulosRestritos !== undefined) upd.modulos_restritos = data.modulosRestritos;
-      await supabaseAdmin.from("profiles").update(upd).eq("user_id", data.userId);
+      if (data.acessoRestrito !== undefined) upd.acesso_restrito = data.acessoRestrito;
+      await supabaseAdmin.from("profiles").update(upd as any).eq("user_id", data.userId);
     }
     if (data.modulos !== undefined) {
       // Substitui a lista inteira (apaga tudo e insere de novo) — mais simples
@@ -159,6 +186,19 @@ export const adminUpdateUser = createServerFn({ method: "POST" })
       if (data.modulos.length) {
         await supabaseAdmin.from("user_module_permissions").insert(data.modulos.map((modulo) => ({ user_id: data.userId, modulo })));
       }
+    }
+    if (data.gruposPermitidos !== undefined || data.empresasPermitidos !== undefined) {
+      // Mesma estratégia: substitui o que foi passado (grupo e/ou empresa),
+      // sem mexer no outro tipo se ele não veio nessa chamada.
+      const tipos: string[] = [];
+      if (data.gruposPermitidos !== undefined) tipos.push("grupo");
+      if (data.empresasPermitidos !== undefined) tipos.push("empresa");
+      await (supabaseAdmin as any).from("user_data_access").delete().eq("user_id", data.userId).in("tipo", tipos);
+      const payload = [
+        ...(data.gruposPermitidos ?? []).map((valor) => ({ user_id: data.userId, tipo: "grupo", valor })),
+        ...(data.empresasPermitidos ?? []).map((valor) => ({ user_id: data.userId, tipo: "empresa", valor })),
+      ];
+      if (payload.length) await (supabaseAdmin as any).from("user_data_access").insert(payload);
     }
     if (data.password) {
       const res = await supabaseAdmin.auth.admin.updateUserById(data.userId, { password: data.password });

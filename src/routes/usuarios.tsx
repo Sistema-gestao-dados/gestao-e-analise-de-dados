@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useServerFn } from "@tanstack/react-start";
 import { useAuth } from "@/lib/auth-context";
+import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,6 +13,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
+import { MultiSelect } from "@/components/multi-select";
 import { MODULE_GROUPS, ALL_MODULE_KEYS } from "@/lib/modules";
 import { Plus, Pencil, Trash2, ShieldCheck, ShieldOff, Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -22,7 +24,19 @@ export const Route = createFileRoute("/usuarios")({
   component: UsuariosPage,
 });
 
-type ListItem = { id: string; email: string; nome: string; ativo: boolean; isAdmin: boolean; modulosRestritos: boolean; modulos: string[]; created_at: string };
+type ListItem = {
+  id: string;
+  email: string;
+  nome: string;
+  ativo: boolean;
+  isAdmin: boolean;
+  modulosRestritos: boolean;
+  modulos: string[];
+  acessoRestrito: boolean;
+  gruposPermitidos: string[];
+  empresasPermitidos: string[];
+  created_at: string;
+};
 type FormState = {
   id?: string;
   email: string;
@@ -32,8 +46,22 @@ type FormState = {
   ativo: boolean;
   modulosRestritos: boolean;
   modulos: string[];
+  acessoRestrito: boolean;
+  gruposPermitidos: string[];
+  empresasPermitidos: string[];
 };
-const empty: FormState = { email: "", nome: "", password: "", isAdmin: false, ativo: true, modulosRestritos: false, modulos: [] };
+const empty: FormState = {
+  email: "",
+  nome: "",
+  password: "",
+  isAdmin: false,
+  ativo: true,
+  modulosRestritos: false,
+  modulos: [],
+  acessoRestrito: false,
+  gruposPermitidos: [],
+  empresasPermitidos: [],
+};
 
 function UsuariosPage() {
   const { isAdmin, user: current, loading } = useAuth();
@@ -48,6 +76,30 @@ function UsuariosPage() {
   const createFn = useServerFn(adminCreateUser);
   const updateFn = useServerFn(adminUpdateUser);
   const deleteFn = useServerFn(adminDeleteUser);
+
+  // Mesmas opções de Grupo/Empresa usadas nos filtros dos relatórios
+  // (linhas.ordem + override por estação, linhas.empresa) — pra garantir
+  // que o admin escolha exatamente os mesmos valores que aparecem lá.
+  const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas, enabled: !loading && isAdmin });
+  const empresaEstacaoQ = useQuery({ queryKey: ["empresa-estacao"], queryFn: fetchEmpresaEstacao, enabled: !loading && isAdmin });
+  const opts = useMemo(() => {
+    const linhas = linhasQ.data ?? [];
+    const empresaEstacao = empresaEstacaoQ.data ?? [];
+    return {
+      grupo: Array.from(
+        new Set([
+          ...(linhas.map((l) => l.ordem).filter(Boolean) as string[]),
+          ...(empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[]),
+        ]),
+      ).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
+      empresa: Array.from(
+        new Set([
+          ...(linhas.map((l) => l.empresa).filter(Boolean) as string[]),
+          ...(empresaEstacao.map((e) => e.empresa).filter(Boolean) as string[]),
+        ]),
+      ).sort(),
+    };
+  }, [linhasQ.data, empresaEstacaoQ.data]);
 
   useEffect(() => {
     if (!loading && !isAdmin) navigate({ to: "/", replace: true });
@@ -78,13 +130,28 @@ function UsuariosPage() {
             password: f.password ? f.password : undefined,
             modulosRestritos: f.modulosRestritos,
             modulos: f.modulos,
+            acessoRestrito: f.acessoRestrito,
+            gruposPermitidos: f.gruposPermitidos,
+            empresasPermitidos: f.empresasPermitidos,
           },
         });
-        void logAudit({ action: "update", entity: "users", entity_id: f.id, details: { email: f.email, isAdmin: f.isAdmin, ativo: f.ativo, password_changed: !!f.password, modulosRestritos: f.modulosRestritos, modulos: f.modulos } });
+        void logAudit({ action: "update", entity: "users", entity_id: f.id, details: { email: f.email, isAdmin: f.isAdmin, ativo: f.ativo, password_changed: !!f.password, modulosRestritos: f.modulosRestritos, modulos: f.modulos, acessoRestrito: f.acessoRestrito, gruposPermitidos: f.gruposPermitidos, empresasPermitidos: f.empresasPermitidos } });
       } else {
         if (!f.password) throw new Error("Senha obrigatória para novo usuário");
-        await createFn({ data: { email: f.email.trim(), password: f.password, nome: f.nome.trim(), isAdmin: f.isAdmin, modulosRestritos: f.modulosRestritos, modulos: f.modulos } });
-        void logAudit({ action: "create", entity: "users", details: { email: f.email, isAdmin: f.isAdmin, modulosRestritos: f.modulosRestritos, modulos: f.modulos } });
+        await createFn({
+          data: {
+            email: f.email.trim(),
+            password: f.password,
+            nome: f.nome.trim(),
+            isAdmin: f.isAdmin,
+            modulosRestritos: f.modulosRestritos,
+            modulos: f.modulos,
+            acessoRestrito: f.acessoRestrito,
+            gruposPermitidos: f.gruposPermitidos,
+            empresasPermitidos: f.empresasPermitidos,
+          },
+        });
+        void logAudit({ action: "create", entity: "users", details: { email: f.email, isAdmin: f.isAdmin, modulosRestritos: f.modulosRestritos, modulos: f.modulos, acessoRestrito: f.acessoRestrito, gruposPermitidos: f.gruposPermitidos, empresasPermitidos: f.empresasPermitidos } });
       }
     },
     onSuccess: () => {
@@ -112,7 +179,19 @@ function UsuariosPage() {
 
   const startNew = () => { setForm(empty); setOpen(true); };
   const startEdit = (u: ListItem) => {
-    setForm({ id: u.id, email: u.email, nome: u.nome, password: "", isAdmin: u.isAdmin, ativo: u.ativo, modulosRestritos: u.modulosRestritos, modulos: u.modulos });
+    setForm({
+      id: u.id,
+      email: u.email,
+      nome: u.nome,
+      password: "",
+      isAdmin: u.isAdmin,
+      ativo: u.ativo,
+      modulosRestritos: u.modulosRestritos,
+      modulos: u.modulos,
+      acessoRestrito: u.acessoRestrito,
+      gruposPermitidos: u.gruposPermitidos,
+      empresasPermitidos: u.empresasPermitidos,
+    });
     setOpen(true);
   };
 
@@ -146,6 +225,7 @@ function UsuariosPage() {
                   <th className="py-2 pr-3">Nome</th>
                   <th className="py-2 pr-3">Perfil</th>
                   <th className="py-2 pr-3">Módulos</th>
+                  <th className="py-2 pr-3">Dados</th>
                   <th className="py-2 pr-3">Status</th>
                   <th className="py-2 pr-3 text-right">Ações</th>
                 </tr>
@@ -166,6 +246,11 @@ function UsuariosPage() {
                         : <Badge variant="outline" className="text-xs">Restrito · {u.modulos.length} módulo(s)</Badge>}
                     </td>
                     <td className="py-2 pr-3">
+                      {u.isAdmin || !u.acessoRestrito
+                        ? <span className="text-xs text-muted-foreground">Vê tudo</span>
+                        : <Badge variant="outline" className="text-xs">Restrito · {u.gruposPermitidos.length + u.empresasPermitidos.length} escopo(s)</Badge>}
+                    </td>
+                    <td className="py-2 pr-3">
                       {u.ativo ? <Badge variant="outline" className="text-green-600 border-green-600/40">Ativo</Badge> : <Badge variant="outline" className="text-muted-foreground">Inativo</Badge>}
                     </td>
                     <td className="py-2 pr-3 text-right">
@@ -179,7 +264,7 @@ function UsuariosPage() {
                   </tr>
                 ))}
                 {!filtered.length && (
-                  <tr><td colSpan={6} className="py-6 text-center text-muted-foreground">Nenhum usuário encontrado.</td></tr>
+                  <tr><td colSpan={7} className="py-6 text-center text-muted-foreground">Nenhum usuário encontrado.</td></tr>
                 )}
               </tbody>
             </table>
@@ -268,6 +353,45 @@ function UsuariosPage() {
                         </div>
                       );
                     })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!form.isAdmin && (
+              <div className="rounded-md border border-border p-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-sm font-medium">Restringir por Grupo/Empresa</div>
+                    <div className="text-xs text-muted-foreground">
+                      Quando desligado, o usuário enxerga dados de todos os grupos/empresas normalmente
+                    </div>
+                  </div>
+                  <Switch
+                    checked={form.acessoRestrito}
+                    onCheckedChange={(v) => setForm({ ...form, acessoRestrito: v })}
+                  />
+                </div>
+                {form.acessoRestrito && (
+                  <div className="space-y-3 border-t border-border pt-3">
+                    <MultiSelect
+                      label="Grupos liberados"
+                      values={form.gruposPermitidos}
+                      onChange={(v) => setForm((f) => ({ ...f, gruposPermitidos: v }))}
+                      options={opts.grupo}
+                      className="w-full"
+                    />
+                    <MultiSelect
+                      label="Empresas liberadas"
+                      values={form.empresasPermitidos}
+                      onChange={(v) => setForm((f) => ({ ...f, empresasPermitidos: v }))}
+                      options={opts.empresa}
+                      className="w-full"
+                    />
+                    <p className="text-[11px] text-muted-foreground">
+                      Fase 1: esses escopos ainda não filtram nenhum relatório — só ficam salvos, prontos
+                      pra quando a aplicação de fato (Fase 2) for ligada.
+                    </p>
                   </div>
                 )}
               </div>

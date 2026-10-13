@@ -141,6 +141,32 @@ Como afeta cálculos:
   diferentes é tratado como veículo/jornada distinta.
 - **Não** altera a fórmula de custo de mão de obra (ver seção acima).
 
+## Acesso restrito por Grupo/Empresa (Fase 1 — ainda não aplicado)
+
+Sistema é compartilhado por ~3 grupos de empresa (ex.: Grupo Maué, Grupo
+Rio Ita, Grupo Coesa) e os Dia Tipo criados por um usuário de um grupo
+apareciam pra todo mundo, bagunçando a lista. Decisão: não duplicar o
+sistema/banco por grupo — isolar dados dentro do mesmo sistema.
+
+- `profiles.acesso_restrito` (bool, default false) + tabela
+  `user_data_access` (`user_id`, `tipo` ['grupo'|'empresa'], `valor`) —
+  mesmo padrão já usado por `modulos_restritos`/`user_module_permissions`
+  (restrição por tela). Igual aos módulos: desligado não muda nada pra
+  ninguém, só o admin liga por usuário em `/usuarios`.
+- "Grupo" aqui é o mesmo valor do filtro "GRUPO" dos relatórios
+  (`linhas.ordem` + override por estação, resolvido por
+  `resolveGrupoViagem`) — não confundir com "Grupo de Linha"
+  (`parametro_multilinha.grupo_du`, outro conceito, usado pra agrupar
+  códigos de linha tipo "01+01A+49A" nos relatórios "por Unidade").
+- **Fase 1 (feita)**: só a base — tabela, coluna, tela em `/usuarios` pra
+  conceder Grupos/Empresas por usuário. Não filtra nada ainda.
+- **Fase 2 (pendente)**: aplicar de verdade via RLS em `viagens` (e
+  tabelas relacionadas) — precisa recriar em SQL a mesma resolução
+  linha→grupo/empresa que hoje só existe em TypeScript
+  (`resolveGrupoViagem`/`resolveEmpresaViagem`, com exceção por estação).
+- **Fase 3 (pendente)**: Dia Tipo criado por um usuário restrito só
+  aparece pra quem tem acesso ao mesmo grupo/empresa.
+
 ## Observações / pontos em aberto
 
 - Os nomes por extenso de **TU** e **DIR** não estão confirmados em nenhum

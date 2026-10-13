@@ -8,6 +8,11 @@ export type AppUser = {
   isAdmin: boolean;
   modulosRestritos: boolean;
   modulosPermitidos: Set<string>;
+  // Fase 1 do isolamento por Grupo/Empresa (ver CLAUDE.md) — só os dados
+  // já estão aqui; NENHUM relatório filtra por isso ainda.
+  acessoRestrito: boolean;
+  gruposPermitidos: Set<string>;
+  empresasPermitidos: Set<string>;
 };
 
 type AuthCtx = {
@@ -26,14 +31,16 @@ const Ctx = createContext<AuthCtx | null>(null);
 const ADMIN_ONLY = new Set(["usuarios", "auditoria", "verificacao_integridade", "parametros_custo"]);
 
 async function fetchUserContext(userId: string, email: string): Promise<AppUser> {
-  const [profileRes, rolesRes, permsRes] = await Promise.all([
-    supabase.from("profiles").select("nome, modulos_restritos").eq("user_id", userId).maybeSingle(),
+  const [profileRes, rolesRes, permsRes, acessoRes] = await Promise.all([
+    supabase.from("profiles").select("nome, modulos_restritos, acesso_restrito").eq("user_id", userId).maybeSingle(),
     supabase.from("user_roles").select("role").eq("user_id", userId),
     supabase.from("user_module_permissions").select("modulo").eq("user_id", userId),
+    (supabase as any).from("user_data_access").select("tipo, valor").eq("user_id", userId),
   ]);
-  const profile = profileRes.data as { nome?: string; modulos_restritos?: boolean } | null;
+  const profile = profileRes.data as { nome?: string; modulos_restritos?: boolean; acesso_restrito?: boolean } | null;
   const roles = (rolesRes.data ?? []) as { role: string }[];
   const perms = (permsRes.data ?? []) as { modulo: string }[];
+  const acessos = (acessoRes.data ?? []) as { tipo: string; valor: string }[];
   return {
     id: userId,
     email,
@@ -41,6 +48,9 @@ async function fetchUserContext(userId: string, email: string): Promise<AppUser>
     isAdmin: roles.some((r) => r.role === "admin"),
     modulosRestritos: profile?.modulos_restritos ?? false,
     modulosPermitidos: new Set(perms.map((p) => p.modulo)),
+    acessoRestrito: profile?.acesso_restrito ?? false,
+    gruposPermitidos: new Set(acessos.filter((a) => a.tipo === "grupo").map((a) => a.valor)),
+    empresasPermitidos: new Set(acessos.filter((a) => a.tipo === "empresa").map((a) => a.valor)),
   };
 }
 
@@ -59,7 +69,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const ctx = await fetchUserContext(s.user.id, s.user.email ?? "");
       setUser(ctx);
     } catch {
-      setUser({ id: s.user.id, email: s.user.email ?? "", nome: s.user.email?.split("@")[0] ?? "", isAdmin: false, modulosRestritos: false, modulosPermitidos: new Set() });
+      setUser({
+        id: s.user.id,
+        email: s.user.email ?? "",
+        nome: s.user.email?.split("@")[0] ?? "",
+        isAdmin: false,
+        modulosRestritos: false,
+        modulosPermitidos: new Set(),
+        acessoRestrito: false,
+        gruposPermitidos: new Set(),
+        empresasPermitidos: new Set(),
+      });
     }
   }, []);
 
