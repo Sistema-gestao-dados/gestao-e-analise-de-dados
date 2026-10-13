@@ -193,6 +193,27 @@ sistema/banco por grupo — isolar dados dentro do mesmo sistema.
   novo nessa política, **testar primeiro com `fetchAllViagens`-like**
   (múltiplas páginas em paralelo), não só uma linha isolada — uma
   função RLS correta por linha pode ainda assim ser inviável em escala.
+
+  **Incidente 2 (13/out, mesmo dia)**: mesmo depois da correção acima
+  (política já rápida por linha), Resumo/Comparativo/Dashboard/Jornada
+  continuaram derrubando — causa raiz diferente, em
+  `src/lib/fetch-paginado.ts`: a função buscava as ~55 páginas de 1000
+  linhas de `viagens` em PARALELO usando `.range()` (OFFSET/LIMIT).
+  OFFSET fica mais caro quanto maior o valor (pular 45 mil linhas exige
+  varrer e descartar essas 45 mil primeiro); disparar ~55 dessas ao
+  mesmo tempo sobrecarregou o banco a ponto de várias página devolverem
+  erro 500 depois de 8-30s cada — mesmo com a política já barata.
+  Reescrito pra busca por CURSOR (keyset/"seek method":
+  `WHERE col > cursor ORDER BY col LIMIT 1000`, sequencial, uma página
+  de cada vez) — custo constante por página, não cresce com a
+  profundidade. Mais lento que o paralelo ideal (~19s pra buscar
+  `viagens` inteira, contra quase instantâneo antes), mas não quebra.
+  **Lição**: uma política RLS rápida não é garantia nenhuma se o padrão
+  de busca do lado do cliente escala mal (OFFSET alto + muita
+  paralelismo = contenção no banco, com ou sem RLS). Se a velocidade
+  virar problema, a forma certa de acelerar é descobrir os cursores de
+  cada página de antemão (consulta leve, só a coluna de ordenação) e
+  paralelizar os `.gt()` a partir daí — não voltar pro offset puro.
 - **Fase 3 (pendente)**: Dia Tipo criado por um usuário restrito só
   aparece pra quem tem acesso ao mesmo grupo/empresa.
 
