@@ -141,7 +141,7 @@ Como afeta cálculos:
   diferentes é tratado como veículo/jornada distinta.
 - **Não** altera a fórmula de custo de mão de obra (ver seção acima).
 
-## Acesso restrito por Grupo/Empresa (Fase 1 — ainda não aplicado)
+## Acesso restrito por Grupo/Empresa (Fase 2 aplicada)
 
 Sistema é compartilhado por ~3 grupos de empresa (ex.: Grupo Maué, Grupo
 Rio Ita, Grupo Coesa) e os Dia Tipo criados por um usuário de um grupo
@@ -160,10 +160,39 @@ sistema/banco por grupo — isolar dados dentro do mesmo sistema.
   códigos de linha tipo "01+01A+49A" nos relatórios "por Unidade").
 - **Fase 1 (feita)**: só a base — tabela, coluna, tela em `/usuarios` pra
   conceder Grupos/Empresas por usuário. Não filtra nada ainda.
-- **Fase 2 (pendente)**: aplicar de verdade via RLS em `viagens` (e
-  tabelas relacionadas) — precisa recriar em SQL a mesma resolução
-  linha→grupo/empresa que hoje só existe em TypeScript
-  (`resolveGrupoViagem`/`resolveEmpresaViagem`, com exceção por estação).
+- **Fase 2 (feita)**: aplicada via RLS em `viagens`
+  (`supabase/migrations/20261013130000_isolamento_grupo_empresa_viagens.sql`
+  + correção de desempenho em
+  `supabase/migrations/20261013140000_isolamento_grupo_empresa_viagens_perf.sql`).
+  `resolver_grupo_viagem()`/`resolver_empresa_viagem()` (funções `STABLE`,
+  sem `SECURITY DEFINER` — ver "Incidente" abaixo) recriam em SQL
+  exatamente a resolução linha→grupo/empresa do TypeScript
+  (`resolveGrupoViagem`/`resolveEmpresaViagem`, com exceção por estação —
+  origem antes de destino). O resultado é **pré-calculado e guardado**
+  em `viagens.grupo_resolvido`/`empresa_resolvida` (gatilho mantém em dia
+  a cada importação/edição, e recalcula sozinho se o cadastro de uma
+  linha mudar em `linhas`/`linha_empresa_estacao`) — a política RLS
+  (`restringe_grupo_empresa_viagens`, RESTRICTIVE, só estreita o que a
+  política base libera, nunca amplia) compara essas colunas direto, sem
+  chamar função nenhuma por linha. De caminho, fechou o acesso anônimo em
+  `viagens` (nunca tinha migrado pro padrão "só autenticado" das outras
+  tabelas). Efeito colateral automático: a RPC `viagens_valores_distintos`
+  (dropdown Dia Tipo/Versão/Arquivo de `/viagens`) é `SECURITY INVOKER`,
+  então já respeita essa RLS sozinha — e o dropdown de Dia Tipo do
+  Comparativo também, porque é montado a partir das próprias viagens já
+  filtradas que chegam no navegador (`src/components/comparativo-view.tsx`).
+
+  **Incidente (13/out)**: a 1ª versão da política chamava
+  `usuario_tem_acesso_viagem()` (então `SECURITY DEFINER`) por linha, pra
+  cada uma das ~55 mil viagens, toda vez que Resumo/Comparativo/Dashboard
+  baixavam a tabela inteira (`fetchAllViagens`/`fetchAllPaginado`, 55
+  páginas em paralelo) — isso tornou essas telas inutilizáveis por
+  alguns minutos em produção (não é só teoria: medido ao vivo, ~6s só
+  pras 10 primeiras páginas). A correção trocou "calcular na leitura"
+  por "guardar já calculado" (colunas + gatilho, acima). Se mexer de
+  novo nessa política, **testar primeiro com `fetchAllViagens`-like**
+  (múltiplas páginas em paralelo), não só uma linha isolada — uma
+  função RLS correta por linha pode ainda assim ser inviável em escala.
 - **Fase 3 (pendente)**: Dia Tipo criado por um usuário restrito só
   aparece pra quem tem acesso ao mesmo grupo/empresa.
 
