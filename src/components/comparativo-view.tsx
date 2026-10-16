@@ -80,12 +80,37 @@ type Filters = {
   versao: string;
   origem: string;
   destino: string;
+  // Dia tipo por Tipo (Categoria) da linha — ex.: Municipal = "Sábado",
+  // Intermunicipal = "Domingo". Opcional: categoria sem entrada aqui (ou
+  // linha sem categoria) usa o `dia` geral do mesmo lado.
+  diaPorCategoria: Record<string, string>;
 };
 
 const EMPTY_FILTERS: Filters = {
   dia: "__all", linha: [], grupo: "__all", categoria: "__all", empresa: "__all", unidade: "__all", grupoOrdem: "__all",
-  faixa: "__all", versao: "__all", origem: "__all", destino: "__all",
+  faixa: "__all", versao: "__all", origem: "__all", destino: "__all", diaPorCategoria: {},
 };
+
+/** Dia tipo que vale pra uma linha dessa categoria nesse lado do
+ *  comparativo: o específico da categoria, se houver; senão o geral. */
+function diaEfetivo(f: Filters, categoria: string | null | undefined): string {
+  return (categoria ? f.diaPorCategoria[categoria] : undefined) ?? f.dia;
+}
+
+function temDiaPorCategoria(f: Filters): boolean {
+  return Object.keys(f.diaPorCategoria).length > 0;
+}
+
+/** Texto do dia tipo do lado, pra título/subtítulo/aviso — ex.:
+ *  "Municipal: Sábado + Intermunicipal: Domingo". */
+function descreverDia(f: Filters, padrao: string): string {
+  const partes = Object.entries(f.diaPorCategoria)
+    .sort(([a], [b]) => a.localeCompare(b, "pt-BR"))
+    .map(([cat, dia]) => `${cat}: ${dia}`);
+  if (!partes.length) return f.dia !== "__all" ? f.dia : padrao;
+  if (f.dia !== "__all") partes.push(`demais: ${f.dia}`);
+  return partes.join(" + ");
+}
 
 function passesExceptLinha(
   v: ViagemLite,
@@ -94,11 +119,12 @@ function passesExceptLinha(
   grupoMap: Map<string, string>,
   empresaOverrideMap: EmpresaOverrideMap,
 ): boolean {
-  if (f.dia !== "__all" && v.tipo_operacao !== f.dia) return false;
+  const l = linhaMap.get(v.linha);
+  const dia = diaEfetivo(f, l?.categoria);
+  if (dia !== "__all" && v.tipo_operacao !== dia) return false;
   if (f.versao !== "__all" && v.versao_programacao !== f.versao) return false;
   if (f.origem !== "__all" && v.origem !== f.origem) return false;
   if (f.destino !== "__all" && v.destino !== f.destino) return false;
-  const l = linhaMap.get(v.linha);
   if (f.empresa !== "__all" && resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) !== f.empresa) return false;
   if (f.unidade !== "__all" && resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) !== f.unidade) return false;
   if (f.grupoOrdem !== "__all" && resolveGrupoViagem(v, linhaMap, empresaOverrideMap) !== f.grupoOrdem) return false;
@@ -141,14 +167,14 @@ function applyFiltersSemLinha(
   return viagens.filter((v) => passesExceptLinha(v, f, linhaMap, grupoMap, empresaOverrideMap));
 }
 
-function FilterSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: string[] }) {
+function FilterSelect({ label, value, onChange, options, allLabel = "Todos" }: { label: string; value: string; onChange: (v: string) => void; options: string[]; allLabel?: string }) {
   return (
     <div className="flex flex-col gap-1 min-w-[130px]">
       <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{label}</label>
       <Select value={value} onValueChange={onChange}>
         <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
         <SelectContent>
-          <SelectItem value="__all">Todos</SelectItem>
+          <SelectItem value="__all">{allLabel}</SelectItem>
           {options.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
         </SelectContent>
       </Select>
@@ -166,6 +192,17 @@ function FilterBlock({
   opts: ReturnType<typeof buildOpts>;
 }) {
   const set = <K extends keyof Filters>(k: K, v: Filters[K]) => setFilters({ ...filters, [k]: v });
+  const [porCategoria, setPorCategoria] = useState(() => temDiaPorCategoria(filters));
+  function togglePorCategoria(on: boolean) {
+    setPorCategoria(on);
+    // Desligar limpa o mapeamento — senão ele continuaria valendo escondido.
+    if (!on) set("diaPorCategoria", {});
+  }
+  function setDiaCategoria(cat: string, dia: string) {
+    const next = { ...filters.diaPorCategoria };
+    if (dia === "__all") delete next[cat]; else next[cat] = dia;
+    set("diaPorCategoria", next);
+  }
   const toneCls = tone === "atual"
     ? "border-l-4 border-l-blue-500"
     : "border-l-4 border-l-emerald-500";
@@ -191,6 +228,29 @@ function FilterBlock({
         <FilterSelect label="Origem" value={filters.origem} onChange={(v) => set("origem", v)} options={opts.origem} />
         <FilterSelect label="Destino" value={filters.destino} onChange={(v) => set("destino", v)} options={opts.destino} />
         <FilterSelect label="Faixa horária" value={filters.faixa} onChange={(v) => set("faixa", v)} options={opts.faixa} />
+        <div className="w-full flex flex-col gap-2 pt-1">
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer w-fit">
+            <Checkbox checked={porCategoria} onCheckedChange={(v) => togglePorCategoria(!!v)} className="h-3.5 w-3.5" />
+            Dia tipo por Tipo (Categoria)
+          </label>
+          {porCategoria && (
+            <div className="flex flex-wrap gap-2 rounded-md border border-dashed border-border p-2">
+              {opts.categoria.length === 0 && (
+                <span className="text-[11px] text-muted-foreground">Nenhuma categoria cadastrada em Linhas.</span>
+              )}
+              {opts.categoria.map((cat) => (
+                <FilterSelect
+                  key={cat}
+                  label={`Dia tipo — ${cat}`}
+                  value={filters.diaPorCategoria[cat] ?? "__all"}
+                  onChange={(v) => setDiaCategoria(cat, v)}
+                  options={opts.dia}
+                  allLabel="(usa o Dia tipo geral)"
+                />
+              ))}
+            </div>
+          )}
+        </div>
       </CardContent>
     </Card>
   );
@@ -431,7 +491,19 @@ export function ComparativoView() {
   // que podia ser outra coisa (ex.: Atual = "Dias úteis - 1 Quinz.", pai
   // herdado = "Dias úteis" — dado diferente do que a tela mostra como
   // Atual) e fazia o "repetir" não bater com o que o usuário via na tela.
-  const atualDia = applied && applied.a.dia !== "__all" ? applied.a.dia : undefined;
+  //
+  // Com "Dia tipo por categoria", cada linha tem o SEU dia tipo na Proposta 1
+  // (ex.: Municipal = Sábado, Intermunicipal = Domingo) — por isso é uma
+  // função por linha, não um valor único. Linha cuja categoria ficou em
+  // "Todos os dias" não tem de onde repetir (misturaria vários dias tipo) e
+  // não repete.
+  const atualDiaDescricao = applied ? descreverDia(applied.a, "") : "";
+  const repetirTemDia = !!applied && (applied.a.dia !== "__all" || temDiaPorCategoria(applied.a));
+  function atualDiaDaLinha(linha: string): string | undefined {
+    if (!applied) return undefined;
+    const d = diaEfetivo(applied.a, linhaMap.get(linha)?.categoria);
+    return d !== "__all" ? d : undefined;
+  }
 
   function grupoDaLinha(linha: string, tipoDia: string): string {
     return grupoMap.get(`${linha}|${tipoDia}`.toLowerCase()) ?? `__sem_grupo__${linha}`;
@@ -465,7 +537,7 @@ export function ComparativoView() {
   // o grupo de verdade, e podia bloquear o grupo errado por coincidência de
   // rótulo. Mesma classe de bug já corrigida pra ordenação (commit 2667c52).
   const { linhasRepetidas, gruposRepetidos } = useMemo(() => {
-    if (!repetirSeVazio || !atualDia || !applied) return { linhasRepetidas: new Set<string>(), gruposRepetidos: new Set<string>() };
+    if (!repetirSeVazio || !repetirTemDia || !applied) return { linhasRepetidas: new Set<string>(), gruposRepetidos: new Set<string>() };
     // "Teve dado na Proposta 2" precisa seguir a MESMA Regra 14 (linha
     // dominante da unidade de serviço) que decide o que conta como um
     // Serviço de verdade nas métricas exibidas — não presença bruta de
@@ -477,16 +549,19 @@ export function ComparativoView() {
     const unitsProposta = buildServiceUnits(propostaFiltradoBase, () => 0);
     const gruposComDadoNoFilho = new Set<string>();
     for (const u of unitsProposta.values()) {
-      gruposComDadoNoFilho.add(grupoDaLinha(dominantLinha(u, criterio), atualDia));
+      const linha = dominantLinha(u, criterio);
+      gruposComDadoNoFilho.add(grupoDaLinha(linha, atualDiaDaLinha(linha) ?? ""));
     }
     const linhas = new Set<string>();
     const grupos = new Set<string>();
     for (const v of atualFiltradoBase) {
-      const g = grupoDaLinha(v.linha, atualDia);
+      const dia = atualDiaDaLinha(v.linha);
+      if (!dia) continue;
+      const g = grupoDaLinha(v.linha, dia);
       if (!gruposComDadoNoFilho.has(g)) { linhas.add(v.linha); grupos.add(g); }
     }
     return { linhasRepetidas: linhas, gruposRepetidos: grupos };
-  }, [repetirSeVazio, atualDia, applied, propostaFiltradoBase, atualFiltradoBase, grupoMap, criterio]);
+  }, [repetirSeVazio, repetirTemDia, applied, propostaFiltradoBase, atualFiltradoBase, grupoMap, linhaMap, criterio]);
 
   // Usado nos resumos por Empresa/Grupo/Unidade e no custo — esses somam
   // várias linhas juntas, então preenchemos com as viagens de verdade da
@@ -716,7 +791,7 @@ export function ComparativoView() {
   // cadastrado na Proposta 1 cai pro fim (ordenada pelo próprio código).
   function grupoParaOrdenar(row: { linha: string }): string {
     if (agruparPorGrupo) return row.linha;
-    const diaA = applied && applied.a.dia !== "__all" ? applied.a.dia : null;
+    const diaA = atualDiaDaLinha(row.linha);
     if (diaA) {
       const g = grupoDaLinha(row.linha, diaA);
       if (!g.startsWith("__sem_grupo__")) return g;
@@ -926,8 +1001,8 @@ export function ComparativoView() {
   // enquanto só a Proposta virava o nome do dia tipo (ex.: "ATUAL vs
   // ELEIÇÃO" em vez de "DOMINGO vs ELEIÇÃO").
   function tituloComparativo(): string {
-    const labelA = applied && applied.a.dia !== "__all" ? applied.a.dia : "ATUAL";
-    const labelP = applied && applied.p.dia !== "__all" ? applied.p.dia : "PROPOSTA";
+    const labelA = applied ? descreverDia(applied.a, "ATUAL") : "ATUAL";
+    const labelP = applied ? descreverDia(applied.p, "PROPOSTA") : "PROPOSTA";
     return `RELATÓRIO COMPARATIVO — ${labelA.toUpperCase()} vs ${labelP.toUpperCase()}`;
   }
 
@@ -1092,7 +1167,7 @@ export function ComparativoView() {
     const usableW = pageW - 16 - 3;
 
     const periodoTxt = (f: Filters) => [
-      f.dia !== "__all" ? f.dia : "Todos os dias",
+      descreverDia(f, "Todos os dias"),
       f.versao !== "__all" ? `Versão ${f.versao}` : null,
     ].filter(Boolean).join(" · ");
     // "Gerado em" entra na linha do subtítulo (centralizada, embaixo do
@@ -1382,26 +1457,26 @@ export function ComparativoView() {
         </CardContent>
       </Card>
 
-      {applied && repetirSeVazio && !atualDia && (
+      {applied && repetirSeVazio && !repetirTemDia && (
         <Card className="shadow-[var(--shadow-card)] border-amber-500/30">
           <CardContent className="p-3 text-xs text-amber-700">
             A Proposta 1 (Atual) está com Dia Tipo em "Todos os dias" — pra repetir, selecione um Dia Tipo específico
-            em Atual (ex.: "Dias úteis"), senão não dá pra saber de onde vem o que repetir.
+            em Atual (ex.: "Dias úteis") ou um Dia tipo por categoria, senão não dá pra saber de onde vem o que repetir.
           </CardContent>
         </Card>
       )}
 
-      {applied && repetirSeVazio && atualDia && (
+      {applied && repetirSeVazio && repetirTemDia && (
         <Card className="shadow-[var(--shadow-card)] border-amber-500/30">
           <CardContent className="p-3">
             <p className="text-xs font-semibold text-amber-700 mb-1">
               {linhasRepetidas.size > 0
-                ? `${linhasRepetidas.size} linha(s) repetindo "${atualDia}" da Proposta 1 (grupo de linha sem nenhum dado na Proposta 2)`
-                : `Nenhuma linha precisou repetir "${atualDia}" — todo grupo de linha teve algum dado na Proposta 2`}
+                ? `${linhasRepetidas.size} linha(s) repetindo "${atualDiaDescricao}" da Proposta 1 (grupo de linha sem nenhum dado na Proposta 2)`
+                : `Nenhuma linha precisou repetir "${atualDiaDescricao}" — todo grupo de linha teve algum dado na Proposta 2`}
             </p>
             <p className="text-[11px] text-muted-foreground mb-2">
               Decidido automaticamente pelo <strong>Grupo de Linha</strong>: se o grupo inteiro (ex.: 07 + 07A) não teve
-              nenhuma viagem na Proposta 2, repete "{atualDia}" da Proposta 1 pra ele. Se o grupo teve alguma viagem (em
+              nenhuma viagem na Proposta 2, repete "{atualDiaDescricao}" da Proposta 1 pra ele. Se o grupo teve alguma viagem (em
               qualquer linha dele), assume que foi decisão de propósito e não repete o resto — mesmo que fique zerado.
             </p>
             {linhasRepetidas.size > 0 && (
