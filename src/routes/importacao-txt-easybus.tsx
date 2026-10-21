@@ -263,11 +263,6 @@ function ImportTxtEasyBusPage() {
     // invalidada: dado novo só aparecia lá depois de 120min (staleTime) ou
     // reload manual. Sem essa linha, a importação "sumia" dos relatórios.
     qc.invalidateQueries({ queryKey: ["viagens-all"] });
-    // 3ª chave separada: o dropdown "Dia Tipo"/Versão/Arquivo da tela
-    // /viagens busca os valores DISTINTOS via RPC própria
-    // (viagens_valores_distintos), pra não baixar a tabela inteira só pra
-    // montar o filtro — tem cache dela mesma, também nunca invalidado.
-    qc.invalidateQueries({ queryKey: ["viagens-valores-distintos"] });
     qc.invalidateQueries({ queryKey: ["importacoes"] });
     qc.invalidateQueries({ queryKey: ["projetos-ativos"] });
     qc.invalidateQueries({ queryKey: ["multi"] });
@@ -329,7 +324,6 @@ function ImportTxtEasyBusPage() {
     qc.invalidateQueries({ queryKey: ["dias-tipo-cadastrados"] });
     qc.invalidateQueries({ queryKey: ["viagens"] });
     qc.invalidateQueries({ queryKey: ["viagens-all"] });
-    qc.invalidateQueries({ queryKey: ["viagens-valores-distintos"] });
     qc.invalidateQueries({ queryKey: ["multi"] });
   }
 

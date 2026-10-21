@@ -45,7 +45,10 @@ export type CrudTableProps = {
   pk: string;
   queryKey: string;
   columns: ColumnDef[];
-  filters?: { key: string; label: string; options: () => string[] }[];
+  /** `options` recebe as linhas já carregadas pela própria tabela — dá pra
+   *  montar a lista a partir delas (ex.: valores distintos de uma coluna)
+   *  sem outra consulta ao banco. Quem não precisa ignora o parâmetro. */
+  filters?: { key: string; label: string; options: (rows: Row[]) => string[] }[];
   initialPageSize?: number;
   clientFilter?: (row: Row) => boolean;
   toolbarExtras?: (ctx: { filteredRows: Row[] }) => React.ReactNode;
@@ -94,6 +97,11 @@ export function CrudTable({
   const [creating, setCreating] = useState<Row | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<{ ids: string[] } | null>(null);
   const [saving, setSaving] = useState(false);
+
+  const filterOptions = useMemo(
+    () => Object.fromEntries(filters.map((f) => [f.key, f.options(rows)])),
+    [filters, rows],
+  );
 
   const filtered = useMemo(() => {
     const ql = q.trim().toLowerCase();
@@ -295,7 +303,7 @@ export function CrudTable({
                   <SelectTrigger className="h-9 w-[160px]"><SelectValue placeholder={f.label} /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__all">Todos · {f.label}</SelectItem>
-                    {f.options().map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
+                    {(filterOptions[f.key] ?? []).map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
                   </SelectContent>
                 </Select>
               ))}

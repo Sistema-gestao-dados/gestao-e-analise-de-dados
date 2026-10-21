@@ -2,7 +2,6 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
-import { fetchViagensValoresDistintos } from "@/lib/viagens";
 import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
 import { buildEmpresaOverrideMap, resolveGrupoViagem, resolveUnidadeViagem } from "@/lib/empresa-estacao";
 import { CrudTable, type ColumnDef } from "@/components/crud-table";
@@ -84,23 +83,29 @@ function ViagensPage() {
     ])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
   }), [linhas, empresaEstacao]);
 
-  // Valores distintos de Dia Tipo, Versão e Arquivo — calculados no Postgres
-  // via RPC (ver migração viagens_valores_distintos), não baixando a tabela
-  // inteira uma segunda vez só pra montar essas 3 listas no navegador. Dia
-  // Tipo em especial não pode ser hardcoded nos 3 básicos, porque inclui
-  // qualquer dia tipo custom criado na importação (feriados etc.).
-  const distintosQ = useQuery({ queryKey: ["viagens-valores-distintos"], queryFn: fetchViagensValoresDistintos });
+  // Dia Tipo, Versão e Arquivo saem das MESMAS linhas que a tabela já
+  // carregou (CrudTable passa `rows` pra `options`) — o que o usuário vê na
+  // grade é exatamente o que aparece no filtro, inclusive pra usuário com
+  // acesso restrito por Grupo/Empresa. Antes vinham de uma RPC
+  // (viagens_valores_distintos) que varria `viagens` inteira 3 vezes numa
+  // consulta só, com a política de isolamento avaliada linha a linha — pra
+  // usuário restrito isso falhava (lista vazia, só "Todos"), mesmo com a
+  // grade mostrando as viagens dele normalmente.
+  const distintos = (key: string) => (rows: Record<string, any>[]) =>
+    Array.from(new Set(rows.map((r) => r[key]).filter((v): v is string => typeof v === "string" && v !== ""))).sort((a, b) =>
+      a.localeCompare(b, "pt-BR", { numeric: true }),
+    );
 
   const filters = useMemo(() => [
     { key: "linha", label: "Linha", options: () => (linhasQ.data ?? []).map((l) => l.linha).sort() },
-    { key: "tipo_operacao", label: "Dia Tipo", options: () => distintosQ.data?.tipos_operacao ?? [] },
+    { key: "tipo_operacao", label: "Dia Tipo", options: distintos("tipo_operacao") },
     { key: "tipo_servico", label: "Tipo Serv.", options: () => ["TU", "DIR"] },
-    { key: "versao_programacao", label: "Versão", options: () => distintosQ.data?.versoes ?? [] },
+    { key: "versao_programacao", label: "Versão", options: distintos("versao_programacao") },
     { key: "tipo_movimento", label: "Movimento", options: () => ["Soltura", "Comercial", "Recolha", "Deslocamento"] },
     { key: "categoria_movimento", label: "Categoria", options: () => ["Deslocamento", "Viagem"] },
     { key: "sentido", label: "Sentido", options: () => ["Ida", "Volta"] },
-    { key: "arquivo", label: "Arquivo", options: () => distintosQ.data?.arquivos ?? [] },
-  ], [linhasQ.data, distintosQ.data]);
+    { key: "arquivo", label: "Arquivo", options: distintos("arquivo") },
+  ], [linhasQ.data]);
 
   // Chaves ativas: "linha||tipo_operacao" -> versao_programacao
   const ativosKey = useMemo(() => {
@@ -135,7 +140,7 @@ function ViagensPage() {
         table="viagens"
         pk="id"
         queryKey="viagens"
-        extraInvalidateKeys={["viagens-all", "viagens-valores-distintos"]}
+        extraInvalidateKeys={["viagens-all"]}
         columns={COLUMNS}
         filters={filters}
         clientFilter={clientFilter}
