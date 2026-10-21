@@ -36,6 +36,7 @@ import { PdfPreviewDialog, type PdfOrientation } from "@/components/pdf-preview-
 import { logAudit } from "@/lib/audit";
 import { buildJornadas, fmtDur } from "@/lib/jornada";
 import { usePersistentState } from "@/hooks/use-persistent-state";
+import { useAcessoDados, cadastroParaOpcoes } from "@/lib/acesso";
 import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
 import { PDF_BLUE, PDF_BLUE_LIGHT, PDF_LINE_BLUE, XLSX_BLUE, XLSX_BLUE_LIGHT, XLSX_LINE_BLUE } from "@/lib/report-style";
 import { custoServico, fmtMoeda } from "@/lib/custo";
@@ -449,7 +450,10 @@ export function ComparativoView() {
     return m;
   }, [multi]);
 
-  const opts = useMemo(() => buildOpts(viagens, linhas, multi, empresaEstacao), [viagens, linhas, multi, empresaEstacao]);
+  // Opções de filtro sem valores de outro Grupo/Empresa (acesso restrito).
+  const acesso = useAcessoDados();
+  const cad = useMemo(() => cadastroParaOpcoes(acesso, linhas, empresaEstacao, multi), [acesso, linhas, empresaEstacao, multi]);
+  const opts = useMemo(() => buildOpts(viagens, cad.linhasDonas, cad.multi, cad.empresaEstacao), [viagens, cad]);
   const kmFn = useMemo(() => (v: ViagemLite) => viagemKm(v, kmMaps), [kmMaps]);
 
   const [atualFilters, setAtualFilters] = useState<Filters>(EMPTY_FILTERS);

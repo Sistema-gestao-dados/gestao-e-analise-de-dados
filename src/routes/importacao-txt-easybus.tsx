@@ -16,6 +16,7 @@ import { parseTxtEasyBus } from "@/lib/txt-import-easybus";
 import { logAudit } from "@/lib/audit";
 import { DiaTipoMapper, detectarNovosDiasTipo, aplicarHerancaConhecida, type DiaTipoNovo } from "@/components/dia-tipo-mapper";
 import { ativarVersao } from "@/lib/projeto-ativo";
+import { useAcessoDados, MSG_SEM_ACESSO } from "@/lib/acesso";
 import { useAuditView } from "@/lib/use-audit-view";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 
@@ -122,6 +123,7 @@ function ImportTxtEasyBusPage() {
   const ref = useRef<HTMLInputElement>(null);
   const folderRef = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
+  const acesso = useAcessoDados();
   const [busy, setBusy] = useState(false);
   const [reports, setReports] = useState<FileReport[]>([]);
   const [pastasSelecionadas, setPastasSelecionadas] = useState<{ nome: string; arquivos: File[] }[]>([]);
@@ -171,6 +173,7 @@ function ImportTxtEasyBusPage() {
   }
 
   async function handleFiles(files: File[]) {
+    if (acesso.carregando) { toast.error("Ainda carregando o cadastro de linhas — aguarde um instante e tente de novo."); return; }
     if (!diaTipoEfetivo) {
       toast.error(criandoNovo
         ? "Digite o nome do novo dia tipo (ex.: Feriado 7 de Setembro)."
@@ -187,9 +190,18 @@ function ImportTxtEasyBusPage() {
       try {
         const text = await file.text();
         const { rows, errors } = parseTxtEasyBus(text, file.name, diaTipoEfetivo);
-        const payload = rows.map((r) => ({ ...r, arquivo: file.name }));
-        parsedAll.push(...rows.map((r) => ({ linha: r.linha, tipo_operacao: r.tipo_operacao })));
-        for (const r of rows) if (r.versao_programacao) versoesImportadas.add(r.versao_programacao);
+        // Acesso restrito por Grupo/Empresa: viagem de linha fora do acesso
+        // do usuário o banco recusa (política de `viagens`) — e recusa o LOTE
+        // inteiro de 500 junto, levando viagens válidas. Separa antes de
+        // gravar e lista no relatório o que ficou de fora.
+        const foraDoAcesso = rows.filter((r) => !acesso.podeViagem(r));
+        const rowsOk = foraDoAcesso.length ? rows.filter((r) => acesso.podeViagem(r)) : rows;
+        const avisoAcesso = foraDoAcesso.length
+          ? [{ line: 0, reason: `${foraDoAcesso.length} viagem(ns) fora do seu Grupo/Empresa não importada(s) — linha(s): ${Array.from(new Set(foraDoAcesso.map((r) => r.linha))).sort().join(", ")}` }]
+          : [];
+        const payload = rowsOk.map((r) => ({ ...r, arquivo: file.name }));
+        parsedAll.push(...rowsOk.map((r) => ({ linha: r.linha, tipo_operacao: r.tipo_operacao })));
+        for (const r of rowsOk) if (r.versao_programacao) versoesImportadas.add(r.versao_programacao);
 
         let inserted = 0;
         let duplicadas = 0;
@@ -211,6 +223,7 @@ function ImportTxtEasyBusPage() {
         }
 
         const allErrors = [
+          ...avisoAcesso,
           ...errors,
           ...insertErrors.map((m, idx) => ({ line: -1 - idx, reason: m })),
         ];
@@ -232,6 +245,7 @@ function ImportTxtEasyBusPage() {
         if (insertErrors.length) toast.error(`${file.name}: ${insertErrors.length} erro(s) ao salvar`);
         else if (duplicadas) toast.success(`${file.name}: ${inserted} novo(s), ${duplicadas} duplicada(s) ignorada(s)`);
         else toast.success(`${file.name}: ${inserted} registro(s) importado(s)`);
+        if (foraDoAcesso.length) toast.warning(`${file.name}: ${foraDoAcesso.length} viagem(ns) fora do seu Grupo/Empresa não importada(s) — veja o relatório.`);
 
       } catch (e: any) {
         newReports.push({ name: file.name, rows: 0, inserted: 0, errors: [{ line: 0, reason: e?.message ?? "Falha ao ler arquivo" }], status: "error" });
@@ -243,7 +257,7 @@ function ImportTxtEasyBusPage() {
       try {
         let total = 0;
         for (const v of versoesImportadas) {
-          const { count } = await ativarVersao(v);
+          const { count } = await ativarVersao(v, acesso.podeLinha);
           total += count;
         }
         if (total) toast.success(`${total} combinação(ões) linha/dia marcadas como ativas`);
@@ -313,6 +327,7 @@ function ImportTxtEasyBusPage() {
   const diasCustomizados = diasCadastrados.filter((d) => !DIAS_TIPO_BASE.includes(d));
 
   async function renomearDiaTipo(nomeAntigo: string, nomeNovo: string) {
+    if (acesso.restrito) { toast.error(MSG_SEM_ACESSO); return; }
     const novo = nomeNovo.trim();
     if (!novo || novo === nomeAntigo) return;
     const { error: e1 } = await (supabase as any).from("parametro_multilinha").update({ tipo_dia: novo }).eq("tipo_dia", nomeAntigo);
@@ -328,6 +343,7 @@ function ImportTxtEasyBusPage() {
   }
 
   async function excluirDiaTipo(nome: string) {
+    if (acesso.restrito) { toast.error(MSG_SEM_ACESSO); return; }
     const { error } = await (supabase as any).from("parametro_multilinha").delete().eq("tipo_dia", nome);
     if (error) { toast.error(`Falha ao excluir: ${error.message}`); return; }
     toast.success(`"${nome}" removido do cadastro de grupos. Viagens já importadas com esse dia tipo continuam como estão.`);
@@ -367,7 +383,11 @@ function ImportTxtEasyBusPage() {
               <label className="text-xs font-medium text-muted-foreground">
                 Dia tipo deste arquivo <span className="text-destructive">*</span>
               </label>
-              {diasCustomizados.length > 0 && (
+              {/* Renomear/excluir dia tipo vale pra TODOS os grupos (o cadastro
+                  de grupos é compartilhado, e as viagens dos outros grupos o
+                  usuário restrito nem enxerga pra renomear junto) — só pra
+                  quem não tem acesso restrito. */}
+              {diasCustomizados.length > 0 && !acesso.restrito && (
                 <button
                   type="button"
                   onClick={() => setShowGerenciar(true)}

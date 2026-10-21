@@ -6,6 +6,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchProjetosAtivos, ativarProjeto, desativarProjeto } from "@/lib/projeto-ativo";
 import { fetchAllPaginado } from "@/lib/fetch-paginado";
+import { useAcessoDados } from "@/lib/acesso";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -40,6 +41,7 @@ export function AtivosManager() {
   const combosQ = useQuery({ queryKey: ["ativos-combos"], queryFn: fetchCombos });
   const ativosQ = useQuery({ queryKey: ["projetos-ativos"], queryFn: fetchProjetosAtivos });
   const [q, setQ] = useState("");
+  const acesso = useAcessoDados();
 
   const ativosMap = useMemo(() => {
     const m = new Map<string, string>();
@@ -57,10 +59,10 @@ export function AtivosManager() {
   async function onChangeAtivo(r: Row, versao: string) {
     try {
       if (versao === "__none") {
-        await desativarProjeto(r.linha, r.tipo_operacao);
+        await desativarProjeto(r.linha, r.tipo_operacao, acesso.podeLinha);
         toast.success(`${r.linha} / ${r.tipo_operacao}: sem projeto ativo`);
       } else {
-        await ativarProjeto(r.linha, r.tipo_operacao, versao);
+        await ativarProjeto(r.linha, r.tipo_operacao, versao, acesso.podeLinha);
         toast.success(`${r.linha} / ${r.tipo_operacao}: ativado ${versao}`);
       }
       qc.invalidateQueries({ queryKey: ["projetos-ativos"] });
@@ -104,7 +106,7 @@ export function AtivosManager() {
                     <TableCell>{r.tipo_operacao}</TableCell>
                     <TableCell><Badge variant="outline">{r.versoes.length}</Badge></TableCell>
                     <TableCell>
-                      <Select value={atual} onValueChange={(v) => onChangeAtivo(r, v)}>
+                      <Select value={atual} onValueChange={(v) => onChangeAtivo(r, v)} disabled={acesso.carregando || !acesso.podeLinha(r.linha)}>
                         <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="—" /></SelectTrigger>
                         <SelectContent>
                           <SelectItem value="__none">— sem ativo —</SelectItem>
@@ -113,7 +115,7 @@ export function AtivosManager() {
                       </Select>
                     </TableCell>
                     <TableCell>
-                      {atual !== "__none" && (
+                      {atual !== "__none" && !acesso.carregando && acesso.podeLinha(r.linha) && (
                         <Button size="sm" variant="ghost" onClick={() => onChangeAtivo(r, "__none")} title="Desativar">
                           <X className="h-4 w-4" />
                         </Button>

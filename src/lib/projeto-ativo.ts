@@ -28,8 +28,16 @@ function escapeIlike(s: string): string {
  *  upsert desativa qualquer versão anterior para a mesma combinação.
  *  Se a linha pertence a um grupo (parametro_multilinha) para o mesmo tipo_operacao,
  *  ativa a mesma versão para todas as linhas do grupo. */
-export async function ativarProjeto(linha: string, tipo_operacao: string, versao_programacao: string) {
-  const linhas = await linhasDoGrupo(linha, tipo_operacao);
+export async function ativarProjeto(
+  linha: string,
+  tipo_operacao: string,
+  versao_programacao: string,
+  podeLinha: (l: string) => boolean = () => true,
+) {
+  if (!podeLinha(linha)) throw new Error(`Sem acesso à linha ${linha} (acesso restrito por Grupo/Empresa).`);
+  // Usuário com acesso restrito não propaga pra linhas irmãs de outro
+  // grupo/empresa — `projeto_ativo` é compartilhada entre todos os grupos.
+  const linhas = (await linhasDoGrupo(linha, tipo_operacao)).filter(podeLinha);
   const payload = linhas.map((l) => ({ linha: l, tipo_operacao, versao_programacao }));
   const { error } = await supabase
     .from("projeto_ativo")
@@ -64,7 +72,7 @@ async function linhasDoGrupo(linha: string, tipo_operacao: string): Promise<stri
 /** Ativa em lote todos os (linha, tipo_operacao) presentes na versão indicada,
  *  substituindo qualquer ativação anterior dessas combinações. Também propaga
  *  para as linhas do mesmo grupo (parametro_multilinha), igual ao ativarProjeto. */
-export async function ativarVersao(versao_programacao: string) {
+export async function ativarVersao(versao_programacao: string, podeLinha: (l: string) => boolean = () => true) {
   const { data, error } = await (supabase as any)
     .from("viagens")
     .select("linha,tipo_operacao")
@@ -86,6 +94,7 @@ export async function ativarVersao(versao_programacao: string) {
   for (const c of combos) {
     const linhasGrupo = await linhasDoGrupo(c.linha, c.tipo_operacao);
     for (const l of linhasGrupo) {
+      if (!podeLinha(l)) continue;
       const key = `${l}||${c.tipo_operacao}`;
       if (payloadSet.has(key)) continue;
       payloadSet.add(key);
@@ -103,7 +112,8 @@ export async function ativarVersao(versao_programacao: string) {
   return { count: payload.length };
 }
 
-export async function desativarProjeto(linha: string, tipo_operacao: string) {
+export async function desativarProjeto(linha: string, tipo_operacao: string, podeLinha: (l: string) => boolean = () => true) {
+  if (!podeLinha(linha)) throw new Error(`Sem acesso à linha ${linha} (acesso restrito por Grupo/Empresa).`);
   const { error } = await supabase
     .from("projeto_ativo")
     .delete()

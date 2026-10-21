@@ -58,6 +58,10 @@ export type CrudTableProps = {
    *  buscam via fetchAllViagens). Sem isso, editar/excluir aqui não refletia
    *  nos relatórios até o staleTime (120min) vencer ou um reload manual. */
   extraInvalidateKeys?: string[];
+  /** Motivo pra NÃO deixar gravar um registro (ex.: acesso restrito por
+   *  Grupo/Empresa) — null = pode. Checado no registro atual (editar/
+   *  excluir) e no que vai ser gravado (editar/incluir). */
+  motivoBloqueio?: (row: Row) => string | null;
 };
 
 type Row = Record<string, any>;
@@ -74,6 +78,7 @@ export function CrudTable({
   toolbarExtras,
   clientFilter,
   extraInvalidateKeys = [],
+  motivoBloqueio,
 }: CrudTableProps) {
   const qc = useQueryClient();
   function invalidateAll() {
@@ -200,6 +205,8 @@ export function CrudTable({
     const payload = toPayload(editing);
     const id = editing.__pk;
     const before = rows.find((r) => String(r[pk]) === String(id));
+    const bloqueio = (before && motivoBloqueio?.(before)) || motivoBloqueio?.(payload);
+    if (bloqueio) { setSaving(false); toast.error(bloqueio); return; }
     const { error } = await (supabase as any).from(table).update(payload).eq(pk, id);
     setSaving(false);
     if (error) { toast.error("Erro ao salvar: " + error.message); return; }
@@ -215,6 +222,8 @@ export function CrudTable({
     if (err) { toast.error(err); return; }
     setSaving(true);
     const payload = toPayload(creating);
+    const bloqueio = motivoBloqueio?.(payload);
+    if (bloqueio) { setSaving(false); toast.error(bloqueio); return; }
     const { data: inserted, error } = await (supabase as any).from(table).insert(payload).select().maybeSingle();
     setSaving(false);
     if (error) { toast.error("Erro ao incluir: " + error.message); return; }
@@ -229,6 +238,13 @@ export function CrudTable({
     setSaving(true);
     const ids = confirmDelete.ids;
     const beforeRows = rows.filter((r) => ids.includes(String(r[pk])));
+    const bloqueados = motivoBloqueio ? beforeRows.map((r) => motivoBloqueio(r)).filter(Boolean) : [];
+    if (bloqueados.length) {
+      setSaving(false);
+      setConfirmDelete(null);
+      toast.error(`${bloqueados.length} registro(s) sem acesso pra excluir — ${bloqueados[0]}`);
+      return;
+    }
     // Exclusão em lotes — evita "failed to fetch" quando há milhares de IDs
     const BATCH = 500;
     let deleted = 0;
@@ -375,6 +391,7 @@ export function CrudTable({
                       }}
                       onEdit={() => setEditing({ ...r, __pk: id })}
                       onDelete={() => setConfirmDelete({ ids: [id] })}
+                      bloqueado={!!motivoBloqueio?.(r)}
                     />
                   );
                 })}
@@ -468,10 +485,10 @@ export function CrudTable({
 }
 
 const RowItem = memo(function RowItem({
-  row, id, columns, isChecked, onToggle, onEdit, onDelete,
+  row, id, columns, isChecked, onToggle, onEdit, onDelete, bloqueado,
 }: {
   row: Row; id: string; columns: ColumnDef[]; isChecked: boolean;
-  onToggle: () => void; onEdit: () => void; onDelete: () => void;
+  onToggle: () => void; onEdit: () => void; onDelete: () => void; bloqueado?: boolean;
 }) {
   return (
     <tr className="border-t border-border hover:bg-muted/40">
@@ -488,10 +505,10 @@ const RowItem = memo(function RowItem({
         );
       })}
       <td className="p-2.5 text-right whitespace-nowrap">
-        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onEdit} aria-label="Editar">
+        <Button variant="ghost" size="icon" className="h-7 w-7" onClick={onEdit} disabled={bloqueado} aria-label="Editar">
           <Pencil className="h-3.5 w-3.5" />
         </Button>
-        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={onDelete} aria-label="Excluir">
+        <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive" onClick={onDelete} disabled={bloqueado} aria-label="Excluir">
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </td>

@@ -40,6 +40,7 @@ import {
 } from "@/components/ui/table";
 import { MultiSelect } from "@/components/multi-select";
 import { useAuditView } from "@/lib/use-audit-view";
+import { useAcessoDados, cadastroParaOpcoes } from "@/lib/acesso";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { Table2, FileSpreadsheet, FileText, Sparkles, AlertTriangle } from "lucide-react";
 import * as XLSX from "xlsx-js-style";
@@ -360,6 +361,9 @@ function QuadroHorarioPage() {
   const viagens = viagensQ.data ?? [];
   const linhas = linhasQ.data ?? [];
   const empresaEstacao = empresaEstacaoQ.data ?? [];
+  // Opções de filtro sem valores de outro Grupo/Empresa (acesso restrito).
+  const acesso = useAcessoDados();
+  const cad = useMemo(() => cadastroParaOpcoes(acesso, linhas, empresaEstacao, [] as { linha: string }[]), [acesso, linhas, empresaEstacao]);
   const loading = viagensQ.isLoading;
 
   const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
@@ -382,24 +386,24 @@ function QuadroHorarioPage() {
       versao: Array.from(
         new Set(viagens.map((v) => v.versao_programacao).filter(Boolean) as string[]),
       ).sort(),
-      unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
+      unidade: Array.from(new Set(cad.linhasDonas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
       categoriaLinha: Array.from(
-        new Set(linhas.map((l) => l.categoria).filter(Boolean) as string[]),
+        new Set(cad.linhas.map((l) => l.categoria).filter(Boolean) as string[]),
       ).sort(),
       grupo: Array.from(
         new Set([
-          ...(linhas.map((l) => l.ordem).filter(Boolean) as string[]),
-          ...(empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[]),
+          ...(cad.linhasDonas.map((l) => l.ordem).filter(Boolean) as string[]),
+          ...(cad.empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[]),
         ]),
       ).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
       empresa: Array.from(
         new Set([
-          ...(linhas.map((l) => l.empresa).filter(Boolean) as string[]),
-          ...(empresaEstacao.map((e) => e.empresa).filter(Boolean) as string[]),
+          ...(cad.linhasDonas.map((l) => l.empresa).filter(Boolean) as string[]),
+          ...(cad.empresaEstacao.map((e) => e.empresa).filter(Boolean) as string[]),
         ]),
       ).sort(),
     }),
-    [viagens, linhas, empresaEstacao],
+    [viagens, linhas, empresaEstacao, cad],
   );
 
   function aplicarFiltros() {

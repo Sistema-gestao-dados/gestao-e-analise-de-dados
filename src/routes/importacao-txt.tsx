@@ -15,6 +15,7 @@ import { Link } from "@tanstack/react-router";
 import { logAudit } from "@/lib/audit";
 import { DiaTipoMapper, detectarNovosDiasTipo, aplicarHerancaConhecida, type DiaTipoNovo } from "@/components/dia-tipo-mapper";
 import { ativarVersao } from "@/lib/projeto-ativo";
+import { useAcessoDados } from "@/lib/acesso";
 import { useAuditView } from "@/lib/use-audit-view";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 
@@ -38,6 +39,7 @@ function ImportTxtPage() {
   useAuditView("importacao_txt");
   const ref = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
+  const acesso = useAcessoDados();
   const [busy, setBusy] = useState(false);
   const [reports, setReports] = useState<FileReport[]>([]);
   const [marcarAtivo, setMarcarAtivo] = usePersistentState("importacao.marcarAtivo", false);
@@ -87,6 +89,7 @@ function ImportTxtPage() {
   }
 
   async function handleFiles(files: FileList) {
+    if (acesso.carregando) { toast.error("Ainda carregando o cadastro de linhas — aguarde um instante e tente de novo."); return; }
     if (sobrescreverDiaTipo && !diaTipoEfetivo) {
       toast.error(criandoNovo ? "Digite o nome do novo dia tipo" : "Escolha um dia tipo, ou desligue \"Sobrescrever\"");
       return;
@@ -102,9 +105,18 @@ function ImportTxtPage() {
         if (sobrescreverDiaTipo && diaTipoEfetivo) {
           for (const r of rows) r.tipo_operacao = diaTipoEfetivo;
         }
-        const payload = rows.map((r) => ({ ...r, arquivo: file.name }));
-        parsedAll.push(...rows.map((r) => ({ linha: r.linha, tipo_operacao: r.tipo_operacao })));
-        for (const r of rows) if (r.versao_programacao) versoesImportadas.add(r.versao_programacao);
+        // Acesso restrito por Grupo/Empresa: viagem de linha fora do acesso
+        // do usuário o banco recusa (política de `viagens`) — e recusa o LOTE
+        // inteiro de 500 junto, levando viagens válidas. Separa antes de
+        // gravar e lista no relatório o que ficou de fora.
+        const foraDoAcesso = rows.filter((r) => !acesso.podeViagem(r));
+        const rowsOk = foraDoAcesso.length ? rows.filter((r) => acesso.podeViagem(r)) : rows;
+        const avisoAcesso = foraDoAcesso.length
+          ? [{ line: 0, reason: `${foraDoAcesso.length} viagem(ns) fora do seu Grupo/Empresa não importada(s) — linha(s): ${Array.from(new Set(foraDoAcesso.map((r) => r.linha))).sort().join(", ")}` }]
+          : [];
+        const payload = rowsOk.map((r) => ({ ...r, arquivo: file.name }));
+        parsedAll.push(...rowsOk.map((r) => ({ linha: r.linha, tipo_operacao: r.tipo_operacao })));
+        for (const r of rowsOk) if (r.versao_programacao) versoesImportadas.add(r.versao_programacao);
         let inserted = 0;
         let duplicadas = 0;
         const insertErrors: string[] = [];
@@ -125,6 +137,7 @@ function ImportTxtPage() {
         }
 
         const allErrors = [
+          ...avisoAcesso,
           ...errors,
           ...insertErrors.map((m, idx) => ({ line: -1 - idx, reason: m })),
         ];
@@ -146,6 +159,7 @@ function ImportTxtPage() {
         if (insertErrors.length) toast.error(`${file.name}: ${insertErrors.length} erro(s) ao salvar`);
         else if (duplicadas) toast.success(`${file.name}: ${inserted} novo(s), ${duplicadas} duplicada(s) ignorada(s)`);
         else toast.success(`${file.name}: ${inserted} registro(s) importado(s)`);
+        if (foraDoAcesso.length) toast.warning(`${file.name}: ${foraDoAcesso.length} viagem(ns) fora do seu Grupo/Empresa não importada(s) — veja o relatório.`);
 
       } catch (e: any) {
         newReports.push({ name: file.name, rows: 0, inserted: 0, errors: [{ line: 0, reason: e?.message ?? "Falha ao ler arquivo" }], status: "error" });
@@ -157,7 +171,7 @@ function ImportTxtPage() {
       try {
         let total = 0;
         for (const v of versoesImportadas) {
-          const { count } = await ativarVersao(v);
+          const { count } = await ativarVersao(v, acesso.podeLinha);
           total += count;
         }
         if (total) toast.success(`${total} combinação(ões) linha/dia marcadas como ativas`);

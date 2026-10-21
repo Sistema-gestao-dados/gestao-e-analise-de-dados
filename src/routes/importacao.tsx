@@ -10,6 +10,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
 import { useAuditView } from "@/lib/use-audit-view";
+import { useAcessoDados, motivoBloqueioLinha } from "@/lib/acesso";
 import { fetchLinhas, fetchKm, fetchMulti } from "@/lib/data";
 import { fetchSiglasEstacao } from "@/lib/siglas-estacao";
 import { exportTemplateUnificado, importTemplateUnificado, type ImportReportGeral } from "@/lib/cadastro-unificado";
@@ -88,6 +89,7 @@ function ImportacaoPage() {
 function UnifiedImportCard() {
   const ref = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
+  const acesso = useAcessoDados();
   const [state, setState] = useState<"idle" | "processing" | "done" | "error">("idle");
   const [report, setReport] = useState<ImportReportGeral | null>(null);
 
@@ -110,10 +112,11 @@ function UnifiedImportCard() {
   }
 
   async function handleFile(file: File) {
+    if (acesso.carregando) { toast.error("Ainda carregando o cadastro — aguarde um instante e tente de novo."); return; }
     setState("processing");
     setReport(null);
     try {
-      const rep = await importTemplateUnificado(file);
+      const rep = await importTemplateUnificado(file, acesso);
       setReport(rep);
       setState(rep.totalErrors ? "error" : "done");
 
@@ -215,10 +218,13 @@ function UploadCard({ tipo }: { tipo: Tipo }) {
   const schema = SCHEMAS[tipo];
   const ref = useRef<HTMLInputElement>(null);
   const qc = useQueryClient();
+  const acesso = useAcessoDados();
+  const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
   const [state, setState] = useState<"idle" | "parsing" | "saving" | "done" | "error">("idle");
   const [report, setReport] = useState<{ inserted: number; updated: number; errors: string[]; rows: number } | null>(null);
 
   async function handleFile(file: File) {
+    if (acesso.carregando || (acesso.restrito && linhasQ.isLoading)) { toast.error("Ainda carregando o cadastro — aguarde um instante e tente de novo."); return; }
     setState("parsing");
     setReport(null);
     Papa.parse(file, {
@@ -251,7 +257,16 @@ function UploadCard({ tipo }: { tipo: Tipo }) {
           if (byKey.has(k)) duplicateKeys.add(k);
           byKey.set(k, r); // last occurrence wins
         });
-        const rows = Array.from(byKey.values());
+        // Usuário com acesso restrito só grava linhas do próprio Grupo/Empresa
+        // (cadastro é compartilhado entre todos os grupos).
+        const linhasAtuais = new Map((linhasQ.data ?? []).map((l) => [l.linha, l]));
+        const rows = Array.from(byKey.values()).filter((r) => {
+          const motivo = tipo === "linha"
+            ? motivoBloqueioLinha(acesso, r.linha, linhasAtuais.get(r.linha), r)
+            : acesso.podeLinha(r.linha) ? null : `Linha ${r.linha}: pertence a outro Grupo/Empresa.`;
+          if (motivo) errors.push(motivo);
+          return !motivo;
+        });
         if (duplicateKeys.size) {
           errors.push(
             `${duplicateKeys.size} chave(s) duplicada(s) no arquivo (mantido o último valor de cada): ${Array.from(duplicateKeys).slice(0, 10).join(" | ")}${duplicateKeys.size > 10 ? "..." : ""}`

@@ -32,6 +32,7 @@ import autoTable from "jspdf-autotable";
 import { PdfPreviewDialog, type PdfOrientation } from "@/components/pdf-preview-dialog";
 import { logAudit } from "@/lib/audit";
 import { useAuditView } from "@/lib/use-audit-view";
+import { useAcessoDados, cadastroParaOpcoes } from "@/lib/acesso";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { PDF_BLUE, PDF_BLUE_LIGHT, PDF_LINE_BLUE, XLSX_BLUE, XLSX_BLUE_LIGHT, XLSX_LINE_BLUE } from "@/lib/report-style";
 
@@ -118,6 +119,9 @@ export function ResumoView({ mode }: { mode: Mode }) {
   const km = kmQ.data ?? [];
   const multi = multiQ.data ?? [];
   const empresaEstacao = empresaEstacaoQ.data ?? [];
+  // Opções de filtro sem valores de outro Grupo/Empresa (acesso restrito).
+  const acesso = useAcessoDados();
+  const cad = useMemo(() => cadastroParaOpcoes(acesso, linhas, empresaEstacao, multi), [acesso, linhas, empresaEstacao, multi]);
 
   const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
   const empresaOverrideMap = useMemo(() => buildEmpresaOverrideMap(empresaEstacao), [empresaEstacao]);
@@ -182,18 +186,18 @@ export function ResumoView({ mode }: { mode: Mode }) {
       destino: set((v) => v.destino),
       faixa: Array.from({ length: 24 }, (_, h) => String(h).padStart(2, "0")),
       empresa: Array.from(new Set([
-        ...linhas.map((l) => l.empresa).filter(Boolean) as string[],
-        ...empresaEstacao.map((e) => e.empresa).filter(Boolean),
+        ...cad.linhasDonas.map((l) => l.empresa).filter(Boolean) as string[],
+        ...cad.empresaEstacao.map((e) => e.empresa).filter(Boolean),
       ])).sort(),
-      unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
+      unidade: Array.from(new Set(cad.linhasDonas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
       grupoOrdem: Array.from(new Set([
-        ...linhas.map((l) => l.ordem).filter(Boolean) as string[],
-        ...empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[],
+        ...cad.linhasDonas.map((l) => l.ordem).filter(Boolean) as string[],
+        ...cad.empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[],
       ])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
-      categoria: Array.from(new Set(linhas.map((l) => l.categoria).filter(Boolean) as string[])).sort(),
-      grupo: Array.from(new Set(multi.map((m) => m.grupo_du).filter(Boolean))).sort(),
+      categoria: Array.from(new Set(cad.linhas.map((l) => l.categoria).filter(Boolean) as string[])).sort(),
+      grupo: Array.from(new Set(cad.multi.map((m) => m.grupo_du).filter(Boolean))).sort(),
     };
-  }, [viagens, linhas, multi, empresaEstacao]);
+  }, [viagens, linhas, multi, empresaEstacao, cad]);
 
   const linhaSet = useMemo(() => new Set(S.linha), [S.linha]);
 

@@ -20,6 +20,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MultiSelect } from "@/components/multi-select";
 import { useAuditView } from "@/lib/use-audit-view";
+import { useAcessoDados, cadastroParaOpcoes } from "@/lib/acesso";
 import { AlertTriangle, AlertCircle, CheckCircle2, Timer, ArrowLeft } from "lucide-react";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 
@@ -87,6 +88,9 @@ function IntraJornadaPage() {
   const viagensRaw = viagensQ.data ?? [];
   const linhas = linhasQ.data ?? [];
   const empresaEstacao = empresaEstacaoQ.data ?? [];
+  // Opções de filtro sem valores de outro Grupo/Empresa (acesso restrito).
+  const acesso = useAcessoDados();
+  const cad = useMemo(() => cadastroParaOpcoes(acesso, linhas, empresaEstacao, [] as { linha: string }[]), [acesso, linhas, empresaEstacao]);
   const ativos = ativosQ.data ?? [];
   const viagens = useMemo(
     () => (somenteAtivos ? filterViagensAtivas(viagensRaw, ativos) : viagensRaw),
@@ -100,12 +104,12 @@ function IntraJornadaPage() {
     dia: Array.from(new Set(viagens.map((v) => v.tipo_operacao).filter(Boolean) as string[])).sort(),
     versao: Array.from(new Set(viagens.map((v) => v.versao_programacao).filter(Boolean) as string[])).sort(),
     linha: Array.from(new Set(viagens.map((v) => v.linha).filter(Boolean))).sort(),
-    unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
+    unidade: Array.from(new Set(cad.linhasDonas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
     grupoOrdem: Array.from(new Set([
-      ...linhas.map((l) => l.ordem).filter(Boolean) as string[],
-      ...empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[],
+      ...cad.linhasDonas.map((l) => l.ordem).filter(Boolean) as string[],
+      ...cad.empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[],
     ])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
-  }), [viagens, linhas, empresaEstacao]);
+  }), [viagens, linhas, empresaEstacao, cad]);
 
   const filtered = useMemo(() => {
     if (!applied) return [];

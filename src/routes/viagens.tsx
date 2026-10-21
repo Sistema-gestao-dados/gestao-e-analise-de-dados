@@ -14,6 +14,7 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { logAudit } from "@/lib/audit";
 import { useAuditView } from "@/lib/use-audit-view";
+import { useAcessoDados, cadastroParaOpcoes } from "@/lib/acesso";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 
 export const Route = createFileRoute("/viagens")({
@@ -73,15 +74,18 @@ function ViagensPage() {
   const empresaEstacaoQ = useQuery({ queryKey: ["empresa-estacao"], queryFn: fetchEmpresaEstacao });
   const linhas = linhasQ.data ?? [];
   const empresaEstacao = empresaEstacaoQ.data ?? [];
+  // Opções de filtro sem valores de outro Grupo/Empresa (acesso restrito).
+  const acesso = useAcessoDados();
+  const cad = useMemo(() => cadastroParaOpcoes(acesso, linhas, empresaEstacao, [] as { linha: string }[]), [acesso, linhas, empresaEstacao]);
   const linhaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l])), [linhas]);
   const empresaOverrideMap = useMemo(() => buildEmpresaOverrideMap(empresaEstacao), [empresaEstacao]);
   const opts = useMemo(() => ({
-    unidade: Array.from(new Set(linhas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
+    unidade: Array.from(new Set(cad.linhasDonas.map((l) => l.unidade).filter(Boolean) as string[])).sort(),
     grupo: Array.from(new Set([
-      ...linhas.map((l) => l.ordem).filter(Boolean) as string[],
-      ...empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[],
+      ...cad.linhasDonas.map((l) => l.ordem).filter(Boolean) as string[],
+      ...cad.empresaEstacao.map((e) => e.grupo).filter(Boolean) as string[],
     ])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
-  }), [linhas, empresaEstacao]);
+  }), [linhas, empresaEstacao, cad]);
 
   // Dia Tipo, Versão e Arquivo saem das MESMAS linhas que a tabela já
   // carregou (CrudTable passa `rows` pra `options`) — o que o usuário vê na
@@ -97,7 +101,7 @@ function ViagensPage() {
     );
 
   const filters = useMemo(() => [
-    { key: "linha", label: "Linha", options: () => (linhasQ.data ?? []).map((l) => l.linha).sort() },
+    { key: "linha", label: "Linha", options: distintos("linha") },
     { key: "tipo_operacao", label: "Dia Tipo", options: distintos("tipo_operacao") },
     { key: "tipo_servico", label: "Tipo Serv.", options: () => ["TU", "DIR"] },
     { key: "versao_programacao", label: "Versão", options: distintos("versao_programacao") },
@@ -105,7 +109,7 @@ function ViagensPage() {
     { key: "categoria_movimento", label: "Categoria", options: () => ["Deslocamento", "Viagem"] },
     { key: "sentido", label: "Sentido", options: () => ["Ida", "Volta"] },
     { key: "arquivo", label: "Arquivo", options: distintos("arquivo") },
-  ], [linhasQ.data]);
+  ], []);
 
   // Chaves ativas: "linha||tipo_operacao" -> versao_programacao
   const ativosKey = useMemo(() => {

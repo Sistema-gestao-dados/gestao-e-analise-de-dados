@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CrudTable } from "@/components/crud-table";
 import { fetchLinhas } from "@/lib/data";
 import { useAuditView } from "@/lib/use-audit-view";
+import { useAcessoDados, MSG_SEM_ACESSO } from "@/lib/acesso";
 
 export const Route = createFileRoute("/cadastro-km")({
   head: () => ({ meta: [{ title: "Cadastro de KM — Gestão e Análise de Dados" }] }),
@@ -13,6 +14,14 @@ function KmCadastro() {
   useAuditView("cadastro_km");
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
   const linhas = linhasQ.data ?? [];
+  const acesso = useAcessoDados();
+  // Usuário com acesso restrito só grava registros de linha do próprio
+  // Grupo/Empresa (o cadastro é compartilhado entre todos os grupos).
+  const motivoBloqueio = (r: Record<string, any>) => {
+    if (!acesso.restrito) return null;
+    if (acesso.carregando) return "Ainda carregando o cadastro — aguarde um instante.";
+    return acesso.podeLinha(r.linha) ? null : `Linha ${r.linha ?? "—"}: pertence a outro Grupo/Empresa. ${MSG_SEM_ACESSO}`;
+  };
 
   return (
     <CrudTable
@@ -20,6 +29,7 @@ function KmCadastro() {
       description="Origem, destino, quilometragem e descrição/itinerário de cada trecho operacional."
       table="parametro_km"
       pk="id"
+      motivoBloqueio={motivoBloqueio}
       queryKey="km"
       filters={[
         { key: "linha", label: "Linha", options: () => Array.from(new Set(linhas.map((l) => l.linha))).sort() },

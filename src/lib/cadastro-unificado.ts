@@ -5,6 +5,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
 import type { Linha, ParametroKm, ParametroMulti } from "@/lib/data";
 import type { SiglaEstacao } from "@/lib/siglas-estacao";
+import { ACESSO_LIVRE, MSG_SEM_ACESSO, motivoBloqueioLinha, type AcessoDados } from "@/lib/acesso";
 
 const HEADERS_LINHAS = [
   "linha", "empresa", "unidade", "grupo", "categoria",
@@ -157,11 +158,12 @@ function numOrZero(v: any): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-async function importLinhasSheet(rows: Record<string, any>[]): Promise<ImportReport> {
+async function importLinhasSheet(rows: Record<string, any>[], acesso: AcessoDados, aceitas: Set<string>): Promise<ImportReport> {
   const errors: string[] = [];
   const payload: any[] = [];
-  const existentesRes = await supabase.from("linhas").select("linha");
-  const existentes = new Set(((existentesRes.data ?? []) as any[]).map((l) => l.linha));
+  const existentesRes = await supabase.from("linhas").select("linha,ordem,empresa");
+  const existentesMap = new Map(((existentesRes.data ?? []) as any[]).map((l) => [l.linha as string, l as { ordem: string | null; empresa: string | null }]));
+  const existentes = new Set(existentesMap.keys());
   let inserted = 0, updated = 0;
 
   for (let i = 0; i < rows.length; i++) {
@@ -182,6 +184,9 @@ async function importLinhasSheet(rows: Record<string, any>[]): Promise<ImportRep
       antec_t3: numOrZero(r.antec_t3), prest_t3: numOrZero(r.prest_t3),
       updated_at: new Date().toISOString(),
     };
+    const bloqueio = motivoBloqueioLinha(acesso, linha, existentesMap.get(linha), item);
+    if (bloqueio) { errors.push(bloqueio); continue; }
+    aceitas.add(linha);
     if (existentes.has(linha)) updated++; else inserted++;
     payload.push(item);
   }
@@ -196,7 +201,7 @@ async function importLinhasSheet(rows: Record<string, any>[]): Promise<ImportRep
   return { sheet: "Linhas", total: payload.length, inserted, updated, errors };
 }
 
-async function importKmSheet(rows: Record<string, any>[]): Promise<ImportReport> {
+async function importKmSheet(rows: Record<string, any>[], podeLinha: (l: string) => boolean): Promise<ImportReport> {
   const errors: string[] = [];
   const payload: any[] = [];
 
@@ -206,6 +211,7 @@ async function importKmSheet(rows: Record<string, any>[]): Promise<ImportReport>
     const origem = String(r.origem ?? "").trim();
     const destino = String(r.destino ?? "").trim();
     if (!linha || !origem || !destino) continue;
+    if (!podeLinha(linha)) { errors.push(`KM da linha ${linha}: pertence a outro Grupo/Empresa.`); continue; }
     payload.push({
       linha, origem, destino,
       km: numOrZero(r.km),
@@ -238,7 +244,7 @@ async function importKmSheet(rows: Record<string, any>[]): Promise<ImportReport>
   return { sheet: "KM", total: rows2.length, inserted, updated, errors };
 }
 
-async function importGruposSheet(rows: Record<string, any>[]): Promise<ImportReport> {
+async function importGruposSheet(rows: Record<string, any>[], podeLinha: (l: string) => boolean): Promise<ImportReport> {
   const errors: string[] = [];
   const payload: any[] = [];
 
@@ -248,6 +254,7 @@ async function importGruposSheet(rows: Record<string, any>[]): Promise<ImportRep
     const grupo_du = String(r.grupo_du ?? "").trim();
     const tipo_dia = String(r.tipo_dia ?? "").trim();
     if (!linha || !grupo_du || !tipo_dia) continue;
+    if (!podeLinha(linha)) { errors.push(`Grupo da linha ${linha}: pertence a outro Grupo/Empresa.`); continue; }
     payload.push({ linha, grupo_du, tipo_dia });
   }
 
@@ -332,34 +339,45 @@ async function importSiglasSheet(rows: Record<string, any>[]): Promise<ImportRep
   return { sheet: "Siglas", total: rows2.length, inserted, updated, errors };
 }
 
-export async function importTemplateUnificado(file: File): Promise<ImportReportGeral> {
+export async function importTemplateUnificado(file: File, acesso: AcessoDados = ACESSO_LIVRE): Promise<ImportReportGeral> {
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array" });
 
   const sheets: ImportReport[] = [];
+  // Linhas aceitas na aba Linhas desse mesmo arquivo — KM/Grupos de uma
+  // linha nova criada aqui também valem, mesmo antes do cache saber dela.
+  const aceitas = new Set<string>();
+  const podeLinha = (l: string) => acesso.podeLinha(l) || aceitas.has(l);
 
   const wsLinhas = wb.Sheets["Linhas"];
   if (wsLinhas) {
     const rows = XLSX.utils.sheet_to_json<Record<string, any>>(wsLinhas, { defval: "" });
-    sheets.push(await importLinhasSheet(rows));
+    sheets.push(await importLinhasSheet(rows, acesso, aceitas));
   }
 
   const wsKm = wb.Sheets["KM"];
   if (wsKm) {
     const rows = XLSX.utils.sheet_to_json<Record<string, any>>(wsKm, { defval: "" });
-    sheets.push(await importKmSheet(rows));
+    sheets.push(await importKmSheet(rows, podeLinha));
   }
 
   const wsGrupos = wb.Sheets["Grupos"];
   if (wsGrupos) {
     const rows = XLSX.utils.sheet_to_json<Record<string, any>>(wsGrupos, { defval: "" });
-    sheets.push(await importGruposSheet(rows));
+    sheets.push(await importGruposSheet(rows, podeLinha));
   }
 
   const wsSiglas = wb.Sheets["Siglas"];
   if (wsSiglas) {
     const rows = XLSX.utils.sheet_to_json<Record<string, any>>(wsSiglas, { defval: "" });
-    sheets.push(await importSiglasSheet(rows));
+    // Siglas são um cadastro único de estações, sem dono por Grupo/Empresa —
+    // usuário restrito não grava (alteraria o nome da estação pra todo mundo).
+    if (acesso.restrito) {
+      const preenchidas = rows.filter((r) => String(r.sigla ?? "").trim()).length;
+      if (preenchidas) sheets.push({ sheet: "Siglas", total: preenchidas, inserted: 0, updated: 0, errors: [`Siglas: ${MSG_SEM_ACESSO}`] });
+    } else {
+      sheets.push(await importSiglasSheet(rows));
+    }
   }
 
   if (!sheets.length) {

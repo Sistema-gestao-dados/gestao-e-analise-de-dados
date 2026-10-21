@@ -18,6 +18,7 @@ import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
 import { exportTemplate, importTemplate } from "@/lib/linhas-template";
 import { useAuditView } from "@/lib/use-audit-view";
+import { useAcessoDados, motivoBloqueioLinha } from "@/lib/acesso";
 
 export const Route = createFileRoute("/linhas")({
   head: () => ({
@@ -59,6 +60,7 @@ function LinhasPage() {
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
   const kmQ = useQuery({ queryKey: ["km"], queryFn: fetchKm });
   const multiQ = useQuery({ queryKey: ["multi"], queryFn: fetchMulti });
+  const acesso = useAcessoDados();
 
   const [q, setQ] = useState("");
   const [empresa, setEmpresa] = useState<string>("__all");
@@ -124,6 +126,8 @@ function LinhasPage() {
     if (!linha || !form) return;
     const err = validate();
     if (err) { toast.error(err); return; }
+    const bloqueio = motivoBloqueioLinha(acesso, linha.linha, linha, { ordem: form.ordem.trim() || null, empresa: form.empresa.trim() || null });
+    if (bloqueio) { toast.error(bloqueio); setConfirmSave(false); return; }
     setSaving(true);
     const payload = {
       empresa: form.empresa.trim() || null,
@@ -151,6 +155,14 @@ function LinhasPage() {
   async function doBulkDelete() {
     const ids = Array.from(checked);
     if (!ids.length) return;
+    // Apagar linha leva junto KM e Grupos dela — só linhas do próprio
+    // Grupo/Empresa pra usuário com acesso restrito.
+    const semAcesso = ids.filter((id) => !acesso.podeLinha(id));
+    if (semAcesso.length) {
+      toast.error(`Sem acesso pra excluir ${semAcesso.length} linha(s) de outro Grupo/Empresa: ${semAcesso.slice(0, 10).join(", ")}${semAcesso.length > 10 ? "…" : ""}`);
+      setConfirmDelete(false);
+      return;
+    }
     setSaving(true);
     const { error } = await supabase.from("linhas").delete().in("linha", ids);
     // also clean related rows
@@ -197,7 +209,7 @@ function LinhasPage() {
             onChange={async (e) => {
               const f = e.target.files?.[0]; if (!f) return;
               try {
-                const rep = await importTemplate(f);
+                const rep = await importTemplate(f, acesso);
                 toast.success(`Import: ${rep.inserted} novas, ${rep.updated} atualizadas${rep.errors.length ? `, ${rep.errors.length} erro(s)` : ""}`);
                 if (rep.errors.length) rep.errors.slice(0, 3).forEach((er) => toast.error(`Linha ${er.row}: ${er.reason}`));
                 void logAudit({ action: "import", entity: "linhas", details: rep });
@@ -307,7 +319,7 @@ function LinhasPage() {
                       <Button variant="outline" size="sm" disabled={!dirty || saving} onClick={() => setForm(toForm(linha))}>
                         <X className="h-4 w-4 mr-1.5" /> Cancelar
                       </Button>
-                      <Button size="sm" disabled={!dirty || saving} onClick={() => setConfirmSave(true)}>
+                      <Button size="sm" disabled={!dirty || saving || acesso.carregando} onClick={() => setConfirmSave(true)}>
                         <Save className="h-4 w-4 mr-1.5" /> {saving ? "Salvando..." : "Salvar"}
                       </Button>
                     </div>

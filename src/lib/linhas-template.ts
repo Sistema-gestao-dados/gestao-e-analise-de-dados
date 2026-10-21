@@ -4,6 +4,7 @@
 import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
 import type { Linha } from "@/lib/data";
+import { ACESSO_LIVRE, motivoBloqueioLinha, type AcessoDados } from "@/lib/acesso";
 
 const HEADERS = [
   "linha", "empresa", "unidade", "grupo", "categoria",
@@ -65,7 +66,7 @@ export type ImportReport = {
   errors: { row: number; reason: string }[];
 };
 
-export async function importTemplate(file: File): Promise<ImportReport> {
+export async function importTemplate(file: File, acesso: AcessoDados = ACESSO_LIVRE): Promise<ImportReport> {
   const buf = await file.arrayBuffer();
   const wb = XLSX.read(buf, { type: "array" });
   const ws = wb.Sheets["Linhas"] ?? wb.Sheets[wb.SheetNames[0]];
@@ -75,8 +76,9 @@ export async function importTemplate(file: File): Promise<ImportReport> {
   const errors: ImportReport["errors"] = [];
   const payload: any[] = [];
 
-  const existentesRes = await supabase.from("linhas").select("linha");
-  const existentes = new Set(((existentesRes.data ?? []) as any[]).map((l) => l.linha));
+  const existentesRes = await supabase.from("linhas").select("linha,ordem,empresa");
+  const existentesMap = new Map(((existentesRes.data ?? []) as any[]).map((l) => [l.linha as string, l as { ordem: string | null; empresa: string | null }]));
+  const existentes = new Set(existentesMap.keys());
   let inserted = 0, updated = 0;
 
   for (let i = 0; i < rows.length; i++) {
@@ -104,6 +106,8 @@ export async function importTemplate(file: File): Promise<ImportReport> {
       antec_t3: num("antec_t3"), prest_t3: num("prest_t3"),
       updated_at: new Date().toISOString(),
     };
+    const bloqueio = motivoBloqueioLinha(acesso, linha, existentesMap.get(linha), item);
+    if (bloqueio) { errors.push({ row: i + 2, reason: bloqueio }); continue; }
     if (existentes.has(linha)) updated++; else inserted++;
     payload.push(item);
   }
