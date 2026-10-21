@@ -214,6 +214,20 @@ sistema/banco por grupo — isolar dados dentro do mesmo sistema.
   virar problema, a forma certa de acelerar é descobrir os cursores de
   cada página de antemão (consulta leve, só a coluna de ordenação) e
   paralelizar os `.gt()` a partir daí — não voltar pro offset puro.
+- **Cadastros (21/out)**: `linhas`, `parametro_km`, `parametro_multilinha`
+  e `linha_empresa_estacao` também filtram por usuário restrito
+  (`supabase/migrations/20261021120000_isolamento_grupo_empresa_cadastros.sql`).
+  "Linha do usuário" = Grupo/Empresa próprios da linha OU exceção por
+  estação liberada (linha compartilhada). Mesmo padrão rápido: as listas do
+  usuário vêm de funções `acesso_*` (SECURITY DEFINER) chamadas 1x por
+  consulta via `(SELECT f())::text[]` — o cast é obrigatório, sem ele o
+  Postgres trata `ANY ((SELECT ...))` como subconsulta e dá erro de tipo.
+  Os gatilhos de `grupo_resolvido` viraram SECURITY DEFINER: com o cadastro
+  filtrado, rodando como o usuário eles deixariam de ver a exceção de
+  OUTRA empresa na mesma linha e gravariam a viagem no grupo errado.
+  Do lado do app, `src/lib/acesso.ts` repete a regra pra bloquear ações e
+  limpar opções de filtro antes de chegar no banco (`versão ativa` e
+  renomear/excluir dia tipo ainda dependem só dessa checagem do app).
 - **Fase 3 (pendente)**: Dia Tipo criado por um usuário restrito só
   aparece pra quem tem acesso ao mesmo grupo/empresa.
 
