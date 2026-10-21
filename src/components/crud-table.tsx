@@ -29,7 +29,9 @@ export type ColumnDef = {
   key: string;
   label: string;
   type?: "text" | "number" | "select";
-  options?: string[] | (() => string[]);
+  /** Função recebe as linhas já carregadas pela tabela (ex.: valores
+   *  distintos da coluna), igual a `filters`. */
+  options?: string[] | ((rows: Row[]) => string[]);
   required?: boolean;
   editable?: boolean;
   sortable?: boolean;
@@ -436,7 +438,7 @@ export function CrudTable({
             <DialogDescription>Atualize os campos e clique em salvar.</DialogDescription>
           </DialogHeader>
           {editing && (
-            <FormGrid form={editing} setForm={setEditing} columns={columns} mode="edit" />
+            <FormGrid form={editing} setForm={setEditing} columns={columns} mode="edit" rows={rows} />
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditing(null)}>Cancelar</Button>
@@ -453,7 +455,7 @@ export function CrudTable({
             <DialogDescription>Preencha os campos abaixo.</DialogDescription>
           </DialogHeader>
           {creating && (
-            <FormGrid form={creating} setForm={setCreating} columns={columns} mode="create" />
+            <FormGrid form={creating} setForm={setCreating} columns={columns} mode="create" rows={rows} />
           )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreating(null)}>Cancelar</Button>
@@ -517,15 +519,19 @@ const RowItem = memo(function RowItem({
 });
 
 function FormGrid({
-  form, setForm, columns, mode,
+  form, setForm, columns, mode, rows,
 }: {
-  form: Row; setForm: (r: Row) => void; columns: ColumnDef[]; mode: "edit" | "create";
+  form: Row; setForm: (r: Row) => void; columns: ColumnDef[]; mode: "edit" | "create"; rows: Row[];
 }) {
   return (
     <div className="grid gap-3 sm:grid-cols-2">
       {columns.map((c) => {
         const disabled = mode === "edit" && c.editable === false;
-        const options = typeof c.options === "function" ? c.options() : c.options;
+        const base = typeof c.options === "function" ? c.options(rows) : c.options;
+        // Valor atual fora da lista (ex.: viagem de um dia tipo de feriado)
+        // entra na lista — senão o campo aparecia em branco ao editar.
+        const atual = form[c.key] == null ? "" : String(form[c.key]);
+        const options = base && atual && !base.includes(atual) ? [atual, ...base] : base;
         return (
           <div key={c.key} className="space-y-1.5">
             <Label className="text-xs">{c.label}{c.required && " *"}</Label>

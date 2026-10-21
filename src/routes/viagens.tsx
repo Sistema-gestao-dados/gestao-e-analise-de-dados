@@ -24,7 +24,14 @@ export const Route = createFileRoute("/viagens")({
 
 const COLUMNS: ColumnDef[] = [
   { key: "linha", label: "Linha", required: true },
-  { key: "tipo_operacao", label: "Tipo Op.", type: "select", options: () => ["Dias úteis", "Sábado", "Domingo"] },
+  // Dias tipo básicos + os criados na importação (feriados etc.) que já
+  // existem nas viagens carregadas — antes só os 3 básicos apareciam.
+  { key: "tipo_operacao", label: "Tipo Op.", type: "select", options: (rows) => {
+    const base = ["Dias úteis", "Sábado", "Domingo"];
+    const extras = new Set<string>();
+    for (const r of rows) if (typeof r.tipo_operacao === "string" && r.tipo_operacao && !base.includes(r.tipo_operacao)) extras.add(r.tipo_operacao);
+    return [...base, ...Array.from(extras).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true }))];
+  } },
   { key: "versao_programacao", label: "Versão" },
   { key: "tipo_servico", label: "Tipo Serv.", type: "select", options: () => ["TU", "DIR"], width: "100px" },
   { key: "servico", label: "Serviço", width: "90px" },
