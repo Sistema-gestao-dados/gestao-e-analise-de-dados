@@ -36,7 +36,13 @@ import { supabase } from "@/integrations/supabase/client";
 export async function fetchAllPaginado<T>(
   table: string,
   select: string,
-  opts?: { pageSize?: number; order?: { column: string; ascending?: boolean }; tiebreak?: string },
+  opts?: {
+    pageSize?: number;
+    order?: { column: string; ascending?: boolean };
+    tiebreak?: string;
+    /** Filtro aplicado em TODA página (ex.: período: q => q.gte(...).lte(...)). */
+    filtro?: (q: any) => any;
+  },
 ): Promise<T[]> {
   const client = supabase as any;
   // 6000 bate com o "Max Rows" configurado no Supabase (Data API Settings) —
@@ -77,7 +83,9 @@ export async function fetchAllPaginado<T>(
   let cursorTiebreak: any = null;
 
   for (;;) {
-    let q = applyOrder(client.from(table).select(fetchSelect)).limit(pageSize);
+    let q = client.from(table).select(fetchSelect);
+    if (opts?.filtro) q = opts.filtro(q);
+    q = applyOrder(q).limit(pageSize);
     if (cursorOrder !== null) {
       q = compound
         ? q.or(

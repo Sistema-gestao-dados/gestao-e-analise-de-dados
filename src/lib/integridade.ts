@@ -162,8 +162,8 @@ export function runVerificacaoIntegridade(args: {
         id: "tu_incompleto",
         categoria: "Jornada",
         severidade: "atencao",
-        titulo: "Serviços TU com par Ida/Volta incompleto",
-        descricao: "Um TU precisa das duas pontas (ida e volta) pra jornada fechar certo — esses ficaram de fora do total de jornada.",
+        titulo: "Serviços TU com turno faltando (só T1 ou só T2)",
+        descricao: "Um TU precisa dos dois turnos (T1 e T2) do mesmo motorista pra jornada fechar certo — esses ficaram de fora do total de jornada e do custo.",
         quantidade: incompletas.length,
         amostra: amostra(incompletas.map((j) => `Linha ${j.linha}, serviço ${j.servico}, versão ${j.versao}`)),
       });

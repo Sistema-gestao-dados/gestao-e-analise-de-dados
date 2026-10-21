@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
@@ -111,24 +111,35 @@ function IntraJornadaPage() {
     ])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
   }), [viagens, linhas, empresaEstacao, cad]);
 
+  // Viagens dos serviços do recorte: só dia tipo/versão. Linha, Unidade e
+  // Grupo filtram a JORNADA (linha dela / unidade e grupo do serviço), não
+  // as viagens — filtrar viagem por linha cortava serviços que passam por
+  // mais de uma linha (TU perdia um turno e sumia do total, jornada/hora
+  // extra/custo saíam menores).
   const filtered = useMemo(() => {
     if (!applied) return [];
-    const set = new Set(applied.linha);
     return viagens.filter((v) => {
       if (applied.dia !== "__all" && v.tipo_operacao !== applied.dia) return false;
       if (applied.versao !== "__all" && v.versao_programacao !== applied.versao) return false;
-      if (set.size && !set.has(v.linha)) return false;
-      if (applied.unidade !== "__all" && resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) !== applied.unidade) return false;
-      if (applied.grupoOrdem !== "__all" && resolveGrupoViagem(v, linhaMap, empresaOverrideMap) !== applied.grupoOrdem) return false;
       return true;
     });
-  }, [viagens, applied, linhaMap, empresaOverrideMap]);
+  }, [viagens, applied]);
+  const empresaPorServico = useMemo(() => buildEmpresaPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
+  const unidadePorServico = useMemo(() => buildUnidadePorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
+  const grupoPorServico = useMemo(() => buildGrupoPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
+  const passaFiltroJornada = useCallback((j: JornadaServico) => {
+    if (!applied) return false;
+    if (applied.linha.length && !applied.linha.includes(j.linha)) return false;
+    if (applied.unidade !== "__all" && (unidadePorServico.get(j.vehicleKey) ?? linhaMap.get(j.linha)?.unidade) !== applied.unidade) return false;
+    if (applied.grupoOrdem !== "__all" && (grupoPorServico.get(j.vehicleKey) ?? linhaMap.get(j.linha)?.ordem) !== applied.grupoOrdem) return false;
+    return true;
+  }, [applied, unidadePorServico, grupoPorServico, linhaMap]);
 
   // Só serviços TU completos (T1 e T2), com o intervalo real calculado.
   const { params: custoParams } = useParametrosCusto();
   const intras = useMemo(() => {
     if (!applied) return [];
-    const jornadas = buildJornadas(filtered, linhas).filter((j) => j.tipoServico === "TU" && !j.incompleto);
+    const jornadas = buildJornadas(filtered, linhas).filter((j) => j.tipoServico === "TU" && !j.incompleto && passaFiltroJornada(j));
     return jornadas
       .map((j) => ({ jornada: j, intraMin: intraJornadaMin(j) }))
       .filter((x): x is { jornada: JornadaServico; intraMin: number } => x.intraMin != null)
@@ -138,7 +149,7 @@ function IntraJornadaPage() {
         foraJanela: custoParams ? tuForaDaJanela(x.jornada, custoParams) : false,
         custo: custoParams ? custoServico(x.jornada, custoParams) : 0,
       }));
-  }, [applied, filtered, linhas, custoParams]);
+  }, [applied, filtered, linhas, custoParams, passaFiltroJornada]);
 
   const intrasFiltradas = useMemo(() => {
     let arr = intras;
@@ -164,9 +175,6 @@ function IntraJornadaPage() {
   useEffect(() => setPage(0), [applied, pageSize, fClasse, fJanela]);
 
   // Resumo Gerencial por Empresa / Unidade / Grupo
-  const empresaPorServico = useMemo(() => buildEmpresaPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
-  const unidadePorServico = useMemo(() => buildUnidadePorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
-  const grupoPorServico = useMemo(() => buildGrupoPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
 
   function resumoPorChave(chaveFn: (x: typeof intras[number]) => string) {
     const m = new Map<string, { total: number; critico: number; foraRegra: number; ok: number; foraJanela: number; custo: number }>();

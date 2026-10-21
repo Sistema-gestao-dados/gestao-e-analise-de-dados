@@ -66,45 +66,61 @@ function AuditoriaPage() {
   const [clearing, setClearing] = useState(false);
   const pageSize = 50;
 
+  // Período em horário LOCAL (o <input type="date"> é dia local; `new
+  // Date("2026-10-01")` seria meia-noite UTC = 21h do dia anterior aqui).
+  const inicioLocal = (d: string) => new Date(`${d}T00:00:00`);
+  // Período filtrado NO BANCO: antes vinham só os 5000 eventos mais
+  // recentes e o filtro de data rodava em cima deles — como cada tela
+  // aberta gera um evento, 5000 cobriam poucos dias e uma busca mais antiga
+  // voltava vazia sem aviso.
+  const LIMITE = 5000;
   const dataQ = useQuery({
-    queryKey: ["audit_log"],
+    queryKey: ["audit_log", from, to],
     queryFn: async () => {
       const all: AuditRow[] = [];
       const chunk = 1000;
       let off = 0;
+      let limitado = false;
       for (;;) {
-        const { data, error } = await (supabase as any)
-          .from("audit_log")
-          .select("*")
+        let qy = (supabase as any).from("audit_log").select("*");
+        if (from) qy = qy.gte("created_at", inicioLocal(from).toISOString());
+        if (to) {
+          const fim = inicioLocal(to);
+          fim.setDate(fim.getDate() + 1);
+          qy = qy.lt("created_at", fim.toISOString());
+        }
+        const { data, error } = await qy
           .order("created_at", { ascending: false })
+          .order("id", { ascending: false })
           .range(off, off + chunk - 1);
         if (error) throw error;
         const got = (data ?? []) as AuditRow[];
         all.push(...got);
         if (got.length < chunk) break;
         off += chunk;
-        if (all.length >= 5000) break;
+        if (all.length >= LIMITE) { limitado = true; break; }
       }
-      return all;
+      return { rows: all, limitado };
     },
     refetchOnWindowFocus: false,
     staleTime: 30_000,
   });
 
-  const rows = dataQ.data ?? [];
+  const rows = dataQ.data?.rows ?? [];
+  const limitado = dataQ.data?.limitado ?? false;
   const actions = useMemo(() => Array.from(new Set(rows.map((r) => r.action))).sort(), [rows]);
   const users = useMemo(() => Array.from(new Set(rows.map((r) => r.username).filter(Boolean))).sort() as string[], [rows]);
 
   const filtered = useMemo(() => {
     const ql = q.trim().toLowerCase();
-    const fromTs = from ? new Date(from).getTime() : null;
-    const toTs = to ? new Date(to).getTime() + 86_400_000 : null;
+    const fromTs = from ? inicioLocal(from).getTime() : null;
+    const toTs = to ? inicioLocal(to).getTime() + 86_400_000 : null;
     return rows.filter((r) => {
       if (action !== "__all" && r.action !== action) return false;
       if (user !== "__all" && r.username !== user) return false;
       const t = new Date(r.created_at).getTime();
       if (fromTs && t < fromTs) return false;
-      if (toTs && t > toTs) return false;
+      if (toTs && t >= toTs) return false;
       if (!ql) return true;
       const s = `${r.username ?? ""} ${describeAuditEvent(r)}`.toLowerCase();
       return s.includes(ql);
@@ -157,7 +173,7 @@ function AuditoriaPage() {
                 <AlertDialogHeader>
                   <AlertDialogTitle>Limpar todo o histórico de auditoria?</AlertDialogTitle>
                   <AlertDialogDescription>
-                    Essa ação apaga <strong>todos os {rows.length} eventos</strong> registrados e não pode ser desfeita.
+                    Essa ação apaga <strong>todos os eventos</strong> registrados (de qualquer data, não só os listados) e não pode ser desfeita.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
@@ -197,6 +213,11 @@ function AuditoriaPage() {
           </div>
           <div className="text-xs text-muted-foreground">
             {filtered.length} de {rows.length} evento(s)
+            {limitado && (
+              <span className="ml-2 text-warning">
+                · mostrando só os {LIMITE.toLocaleString("pt-BR")} mais recentes do período — escolha um período menor pra ver os anteriores
+              </span>
+            )}
           </div>
         </CardHeader>
         <CardContent className="p-0">

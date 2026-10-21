@@ -8,8 +8,9 @@ export type AppUser = {
   isAdmin: boolean;
   modulosRestritos: boolean;
   modulosPermitidos: Set<string>;
-  // Fase 1 do isolamento por Grupo/Empresa (ver CLAUDE.md) — só os dados
-  // já estão aqui; NENHUM relatório filtra por isso ainda.
+  // Isolamento por Grupo/Empresa (ver CLAUDE.md): o banco já filtra
+  // viagens e cadastros por RLS; o app usa isso em src/lib/acesso.ts pra
+  // bloquear ações e limpar opções de filtro.
   acessoRestrito: boolean;
   gruposPermitidos: Set<string>;
   empresasPermitidos: Set<string>;

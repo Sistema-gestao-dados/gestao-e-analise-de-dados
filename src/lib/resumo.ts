@@ -100,6 +100,21 @@ function unitKey(v: ViagemLite): { key: string; bucket: Bucket } | null {
   return null;
 }
 
+/** Chave da UNIDADE de serviço de uma viagem (`vehicleKey||bucket`) — a
+ *  mesma unidade de buildServiceUnits, no formato que bate com
+ *  `chaveUnidadeJornada` (src/lib/jornada.ts). null = viagem fora de
+ *  qualquer unidade (sem serviço/versão, ou tipo/turno não reconhecido). */
+export function chaveUnidadeViagem(v: ViagemLite): string | null {
+  const k = unitKey(v);
+  if (!k) return null;
+  return `${v.versao_programacao ?? ""}||${v.tipo_operacao ?? ""}||${v.servico ?? ""}||${k.bucket}`;
+}
+
+/** Mesma chave a partir de uma ServiceUnit já montada. */
+export function chaveUnidade(u: ServiceUnit): string {
+  return `${u.vehicleKey}||${u.bucket}`;
+}
+
 export function buildServiceUnits(
   viagens: ViagemLite[],
   kmFn: (v: ViagemLite) => number,

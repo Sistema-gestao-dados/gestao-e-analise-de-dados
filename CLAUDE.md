@@ -45,6 +45,16 @@ Chave de agrupamento de serviço em ambos os casos: `versao||tipo||servico`
 (isola `DIR#N` de `TU#N`), e na Jornada inclui também o dia tipo:
 `versao||diaTipo||servico`.
 
+Jornada é sempre do **serviço inteiro**: filtros de tela (Linha, Unidade,
+Grupo, Movimento, Faixa...) escolhem QUAIS jornadas entram, nunca cortam as
+viagens antes de montar a jornada — senão um serviço que passa por mais de
+uma linha (ex.: EasyBus 489M → intra na 480M → 489M) perde um turno, o TU
+vira "incompleto" e jornada/HE/custo saem menores. Ver `jornadasCompletas()`
+em `src/lib/jornada.ts`. A linha de cada jornada é a mesma da unidade de
+serviço dos resumos: TU = serviço todo; DIR = **por turno** (T1 numa linha e
+T2 em outra ficam cada um na sua). Custo/HE são ligados pela unidade
+(`vehicleKey||bucket`), não pelo veículo.
+
 ## Custo de mão de obra
 
 Calculado **sempre em runtime** (não é persistido em tabela nenhuma) a

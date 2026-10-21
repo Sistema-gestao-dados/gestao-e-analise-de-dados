@@ -4,7 +4,7 @@
 //   valor_hora = salário mensal ÷ horas mensais de referência (210h)
 //
 //   Por serviço:
-//     - horas normais = todas as horas trabalhadas (minutosTotal)
+//     - horas normais = horas trabalhadas até o teto do tipo (7h DIR / 8h24 TU)
 //     - horas extras   = o que passar do limite do tipo (7h DIR / 8h24 TU) → +50%
 //     - horas noturnas = minutos do turno dentro de 22h-5h → +20%
 //     - hora refeição  = valor FIXO por serviço/dia (não por hora
@@ -15,8 +15,8 @@
 //   normais — NÃO incidem sobre hora extra, noturno nem hora refeição,
 //   que entram como valores "crus", somados por fora:
 //
-//   custo = valor_hora × horas_totais × (1 + %encargos)
-//         + valor_hora × horas_extra × %he
+//   custo = valor_hora × horas_normais × (1 + %encargos)   (normais = até o teto 7h/8h24)
+//         + valor_hora × horas_extra × (1 + %he)          (taxa CHEIA, ver custoServico)
 //         + valor_hora × horas_noturnas × %noturno
 //         + valor_hora_refeicao
 //

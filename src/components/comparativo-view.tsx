@@ -11,7 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchLinhas, fetchKm, fetchMulti, fetchEmpresaEstacao, type Linha, type ParametroMulti } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import {
-  buildServiceUnits, aggregateByLinha, aggregateByGroup, dominantLinha,
+  buildServiceUnits, aggregateByLinha, aggregateByGroup, dominantLinha, chaveUnidadeViagem,
   type ViagemLite, type AggRow, type CriterioLinha, type ServiceUnit,
 } from "@/lib/resumo";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
@@ -34,7 +34,7 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { PdfPreviewDialog, type PdfOrientation } from "@/components/pdf-preview-dialog";
 import { logAudit } from "@/lib/audit";
-import { buildJornadas, fmtDur } from "@/lib/jornada";
+import { jornadasCompletas, chaveUnidadeJornada, fmtDur, type JornadaServico } from "@/lib/jornada";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { useAcessoDados, cadastroParaOpcoes } from "@/lib/acesso";
 import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
@@ -395,12 +395,11 @@ function buildDisplayRow(metrics: UnidadeMetric[], label: string, av: Record<Met
  */
 function withHE(
   rows: AggRow[],
-  viagens: ViagemLite[],
-  linhas: Linha[],
+  jornadas: JornadaServico[],
   keyOf?: (linha: string, dia: string) => string,
 ): AggRow[] {
   const he = new Map<string, number>();
-  for (const j of buildJornadas(viagens, linhas)) {
+  for (const j of jornadas) {
     if (j.incompleto || j.horasExtras <= 0) continue;
     const dia = j.vehicleKey.split("||")[1] ?? "";
     const k = keyOf ? keyOf(j.linha, dia) : j.linha;
@@ -576,6 +575,41 @@ export function ComparativoView() {
     return [...propostaFiltradoBase, ...extra];
   }, [propostaFiltradoBase, atualFiltradoBase, linhasRepetidas]);
 
+  // Jornadas (hora extra / custo) de cada lado — calculadas UMA vez cada e
+  // reaproveitadas na tabela, nos resumos e no custo (antes eram 11
+  // cálculos sobre a base inteira por consulta). Montadas sobre o SERVIÇO
+  // INTEIRO (só dia tipo/versão/somente ativos do lado), ficando com as
+  // unidades do recorte filtrado — ver jornadasCompletas.
+  const baseServicoFor = (f: Filters) =>
+    baseFor(f).filter((v) => {
+      const dia = diaEfetivo(f, linhaMap.get(v.linha)?.categoria);
+      return (dia === "__all" || v.tipo_operacao === dia) && (f.versao === "__all" || v.versao_programacao === f.versao);
+    });
+  const jornadasAtual = useMemo(
+    () => (applied ? jornadasCompletas(baseServicoFor(applied.a), atualFiltradoBase, linhas, criterio) : []),
+    [applied, baseFor, linhaMap, atualFiltradoBase, linhas, criterio],
+  );
+  const jornadasPropostaFiltrada = useMemo(
+    () => (applied ? jornadasCompletas(baseServicoFor(applied.p), propostaFiltradoBase, linhas, criterio) : []),
+    [applied, baseFor, linhaMap, propostaFiltradoBase, linhas, criterio],
+  );
+  // Proposta + linhas repetidas da Proposta 1 (mesmo conjunto de
+  // `propostaPreenchida`): as jornadas das linhas repetidas vêm do Atual.
+  const jornadasPropostaPreenchida = useMemo(() => {
+    if (!linhasRepetidas.size) return jornadasPropostaFiltrada;
+    const extra = new Set<string>();
+    for (const v of atualFiltradoBase) {
+      if (!linhasRepetidas.has(v.linha)) continue;
+      const k = chaveUnidadeViagem(v);
+      if (k) extra.add(k);
+    }
+    const jaTem = new Set(jornadasPropostaFiltrada.map(chaveUnidadeJornada));
+    return [
+      ...jornadasPropostaFiltrada,
+      ...jornadasAtual.filter((j) => extra.has(chaveUnidadeJornada(j)) && !jaTem.has(chaveUnidadeJornada(j))),
+    ];
+  }, [linhasRepetidas, atualFiltradoBase, jornadasAtual, jornadasPropostaFiltrada]);
+
   // Linhas da Proposta 1 (Atual), agregadas — usado pra "copiar a linha
   // inteira" na tabela principal (evita misturar viagens de linhas
   // diferentes no mesmo cálculo de frota/serviço, que já causou frota
@@ -588,8 +622,8 @@ export function ComparativoView() {
     const rows = agruparPorGrupo
       ? aggregateByGroup(buildServiceUnits(f, kmFn), groupOfGrupo)
       : aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio);
-    return withHE(rows, f, linhas, agruparPorGrupo ? grupoDaLinha : undefined);
-  }, [applied, linhasRepetidas, gruposRepetidos, atualFiltradoBase, baseFor, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap, agruparPorGrupo]);
+    return withHE(rows, jornadasAtual, agruparPorGrupo ? grupoDaLinha : undefined);
+  }, [applied, linhasRepetidas, gruposRepetidos, atualFiltradoBase, baseFor, linhaMap, grupoMap, kmFn, ordemMap, criterio, jornadasAtual, empresaOverrideMap, agruparPorGrupo]);
 
   const atualRows = useMemo(() => {
     if (!applied) return [] as AggRow[];
@@ -598,8 +632,8 @@ export function ComparativoView() {
     const rows = agruparPorGrupo
       ? aggregateByGroup(buildServiceUnits(f, kmFn), groupOfGrupo)
       : aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio);
-    return withHE(rows, f, linhas, agruparPorGrupo ? grupoDaLinha : undefined);
-  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap, atualFiltradoBase, agruparPorGrupo]);
+    return withHE(rows, jornadasAtual, agruparPorGrupo ? grupoDaLinha : undefined);
+  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, jornadasAtual, empresaOverrideMap, atualFiltradoBase, agruparPorGrupo]);
 
   const propostaRows = useMemo(() => {
     if (!applied) return [] as AggRow[];
@@ -608,8 +642,8 @@ export function ComparativoView() {
     const rows = agruparPorGrupo
       ? aggregateByGroup(buildServiceUnits(f, kmFn), groupOfGrupo)
       : aggregateByLinha(buildServiceUnits(f, kmFn), f, ordemMap, fOrigem, criterio);
-    return withHE(rows, f, linhas, agruparPorGrupo ? grupoDaLinha : undefined);
-  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, linhas, empresaOverrideMap, propostaFiltradoBase, agruparPorGrupo]);
+    return withHE(rows, jornadasPropostaFiltrada, agruparPorGrupo ? grupoDaLinha : undefined);
+  }, [baseFor, applied, linhaMap, grupoMap, kmFn, ordemMap, criterio, jornadasPropostaFiltrada, empresaOverrideMap, propostaFiltradoBase, agruparPorGrupo]);
 
 
   const basesAplicadas = useMemo(() => {
@@ -636,7 +670,8 @@ export function ComparativoView() {
     viagens: ViagemLite[],
     chaveViagem: (v: ViagemLite) => string,
     chaveUnit: (u: ServiceUnit) => string,
-    chaveJornada: (j: ReturnType<typeof buildJornadas>[number]) => string,
+    chaveJornada: (j: JornadaServico) => string,
+    jornadas: JornadaServico[],
   ) {
     const units = buildServiceUnits(viagens, kmFn);
     const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
@@ -654,11 +689,13 @@ export function ComparativoView() {
     }
     const custoPorChave = new Map<string, number>();
     const heMinPorChave = new Map<string, number>();
-    const jornadas = buildJornadas(viagens, linhas);
     for (const j of jornadas) {
+      // TU incompleto (só T1 ou só T2) fica fora de todo total de jornada —
+      // inclusive do custo (mesma regra do Resumo/Dashboard/Jornada).
+      if (j.incompleto) continue;
       const k = chaveJornada(j);
       if (custoParams) custoPorChave.set(k, (custoPorChave.get(k) ?? 0) + custoServico(j, custoParams));
-      if (!j.incompleto && j.horasExtras > 0) heMinPorChave.set(k, (heMinPorChave.get(k) ?? 0) + j.horasExtras);
+      if (j.horasExtras > 0) heMinPorChave.set(k, (heMinPorChave.get(k) ?? 0) + j.horasExtras);
     }
     const out = new Map<string, BreakdownVal>();
     for (const [k, x] of m) out.set(k, { servicos: x.servicos.size, frota: x.veiculos.size, partidas: x.partidas, km: x.km, heMin: heMinPorChave.get(k) ?? 0, custo: custoPorChave.get(k) ?? 0 });
@@ -677,31 +714,31 @@ export function ComparativoView() {
     if (!applied) return [];
     const empA = buildEmpresaPorServico(basesAplicadas.atual, linhaMap, empresaOverrideMap);
     const empP = buildEmpresaPorServico(basesAplicadas.proposta, linhaMap, empresaOverrideMap);
-    const chaveJ = (j: ReturnType<typeof buildJornadas>[number], mapa: Map<string, string>) => mapa.get(j.vehicleKey) || linhaMap.get(j.linha)?.empresa || "Sem empresa";
-    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa", (u) => empA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.empresa || "Sem empresa", (j) => chaveJ(j, empA));
-    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa", (u) => empP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.empresa || "Sem empresa", (j) => chaveJ(j, empP));
+    const chaveJ = (j: JornadaServico, mapa: Map<string, string>) => mapa.get(j.vehicleKey) || linhaMap.get(j.linha)?.empresa || "Sem empresa";
+    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa", (u) => empA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.empresa || "Sem empresa", (j) => chaveJ(j, empA), jornadasAtual);
+    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa", (u) => empP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.empresa || "Sem empresa", (j) => chaveJ(j, empP), jornadasPropostaPreenchida);
     return mergeBreakdown(a, p);
-  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn, linhas, custoParams]);
+  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn, jornadasAtual, jornadasPropostaPreenchida, custoParams]);
 
   const resumoPorUnidade = useMemo(() => {
     if (!applied) return [];
     const uniA = buildUnidadePorServico(basesAplicadas.atual, linhaMap, empresaOverrideMap);
     const uniP = buildUnidadePorServico(basesAplicadas.proposta, linhaMap, empresaOverrideMap);
-    const chaveJ = (j: ReturnType<typeof buildJornadas>[number], mapa: Map<string, string>) => mapa.get(j.vehicleKey) || linhaMap.get(j.linha)?.unidade || "Sem unidade";
-    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade", (u) => uniA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.unidade || "Sem unidade", (j) => chaveJ(j, uniA));
-    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade", (u) => uniP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.unidade || "Sem unidade", (j) => chaveJ(j, uniP));
+    const chaveJ = (j: JornadaServico, mapa: Map<string, string>) => mapa.get(j.vehicleKey) || linhaMap.get(j.linha)?.unidade || "Sem unidade";
+    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade", (u) => uniA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.unidade || "Sem unidade", (j) => chaveJ(j, uniA), jornadasAtual);
+    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade", (u) => uniP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.unidade || "Sem unidade", (j) => chaveJ(j, uniP), jornadasPropostaPreenchida);
     return mergeBreakdown(a, p);
-  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn, linhas, custoParams]);
+  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn, jornadasAtual, jornadasPropostaPreenchida, custoParams]);
 
   const resumoPorGrupo = useMemo(() => {
     if (!applied) return [];
     const grpA = buildGrupoPorServico(basesAplicadas.atual, linhaMap, empresaOverrideMap);
     const grpP = buildGrupoPorServico(basesAplicadas.proposta, linhaMap, empresaOverrideMap);
-    const chaveJ = (j: ReturnType<typeof buildJornadas>[number], mapa: Map<string, string>) => mapa.get(j.vehicleKey) || linhaMap.get(j.linha)?.ordem || "Sem grupo";
-    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo", (u) => grpA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.ordem || "Sem grupo", (j) => chaveJ(j, grpA));
-    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo", (u) => grpP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.ordem || "Sem grupo", (j) => chaveJ(j, grpP));
+    const chaveJ = (j: JornadaServico, mapa: Map<string, string>) => mapa.get(j.vehicleKey) || linhaMap.get(j.linha)?.ordem || "Sem grupo";
+    const a = buildBreakdown(basesAplicadas.atual, (v) => resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo", (u) => grpA.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.ordem || "Sem grupo", (j) => chaveJ(j, grpA), jornadasAtual);
+    const p = buildBreakdown(basesAplicadas.proposta, (v) => resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo", (u) => grpP.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, criterio))?.ordem || "Sem grupo", (j) => chaveJ(j, grpP), jornadasPropostaPreenchida);
     return mergeBreakdown(a, p);
-  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn, linhas, custoParams]);
+  }, [applied, basesAplicadas, linhaMap, empresaOverrideMap, criterio, kmFn, jornadasAtual, jornadasPropostaPreenchida, custoParams]);
 
   const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">("comparativo.ordenarPor", "padrao");
 
@@ -817,11 +854,12 @@ export function ComparativoView() {
       return raw.startsWith("__sem_grupo__") ? `(sem grupo) ${j.linha}` : raw;
     };
     if (custoParams) {
-      for (const j of buildJornadas(basesAplicadas.atual, linhas)) { const k = chave(j); atual.set(k, (atual.get(k) ?? 0) + custoServico(j, custoParams)); }
-      for (const j of buildJornadas(basesAplicadas.proposta, linhas)) { const k = chave(j); proposta.set(k, (proposta.get(k) ?? 0) + custoServico(j, custoParams)); }
+      // TU incompleto fica fora do custo (mesma regra dos outros totais).
+      for (const j of jornadasAtual) { if (j.incompleto) continue; const k = chave(j); atual.set(k, (atual.get(k) ?? 0) + custoServico(j, custoParams)); }
+      for (const j of jornadasPropostaPreenchida) { if (j.incompleto) continue; const k = chave(j); proposta.set(k, (proposta.get(k) ?? 0) + custoServico(j, custoParams)); }
     }
     return { atual, proposta };
-  }, [basesAplicadas, linhas, custoParams, agruparPorGrupo]);
+  }, [jornadasAtual, jornadasPropostaPreenchida, custoParams, agruparPorGrupo]);
 
   // Em modo "por linha", a chave de repetição é a linha; em modo "por grupo
   // de linha", é o grupo inteiro (gruposRepetidos já é calculado acima pela

@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
@@ -104,35 +104,43 @@ function JornadaPage() {
     ])).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })),
   }), [viagens, linhas, empresaEstacao, cad]);
 
+  // Viagens dos serviços do recorte: só dia tipo/versão. Linha, Unidade e
+  // Grupo filtram a JORNADA (linha dela / unidade e grupo do serviço), não
+  // as viagens — filtrar viagem por linha cortava serviços que passam por
+  // mais de uma linha (TU perdia um turno e sumia do total, jornada/hora
+  // extra/custo saíam menores).
   const filtered = useMemo(() => {
     if (!applied) return [];
-    const set = new Set(applied.linha);
     return viagens.filter((v) => {
       if (applied.dia !== "__all" && v.tipo_operacao !== applied.dia) return false;
       if (applied.versao !== "__all" && v.versao_programacao !== applied.versao) return false;
-      if (set.size && !set.has(v.linha)) return false;
-      if (applied.unidade !== "__all" && resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) !== applied.unidade) return false;
-      if (applied.grupoOrdem !== "__all" && resolveGrupoViagem(v, linhaMap, empresaOverrideMap) !== applied.grupoOrdem) return false;
       return true;
     });
-  }, [viagens, applied, linhaMap, empresaOverrideMap]);
+  }, [viagens, applied]);
+  const empresaPorServico = useMemo(() => buildEmpresaPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
+  const unidadePorServico = useMemo(() => buildUnidadePorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
+  const grupoPorServico = useMemo(() => buildGrupoPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
+  const passaFiltroJornada = useCallback((j: JornadaServico) => {
+    if (!applied) return false;
+    if (applied.linha.length && !applied.linha.includes(j.linha)) return false;
+    if (applied.unidade !== "__all" && (unidadePorServico.get(j.vehicleKey) ?? linhaMap.get(j.linha)?.unidade) !== applied.unidade) return false;
+    if (applied.grupoOrdem !== "__all" && (grupoPorServico.get(j.vehicleKey) ?? linhaMap.get(j.linha)?.ordem) !== applied.grupoOrdem) return false;
+    return true;
+  }, [applied, unidadePorServico, grupoPorServico, linhaMap]);
 
   const jornadas = useMemo(() => {
     if (!applied) return [];
-    const all = buildJornadas(filtered, linhas);
+    const all = buildJornadas(filtered, linhas).filter(passaFiltroJornada);
     if (applied.tipo === "__all") return all;
     if (applied.tipo === "TU") return all.filter((j) => j.tipoServico === "TU");
     if (applied.tipo === "DIR") return all.filter((j) => j.tipoServico === "DIR");
     return all;
-  }, [applied, filtered, linhas]);
+  }, [applied, filtered, linhas, passaFiltroJornada]);
 
   const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">("jornada.ordenarPor", "padrao");
 
   // Resumo Gerencial por Empresa / Grupo / Unidade — precisa vir antes de
   // jornadasOrdenadas, que usa unidadePorServico pra ordenar.
-  const empresaPorServico = useMemo(() => buildEmpresaPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
-  const unidadePorServico = useMemo(() => buildUnidadePorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
-  const grupoPorServico = useMemo(() => buildGrupoPorServico(filtered, linhaMap, empresaOverrideMap), [filtered, linhaMap, empresaOverrideMap]);
 
   const jornadasOrdenadas = useMemo(() => {
     if (ordenarPor !== "unidade") return jornadas;
@@ -195,10 +203,13 @@ function JornadaPage() {
 
   const listaModal = useMemo((): JornadaServico[] => {
     if (!modal) return [];
-    if (modal === "7") return jornadas.filter((j) => j.acimaDe7h && !j.acimaDe9h);
-    if (modal === "9") return jornadas.filter((j) => j.acimaDe9h);
+    // Mesma regra dos indicadores (jornadaTotais): TU incompleto não entra
+    // nas listas de >9h / >10h / hora extra — senão a lista tinha mais itens
+    // que o número do indicador que abriu ela.
+    if (modal === "7") return jornadas.filter((j) => !j.incompleto && j.acimaDe7h && !j.acimaDe9h);
+    if (modal === "9") return jornadas.filter((j) => !j.incompleto && j.acimaDe9h);
     if (modal === "sem_param") return jornadas.filter((j) => j.semCadastroLinha);
-    return jornadas.filter((j) => j.horasExtras > 0);
+    return jornadas.filter((j) => !j.incompleto && j.horasExtras > 0);
   }, [jornadas, modal]);
 
   function exportModalXLSX() {

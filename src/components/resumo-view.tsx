@@ -7,9 +7,10 @@ import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import {
   buildServiceUnits, aggregateByGroup, aggregateByLinha, dominantLinha, detectTUIncompletos, validarConsistenciaFrota,
   type ViagemLite, type AggRow, type ServiceUnit, type CriterioLinha,
+  chaveUnidade,
 } from "@/lib/resumo";
 import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
-import { buildJornadas } from "@/lib/jornada";
+import { jornadasCompletas, chaveUnidadeJornada, type JornadaServico } from "@/lib/jornada";
 import { custoServico, fmtMoeda } from "@/lib/custo";
 import { useSalarioMotorista } from "@/components/salario-motorista";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt, normKey } from "@/lib/km";
@@ -510,8 +511,20 @@ const totals = useMemo(() => {
   // Jornadas de verdade (com HE/noturno) só pra calcular custo de mão de
   // obra certo nos resumos — não é usado pra mais nada nessa tela.
   const { params: custoParams } = useSalarioMotorista();
-  const jornadasParaCusto = useMemo(() => buildJornadas(filtered, linhas), [filtered, linhas]);
-  function custoPorChave(chaveFn: (j: ReturnType<typeof buildJornadas>[number]) => string): Map<string, number> {
+  // Jornada montada sobre o SERVIÇO INTEIRO (só dia tipo/versão filtrados),
+  // ficando com as unidades que aparecem no recorte — filtro de Linha/
+  // Empresa/Unidade/Grupo/Faixa cortava serviços que passam por mais de uma
+  // linha e subestimava jornada/hora extra/custo (ver jornadasCompletas).
+  const baseServico = useMemo(() => {
+    if (!applied) return [] as ViagemLite[];
+    return viagens.filter((v) =>
+      (S.dia === "__all" || v.tipo_operacao === S.dia) && (S.versao === "__all" || v.versao_programacao === S.versao));
+  }, [viagens, applied, S.dia, S.versao]);
+  const jornadasParaCusto = useMemo(
+    () => jornadasCompletas(baseServico, filtered, linhas, S.criterio),
+    [baseServico, filtered, linhas, S.criterio],
+  );
+  function custoPorChave(chaveFn: (j: JornadaServico) => string): Map<string, number> {
     const m = new Map<string, number>();
     if (!custoParams) return m;
     for (const j of jornadasParaCusto) {
@@ -527,7 +540,10 @@ const totals = useMemo(() => {
 
   // Custo por linha do resumo principal (mesmo groupKey usado em "rows",
   // pra mostrar a coluna "Custo M.O." junto de Partidas/KM na tabela).
-  const vehicleKeyParaGroupKey = useMemo(() => {
+  // Chave = UNIDADE de serviço (veículo + turno), não o veículo: T1 e T2 do
+  // mesmo carro podem estar em linhas/grupos diferentes, e por veículo o
+  // custo dos dois turnos ia todo pra uma linha só.
+  const unidadeParaGroupKey = useMemo(() => {
     const m = new Map<string, string>();
     for (const u of units.values()) {
       let key: string;
@@ -540,13 +556,13 @@ const totals = useMemo(() => {
       } else {
         key = u.versao;
       }
-      m.set(u.vehicleKey, key);
+      m.set(chaveUnidade(u), key);
     }
     return m;
   }, [units, mode, S.groupBy, S.criterio, S.dia, grupoMap]);
   const custoPorGroupKey = useMemo(
-    () => custoPorChave((j) => vehicleKeyParaGroupKey.get(j.vehicleKey) ?? "?"),
-    [jornadasParaCusto, custoParams, vehicleKeyParaGroupKey],
+    () => custoPorChave((j) => unidadeParaGroupKey.get(chaveUnidadeJornada(j)) ?? "?"),
+    [jornadasParaCusto, custoParams, unidadeParaGroupKey],
   );
 
   const resumoEmpresa = useMemo(() => {

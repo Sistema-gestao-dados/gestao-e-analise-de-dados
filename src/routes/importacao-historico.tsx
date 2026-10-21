@@ -1,7 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { insertHistorico, ensureDiaTipo, type HistoricoInput } from "@/lib/historico";
+import { supabase } from "@/integrations/supabase/client";
+import { insertHistorico, ensureDiaTipo, fetchHistorico, type HistoricoInput } from "@/lib/historico";
 import { logAudit } from "@/lib/audit";
 import { useAuditView } from "@/lib/use-audit-view";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -116,14 +117,22 @@ function ImportacaoHistoricoPage() {
       if (iLinha === -1) throw new Error('Coluna "Linha" não encontrada no CSV.');
 
       const data = rows.slice(1);
-      let ok = 0, falhas = 0;
+      let ok = 0, falhas = 0, duplicadas = 0;
       const diaTiposNovos = new Set<string>();
 
+      // Chave de "mesmo registro": reimportar o mesmo CSV duplicava tudo
+      // (não havia checagem nenhuma). Compara com o que já está no banco E
+      // com as linhas anteriores do próprio arquivo.
+      const chave = (h: HistoricoInput) =>
+        [h.linha, h.dia_tipo, h.versao, h.vigencia, h.encerramento, h.referencia, h.alteracao]
+          .map((x) => String(x ?? "").trim().toLowerCase()).join("|");
+      const existentes = new Set((await fetchHistorico()).map((h) => chave(h)));
+
+      const payloads: HistoricoInput[] = [];
       for (const r of data) {
         const linha = r[iLinha]?.trim();
         if (!linha) { falhas++; continue; }
         const diaTipo = iDiaTipo !== -1 ? r[iDiaTipo]?.trim() || null : null;
-        if (diaTipo) diaTiposNovos.add(diaTipo);
         const payload: HistoricoInput = {
           linha,
           versao: iVersao !== -1 ? parseVersao(r[iVersao]) : null,
@@ -135,23 +144,42 @@ function ImportacaoHistoricoPage() {
           alteracao: iAlteracao !== -1 ? r[iAlteracao]?.trim() || null : null,
           ativo: iAtivo !== -1 ? parseAtivo(r[iAtivo]) : true,
         };
-        try {
-          await insertHistorico(payload);
-          ok++;
-        } catch (e) {
-          falhas++;
-          addLog(`Erro na linha "${linha}": ${(e as Error).message}`);
+        const k = chave(payload);
+        if (existentes.has(k)) { duplicadas++; continue; }
+        existentes.add(k);
+        if (diaTipo) diaTiposNovos.add(diaTipo);
+        payloads.push(payload);
+      }
+
+      // Em lotes (antes era 1 requisição por linha — milhares numa planilha
+      // grande). Se um lote falhar, tenta linha a linha só nele, pra apontar
+      // qual registro deu problema sem perder os outros.
+      const LOTE = 500;
+      for (let i = 0; i < payloads.length; i += LOTE) {
+        const lote = payloads.slice(i, i + LOTE);
+        const { error } = await supabase.from("historico_reprogramacao").insert(lote);
+        if (!error) { ok += lote.length; continue; }
+        for (const payload of lote) {
+          try {
+            await insertHistorico(payload);
+            ok++;
+          } catch (e) {
+            falhas++;
+            addLog(`Erro na linha "${payload.linha}": ${(e as Error).message}`);
+          }
         }
       }
+      if (duplicadas) addLog(`${duplicadas} registro(s) já existiam e foram ignorados.`);
 
       for (const dt of diaTiposNovos) await ensureDiaTipo(dt);
 
-      addLog(`Concluído: ${ok} importado(s), ${falhas} com erro.`);
-      void logAudit({ action: "import", entity: "historico_reprogramacao", details: { arquivo: file.name, ok, falhas } });
+      addLog(`Concluído: ${ok} importado(s), ${duplicadas} já existente(s) ignorado(s), ${falhas} com erro.`);
+      void logAudit({ action: "import", entity: "historico_reprogramacao", details: { arquivo: file.name, ok, falhas, duplicadas } });
       qc.invalidateQueries({ queryKey: ["historico-reprogramacao"] });
       qc.invalidateQueries({ queryKey: ["historico-dia-tipos"] });
       if (ok > 0) toast.success(`${ok} registro(s) importado(s)`);
       if (falhas > 0) toast.error(`${falhas} registro(s) com erro`);
+      if (duplicadas > 0) toast.message(`${duplicadas} registro(s) já existiam e foram ignorados`);
     } catch (e) {
       toast.error("Erro ao importar", { description: (e as Error).message });
       addLog(`Erro fatal: ${(e as Error).message}`);

@@ -77,7 +77,10 @@ function RealizadoPage() {
     let somaAtraso = 0, nAtraso = 0;
     for (const r of classificado) {
       contagem[r.status as StatusViagem]++;
-      if (r.dif_partida != null) { somaAtraso += r.dif_partida; nAtraso++; }
+      // Só quem saiu ATRASADO (dif > 0): somar adiantamento como negativo
+      // fazia atraso e adiantamento se anularem e o "atraso médio" parecia
+      // melhor do que é.
+      if (r.real_partida && r.dif_partida != null && r.dif_partida > 0) { somaAtraso += r.dif_partida; nAtraso++; }
     }
     const realizadas = total - contagem.perdida;
     const pontualidade = realizadas > 0 ? (contagem.no_horario / realizadas) * 100 : 0;
@@ -196,7 +199,7 @@ function RealizadoPage() {
         <>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             <KpiCard icon={Gauge} label="Pontualidade" value={`${kpis.pontualidade.toFixed(1)}%`} tone={kpis.pontualidade >= 85 ? "green" : kpis.pontualidade >= 70 ? "amber" : "red"} />
-            <KpiCard icon={Clock} label="Atraso médio" value={`${kpis.atrasoMedio.toFixed(1)} min`} tone={Math.abs(kpis.atrasoMedio) <= tolerancia ? "green" : "amber"} />
+            <KpiCard icon={Clock} label="Atraso médio (das atrasadas)" value={`${kpis.atrasoMedio.toFixed(1)} min`} tone={kpis.atrasoMedio <= tolerancia ? "green" : "amber"} />
             <KpiCard icon={XCircle} label="Viagens perdidas" value={`${kpis.contagem.perdida} (${kpis.taxaPerda.toFixed(1)}%)`} tone={kpis.taxaPerda <= 2 ? "green" : kpis.taxaPerda <= 5 ? "amber" : "red"} />
             <KpiCard icon={AlertTriangle} label="Incompletas" value={String(kpis.contagem.incompleta)} tone={kpis.contagem.incompleta === 0 ? "green" : "amber"} />
             <KpiCard icon={Timer} label="Total de viagens" value={String(kpis.total)} tone="neutral" />

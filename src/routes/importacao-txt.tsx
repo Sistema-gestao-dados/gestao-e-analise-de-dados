@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Upload, FileUp, CheckCircle2, AlertCircle, Loader2, ArrowRight } from "lucide-react";
 import { useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchAllPaginado } from "@/lib/fetch-paginado";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { parseTxt } from "@/lib/txt-import";
@@ -58,7 +59,9 @@ function ImportTxtPage() {
   const { data: diasCadastrados = DIAS_TIPO_BASE } = useQuery({
     queryKey: ["dias-tipo-cadastrados"],
     queryFn: async () => {
-      const { data } = await (supabase as any).from("parametro_multilinha").select("tipo_dia");
+      // Paginado: um select direto parava no limite de linhas do servidor
+      // (6000) e dias tipo cadastrados depois disso sumiam da lista.
+      const data = await fetchAllPaginado<{ tipo_dia: string }>("parametro_multilinha", "tipo_dia");
       const existentes = new Set<string>(DIAS_TIPO_BASE);
       for (const r of (data ?? []) as any[]) if (r.tipo_dia) existentes.add(r.tipo_dia);
       const extras = Array.from(existentes).filter((d) => !DIAS_TIPO_BASE.includes(d)).sort();

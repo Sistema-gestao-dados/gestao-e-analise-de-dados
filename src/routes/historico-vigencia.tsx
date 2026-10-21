@@ -109,7 +109,23 @@ function VigenciaPage() {
     const hoje = new Date();
     hoje.setHours(0, 0, 0, 0);
     const out: Vigente[] = [];
+    // Por linha + dia tipo, só a reprogramação MAIS RECENTE já iniciada está
+    // em vigor — uma nova vigência substitui a anterior mesmo que ninguém
+    // tenha preenchido o encerramento dela (antes as duas contavam como
+    // vigentes e a antiga aparecia como "Crítico, há mais de 12 meses").
+    // Registro marcado como Ativo = Não também não conta.
+    const maisRecente = new Map<string, Historico>();
     for (const h of filteredBase) {
+      if (h.ativo === false) continue;
+      const vig = toDate(h.vigencia);
+      if (!vig || vig > hoje) continue;
+      const k = `${h.linha}||${(h.dia_tipo ?? "").trim().toLowerCase()}`;
+      const atual = maisRecente.get(k);
+      if (!atual || (h.vigencia ?? "") > (atual.vigencia ?? "") || ((h.vigencia ?? "") === (atual.vigencia ?? "") && h.created_at > atual.created_at)) {
+        maisRecente.set(k, h);
+      }
+    }
+    for (const h of maisRecente.values()) {
       const vig = toDate(h.vigencia);
       if (!vig || vig > hoje) continue; // sem vigência cadastrada, ou ainda não começou
       const enc = toDate(h.encerramento);

@@ -1,31 +1,26 @@
 import { supabase } from "@/integrations/supabase/client";
+import { fetchAllPaginado } from "@/lib/fetch-paginado";
 import type { RealizadoRow } from "@/lib/realizado";
 
 export type RealizadoDb = RealizadoRow & { id: string; arquivo: string | null; created_at: string };
 
-/** Busca todo o período informado (inclusive), paginando de 1000 em 1000. */
+/** Busca todo o período informado (inclusive) — paginação por cursor
+ *  (fetchAllPaginado), não por OFFSET: período longo (30 dias ≈ 90 mil
+ *  linhas) ficava cada vez mais lento a cada página com OFFSET. */
 export async function fetchRealizado(dataInicio: string, dataFim: string): Promise<RealizadoDb[]> {
-  const all: RealizadoDb[] = [];
-  let from = 0;
-  for (;;) {
-    const { data, error } = await (supabase as any)
-      .from("viagens_realizado")
-      .select("*")
-      .gte("data", dataInicio)
-      .lte("data", dataFim)
-      .order("id", { ascending: true })
-      .range(from, from + 999);
-    if (error) throw error;
-    const chunk = (data ?? []) as RealizadoDb[];
-    all.push(...chunk);
-    if (chunk.length < 1000) break;
-    from += 1000;
-  }
-  return all;
+  return fetchAllPaginado<RealizadoDb>("viagens_realizado", "*", {
+    filtro: (q) => q.gte("data", dataInicio).lte("data", dataFim),
+  });
 }
 
-/** Datas distintas já importadas (pra popular o seletor de período). */
+/** Datas distintas já importadas (pra popular o seletor de período).
+ *  Calculadas no banco (RPC viagens_realizado_datas) — buscar a coluna
+ *  `data` linha a linha parava em 5000 registros (~1-2 dias de operação)
+ *  e o aviso "X dia(s) importado(s), de A a B" mostrava só os mais
+ *  recentes. Se a função ainda não existir no banco, cai na busca antiga. */
 export async function fetchRealizadoDatasDisponiveis(): Promise<string[]> {
+  const rpc = await (supabase as any).rpc("viagens_realizado_datas");
+  if (!rpc.error) return ((rpc.data ?? []) as string[]).slice().sort().reverse();
   const { data, error } = await (supabase as any)
     .from("viagens_realizado")
     .select("data")

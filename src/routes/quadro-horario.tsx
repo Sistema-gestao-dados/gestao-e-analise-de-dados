@@ -478,12 +478,28 @@ function QuadroHorarioPage() {
         ? applied.linha
         : Array.from(new Set(filtered.map((v) => v.linha))).sort();
 
+    // Agrupa UMA vez por linha+sentido — antes varria `filtered` inteiro pra
+    // cada linha e cada sentido (centenas de linhas × dezenas de milhares de
+    // viagens), o que travava a tela sem linha escolhida. Sentido comparado
+    // sem diferenciar maiúscula/minúscula ("Ida", "IDA", "ida").
+    const porLinhaSentido = new Map<string, typeof filtered>();
+    const porLinha = new Map<string, typeof filtered>();
+    for (const v of filtered) {
+      const sent = SENTIDOS.find((x) => x.toLowerCase() === (v.sentido ?? "").trim().toLowerCase());
+      const arrL = porLinha.get(v.linha) ?? [];
+      arrL.push(v);
+      porLinha.set(v.linha, arrL);
+      if (!sent) continue;
+      const k = `${v.linha}||${sent}`;
+      const arr = porLinhaSentido.get(k) ?? [];
+      arr.push(v);
+      porLinhaSentido.set(k, arr);
+    }
+
     return linhasAlvo.map((linha) => {
       const porSentido = {} as Record<Sentido, SentidoResult>;
       for (const sentido of SENTIDOS) {
-        const viagensSentido = filtered.filter(
-          (v) => v.linha === linha && (v.sentido ?? "").trim() === sentido,
-        );
+        const viagensSentido = porLinhaSentido.get(`${linha}||${sentido}`) ?? [];
         // Horários de madrugada (< corte, ex. 03:00) são "virada" da noite
         // anterior — empurrados +24h só pra ordenar/agrupar DEPOIS da noite,
         // nunca antes da manhã. fmtHHMM devolve a hora normal na exibição.
@@ -510,8 +526,7 @@ function QuadroHorarioPage() {
       }
       const versoesEncontradas = Array.from(
         new Set(
-          filtered
-            .filter((v) => v.linha === linha)
+          (porLinha.get(linha) ?? [])
             .map((v) => v.versao_programacao)
             .filter((v): v is string => Boolean(v)),
         ),

@@ -10,6 +10,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Upload, FileUp, CheckCircle2, AlertCircle, Loader2, ArrowRight, FolderOpen, Pencil, Trash2, Settings2, X } from "lucide-react";
 import { useRef, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { fetchAllPaginado } from "@/lib/fetch-paginado";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { parseTxtEasyBus } from "@/lib/txt-import-easybus";
@@ -140,7 +141,9 @@ function ImportTxtEasyBusPage() {
   const { data: diasCadastrados = DIAS_TIPO_BASE } = useQuery({
     queryKey: ["dias-tipo-cadastrados"],
     queryFn: async () => {
-      const { data } = await (supabase as any).from("parametro_multilinha").select("tipo_dia");
+      // Paginado: um select direto parava no limite de linhas do servidor
+      // (6000) e dias tipo cadastrados depois disso sumiam da lista.
+      const data = await fetchAllPaginado<{ tipo_dia: string }>("parametro_multilinha", "tipo_dia");
       const existentes = new Set<string>(DIAS_TIPO_BASE);
       for (const r of (data ?? []) as any[]) if (r.tipo_dia) existentes.add(r.tipo_dia);
       const extras = Array.from(existentes).filter((d) => !DIAS_TIPO_BASE.includes(d)).sort();
@@ -333,13 +336,25 @@ function ImportTxtEasyBusPage() {
     const { error: e1 } = await (supabase as any).from("parametro_multilinha").update({ tipo_dia: novo }).eq("tipo_dia", nomeAntigo);
     if (e1) { toast.error(`Falha ao renomear: ${e1.message}`); return; }
     const { error: e2 } = await (supabase as any).from("viagens").update({ tipo_operacao: novo }).eq("tipo_operacao", nomeAntigo);
-    if (e2) toast.error(`Grupos renomeados, mas falhou ao atualizar viagens já importadas: ${e2.message}`);
-    else toast.success(`"${nomeAntigo}" renomeado para "${novo}" (grupos e viagens já importadas).`);
+    // Versão ativa e "dia tipo pai" também guardam o nome do dia tipo — sem
+    // renomear aqui, a versão ativa sumia dos relatórios com "Somente ativos"
+    // e a herança de grupos deixava de valer pro nome novo.
+    const { error: e3 } = await (supabase as any).from("projeto_ativo").update({ tipo_operacao: novo }).eq("tipo_operacao", nomeAntigo);
+    const { error: e4 } = await (supabase as any).from("dia_tipo_heranca").update({ tipo_dia: novo }).eq("tipo_dia", nomeAntigo);
+    const falhas = [
+      e2 && `viagens já importadas (${e2.message})`,
+      e3 && `versões ativas (${e3.message})`,
+      e4 && `dia tipo pai (${e4.message})`,
+    ].filter(Boolean);
+    if (falhas.length) toast.error(`Grupos renomeados, mas falhou ao atualizar: ${falhas.join("; ")}`);
+    else toast.success(`"${nomeAntigo}" renomeado para "${novo}" (grupos, viagens, versões ativas e dia tipo pai).`);
     if (diaTipo === nomeAntigo) setDiaTipo(novo);
     qc.invalidateQueries({ queryKey: ["dias-tipo-cadastrados"] });
     qc.invalidateQueries({ queryKey: ["viagens"] });
     qc.invalidateQueries({ queryKey: ["viagens-all"] });
     qc.invalidateQueries({ queryKey: ["multi"] });
+    qc.invalidateQueries({ queryKey: ["projetos-ativos"] });
+    qc.invalidateQueries({ queryKey: ["dia-tipo-heranca"] });
   }
 
   async function excluirDiaTipo(nome: string) {

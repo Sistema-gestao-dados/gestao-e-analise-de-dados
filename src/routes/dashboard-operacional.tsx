@@ -6,7 +6,7 @@ import { fetchAllViagens } from "@/lib/viagens";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
 import { buildServiceUnits, dominantLinha, vehicleOrigemLinha, type ViagemLite } from "@/lib/resumo";
 import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
-import { buildJornadas } from "@/lib/jornada";
+import { jornadasCompletas, type JornadaServico } from "@/lib/jornada";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -52,6 +52,19 @@ const CHART_TITLES = [
   "KM Total por Dia Tipo",
   "Linhas com Jornadas > 10h",
 ];
+
+/** Dias tipo na ordem dos relatórios: os 3 básicos primeiro, depois os
+ *  criados na importação (feriados, "Dias úteis - 1 Quinz." etc.) em ordem
+ *  alfabética — antes os gráficos por dia tipo só mostravam os 3 básicos e
+ *  os dias tipo especiais sumiam deles. */
+const DIAS_BASE = ["Dias úteis", "Sábado", "Domingo"];
+function ordenarDias(dias: Iterable<string>): string[] {
+  return Array.from(new Set(dias)).sort((a, b) => {
+    const ia = DIAS_BASE.indexOf(a), ib = DIAS_BASE.indexOf(b);
+    if (ia !== -1 || ib !== -1) return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    return a.localeCompare(b, "pt-BR", { numeric: true });
+  });
+}
 
 function parseHHMM(s: string | null): number | null {
   if (!s) return null;
@@ -341,7 +354,19 @@ function DashOperacional() {
   );
 
   const { params: custoParams } = useSalarioMotorista();
-  const jornadasParaCusto = useMemo(() => buildJornadas(filtered, linhas), [filtered, linhas]);
+  // Jornada sobre o SERVIÇO INTEIRO (só dia tipo/somente ativos), ficando
+  // com as unidades do recorte — filtros de Linha/Movimento/Sentido/Turno
+  // etc. cortavam o serviço (ex.: Movimento = Comercial tirava soltura e
+  // recolha da jornada) e subestimavam jornada/custo. Calculada UMA vez e
+  // reaproveitada nos gráficos de jornada > 10h (antes eram 3 cálculos).
+  const baseServico = useMemo(
+    () => (fDia === "__all" ? viagens : viagens.filter((v) => v.tipo_operacao === fDia)),
+    [viagens, fDia],
+  );
+  const jornadasParaCusto = useMemo(
+    () => jornadasCompletas(baseServico, filtered, linhas),
+    [baseServico, filtered, linhas],
+  );
   const custoTotalDashboard = useMemo(
     // TU incompleto (só T1 ou só T2) não entra em nenhum total de jornada
     // (mesma regra de jornadaTotais em src/lib/jornada.ts) — não pode
@@ -354,7 +379,7 @@ function DashOperacional() {
   function resumoPorChave(
     chaveViagem: (v: ViagemLite) => string,
     chaveUnit: (u: ReturnType<typeof buildServiceUnits> extends Map<string, infer U> ? U : never) => string,
-    chaveJornada: (j: ReturnType<typeof buildJornadas>[number]) => string,
+    chaveJornada: (j: JornadaServico) => string,
   ) {
     const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
     for (const u of units.values()) {
@@ -384,7 +409,11 @@ function DashOperacional() {
 
   const resumoEmpresaTabela = useMemo(
     () => resumoPorChave(
-      (v) => empresaPorServico.get(`${v.versao_programacao ?? ""}||${v.tipo_operacao ?? ""}||${v.servico ?? ""}`) || linhaMap.get(v.linha)?.empresa || resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa",
+      // Partidas/KM pela empresa de CADA viagem (com exceção por estação) —
+      // mesma regra do Resumo e do Comparativo, e do Resumo por Unidade/Grupo
+      // aqui mesmo (antes pegava a empresa do veículo, e o cadastro da linha
+      // vinha antes da exceção por estação).
+      (v) => resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa",
       (u: any) => empresaPorServico.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, "predominancia"))?.empresa || "Sem empresa",
       (j) => empresaPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.empresa || "Sem empresa",
     ),
@@ -455,10 +484,9 @@ function DashOperacional() {
 
   // Regra: apenas viagens comerciais
   const porDiaTipo = useMemo(() => {
-    const ordem = ["Dias úteis", "Sábado", "Domingo"];
     const m = new Map<string, number>();
     comerciais.forEach((v) => { if (v.tipo_operacao) m.set(v.tipo_operacao, (m.get(v.tipo_operacao) ?? 0) + 1); });
-    return ordem.filter((d) => m.has(d)).map((dia) => ({ dia, qtd: m.get(dia)! }));
+    return ordenarDias(m.keys()).map((dia) => ({ dia, qtd: m.get(dia)! }));
   }, [comerciais]);
 
   // KM por linha = soma de km com fallback
@@ -477,7 +505,6 @@ function DashOperacional() {
     [filtered, kmMaps],
   );
 
-  const ORDEM_DIA = ["Dias úteis", "Sábado", "Domingo"];
 
   // "Serviço = Motorista": 1 unidade de serviço (DIR T1/T2/APROV ou TU) = 1
   // motorista/turno. Mesma contagem usada no KPI "Serviços" e no Resumo por
@@ -489,7 +516,7 @@ function DashOperacional() {
       if (!dia) continue;
       m.set(dia, (m.get(dia) ?? 0) + 1);
     }
-    return ORDEM_DIA.filter((d) => m.has(d)).map((dia) => ({ dia, servicos: m.get(dia)! }));
+    return ordenarDias(m.keys()).map((dia) => ({ dia, servicos: m.get(dia)! }));
   }, [units, versaoParaDia]);
 
   // Frota por Dia Tipo: veículos físicos distintos (vehicleKey) por dia tipo.
@@ -501,7 +528,7 @@ function DashOperacional() {
       if (!m.has(dia)) m.set(dia, new Set());
       m.get(dia)!.add(u.vehicleKey);
     }
-    return ORDEM_DIA.filter((d) => m.has(d)).map((dia) => ({ dia, frota: m.get(dia)!.size }));
+    return ordenarDias(m.keys()).map((dia) => ({ dia, frota: m.get(dia)!.size }));
   }, [units, versaoParaDia]);
 
   // Frota por Empresa: cada veículo conta 1x, na empresa da sua linha de
@@ -525,27 +552,22 @@ function DashOperacional() {
       if (!dia) continue;
       m.set(dia, (m.get(dia) ?? 0) + u.kmTotal);
     }
-    return ORDEM_DIA.filter((d) => m.has(d)).map((dia) => ({ dia, km: Number((m.get(dia) ?? 0).toFixed(1)) }));
+    return ordenarDias(m.keys()).map((dia) => ({ dia, km: Number((m.get(dia) ?? 0).toFixed(1)) }));
   }, [units, versaoParaDia]);
 
   // Linhas com jornadas acima de 9h (crítico) — empilhado por dia tipo,
   // usando o mesmo cálculo da tela "Jornada de Trabalho".
   const jornada9hDias = useMemo(() => {
     const s = new Set<string>();
-    const js = buildJornadas(filtered as unknown as ViagemLite[], linhas);
-    js.forEach((j) => { if (j.acimaDe9h) s.add(versaoParaDia.get(j.versao) || "Sem dia tipo"); });
-    const ord = ["Dias úteis", "Sábado", "Domingo"];
-    return Array.from(s).sort((a, b) => {
-      const ia = ord.indexOf(a), ib = ord.indexOf(b);
-      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
-    });
-  }, [filtered, linhas, versaoParaDia]);
+    // TU incompleto fica fora (mesma regra dos totais da tela Jornada).
+    jornadasParaCusto.forEach((j) => { if (j.acimaDe9h && !j.incompleto) s.add(versaoParaDia.get(j.versao) || "Sem dia tipo"); });
+    return ordenarDias(s);
+  }, [jornadasParaCusto, versaoParaDia]);
 
   const linhasJornada9h = useMemo(() => {
-    const js = buildJornadas(filtered as unknown as ViagemLite[], linhas);
     const m = new Map<string, Record<string, number> & { __total: number }>();
-    js.forEach((j) => {
-      if (!j.acimaDe9h) return;
+    jornadasParaCusto.forEach((j) => {
+      if (!j.acimaDe9h || j.incompleto) return;
       const dia = versaoParaDia.get(j.versao) || "Sem dia tipo";
       if (!m.has(j.linha)) m.set(j.linha, { __total: 0 } as any);
       const row = m.get(j.linha)!;
@@ -555,7 +577,7 @@ function DashOperacional() {
     return Array.from(m, ([linha, row]) => ({ linha, ...row }))
       .sort((a, b) => b.__total - a.__total)
       .slice(0, 20);
-  }, [filtered, linhas, versaoParaDia]);
+  }, [jornadasParaCusto, versaoParaDia]);
 
   // Resumo (KPIs) desmembrado por dia tipo — para o card "Resumo"
   const resumoPorDia = useMemo(() => {
@@ -576,12 +598,9 @@ function DashOperacional() {
       a.frota.add(u.vehicleKey);
       a.servicos += 1;
     }
-    const order = ["Dias úteis", "Sábado", "Domingo"];
+    const ordem = ordenarDias(m.keys());
     return Array.from(m, ([dia, a]) => ({ dia, viagens: a.viagens, km: a.km, frota: a.frota.size, servicos: a.servicos }))
-      .sort((a, b) => {
-        const ia = order.indexOf(a.dia), ib = order.indexOf(b.dia);
-        return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
-      });
+      .sort((a, b) => ordem.indexOf(a.dia) - ordem.indexOf(b.dia));
   }, [comerciais, units, versaoParaDia]);
 
   const servPorGrupo = useMemo(() => {

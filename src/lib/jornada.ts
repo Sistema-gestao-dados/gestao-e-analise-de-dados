@@ -13,11 +13,16 @@
 // - DIR: jornada padrão 7h = 420 min
 // - TU : jornada padrão 8h24 = 504 min
 //
-// Chave de serviço: versao||tipo||servico (isola DIR#N de TU#N).
+// Chave de serviço: versao||diaTipo||tipo||servico (isola DIR#N de TU#N).
+//
+// LINHA de cada jornada = mesma regra da unidade de serviço nos resumos
+// (dominantLinha): TU olha o serviço todo (é uma unidade só); DIR olha CADA
+// turno separado (T1 numa linha e T2 em outra = cada um na sua linha, igual
+// à contagem de serviços do Resumo/Comparativo).
 
 import type { Linha } from "@/lib/data";
-import type { ViagemLite, ServiceUnit } from "@/lib/resumo";
-import { dominantLinha } from "@/lib/resumo";
+import type { ViagemLite, ServiceUnit, CriterioLinha } from "@/lib/resumo";
+import { dominantLinha, chaveUnidadeViagem } from "@/lib/resumo";
 
 export const LIMITE_DIR_MIN = 420;    // 7h — motorista DIR
 export const LIMITE_TU_MIN = 504;     // 8h24 — motorista TU
@@ -57,6 +62,8 @@ export function limiteJornada(tipo: string): number {
 export const HE_LIMITE_MIN = LIMITE_DIR_MIN;
 
 export type TurnoJornada = {
+  /** Linha dominante do turno (DIR) / do serviço (TU). */
+  linha: string;
   turno: "1" | "2" | "3";
   inicioMin: number;
   fimMin: number;
@@ -185,9 +192,66 @@ function ajustarTurno(viagens: ViagemLite[]): { partidas: number[]; chegadas: nu
 /**
  * Constrói as jornadas por (versao+tipo+servico). Para TU soma T1+T2.
  */
+/** Chave da unidade de serviço da jornada — bate com `chaveUnidade` /
+ *  `chaveUnidadeViagem` (src/lib/resumo.ts). */
+export function chaveUnidadeJornada(j: JornadaServico): string {
+  return `${j.vehicleKey}||${j.bucket}`;
+}
+
+/** Linha dominante de um conjunto de viagens (uma unidade de serviço) —
+ *  mesma conta da ServiceUnit (partidas comerciais + desempates). */
+function linhaDominanteDe(viagens: ViagemLite[], criterio: CriterioLinha): string {
+  const partidasPorLinha = new Map<string, number>();
+  const primeiraPartidaPorLinha = new Map<string, number>();
+  const viagensPorLinha = new Map<string, number>();
+  for (const v of viagens) {
+    viagensPorLinha.set(v.linha, (viagensPorLinha.get(v.linha) ?? 0) + 1);
+    const isPartida = (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && Boolean(v.partida);
+    if (isPartida) {
+      partidasPorLinha.set(v.linha, (partidasPorLinha.get(v.linha) ?? 0) + 1);
+      const min = parseHHMM(v.partida);
+      if (min != null) {
+        const atual = primeiraPartidaPorLinha.get(v.linha);
+        if (atual == null || min < atual) primeiraPartidaPorLinha.set(v.linha, min);
+      }
+    }
+  }
+  return dominantLinha({ partidasPorLinha, primeiraPartidaPorLinha, viagensPorLinha } as ServiceUnit, criterio);
+}
+
+/**
+ * Jornadas calculadas sobre o SERVIÇO INTEIRO, mas só das unidades que
+ * aparecem no recorte filtrado.
+ *
+ * Por quê: filtrar viagens por Linha/Unidade/Grupo/Movimento ANTES de
+ * montar a jornada corta serviços que passam por mais de uma linha (ex.:
+ * EasyBus 11.1 — 489M, intra-jornada na 480M, volta pra 489M): o TU perdia
+ * um dos turnos (virava "incompleto" e sumia do total) ou a jornada saía
+ * mais curta, e com ela hora extra e custo.
+ *
+ * `base` = viagens só com os filtros que DEFINEM o serviço (dia tipo,
+ * versão, somente ativos); `recorte` = viagens com todos os filtros da tela.
+ */
+export function jornadasCompletas(
+  base: ViagemLite[],
+  recorte: ViagemLite[],
+  linhas: Linha[],
+  criterio: CriterioLinha = "predominancia",
+): JornadaServico[] {
+  const todas = buildJornadas(base, linhas, criterio);
+  if (base === recorte) return todas;
+  const presentes = new Set<string>();
+  for (const v of recorte) {
+    const k = chaveUnidadeViagem(v);
+    if (k) presentes.add(k);
+  }
+  return todas.filter((j) => presentes.has(chaveUnidadeJornada(j)));
+}
+
 export function buildJornadas(
   viagens: ViagemLite[],
   linhas: Linha[],
+  criterio: CriterioLinha = "predominancia",
 ): JornadaServico[] {
   const linhaMap = new Map<string, Linha>();
   linhas.forEach((l) => linhaMap.set(l.linha, l));
@@ -208,29 +272,8 @@ export function buildJornadas(
   const out: JornadaServico[] = [];
 
   for (const g of groups.values()) {
-    // Linha dominante: MESMA regra usada em Resumo/Comparativo/Dashboard
-    // (dominantLinha, baseada em partidas comerciais + desempate por 1ª
-    // partida) — antes essa tela calculava a própria conta simplificada
-    // (contava toda viagem, sem desempate determinístico), podendo divergir
-    // da linha mostrada nos outros relatórios pro mesmo serviço.
-    const partidasPorLinha = new Map<string, number>();
-    const primeiraPartidaPorLinha = new Map<string, number>();
-    const viagensPorLinha = new Map<string, number>();
-    for (const v of g.viagens) {
-      viagensPorLinha.set(v.linha, (viagensPorLinha.get(v.linha) ?? 0) + 1);
-      const isPartida = (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && Boolean(v.partida);
-      if (isPartida) {
-        partidasPorLinha.set(v.linha, (partidasPorLinha.get(v.linha) ?? 0) + 1);
-        const min = parseHHMM(v.partida);
-        if (min != null) {
-          const atual = primeiraPartidaPorLinha.get(v.linha);
-          if (atual == null || min < atual) primeiraPartidaPorLinha.set(v.linha, min);
-        }
-      }
-    }
-    const linhaDom = dominantLinha({ partidasPorLinha, primeiraPartidaPorLinha, viagensPorLinha } as ServiceUnit);
-    const linhaCad = linhaMap.get(linhaDom);
-    const semCadastroLinha = !linhaCad;
+    // Linha do TU = serviço todo; DIR = por turno (calculada lá embaixo).
+    const linhaTU = g.tipo === "TU" ? linhaDominanteDe(g.viagens, criterio) : "";
     const diaTipo = g.viagens[0]?.tipo_operacao ?? "";
     const vehicleKey = `${g.versao}||${diaTipo}||${g.servico}`;
 
@@ -252,13 +295,15 @@ export function buildJornadas(
 
       const primeira = Math.min(...partidas);
       const ultima = Math.max(...chegadas);
-      const { antec, prest } = antecPrestOf(linhaCad, t);
+      const linhaTurno = g.tipo === "TU" ? linhaTU : linhaDominanteDe(arr, criterio);
+      const { antec, prest } = antecPrestOf(linhaMap.get(linhaTurno), t);
       const inicio = primeira - antec;
       const fim = ultima + prest;
       const minutos = fim - inicio;
       // proteção final: jornada implausível (>20h) indica dados inconsistentes.
       if (minutos <= 0 || minutos > 20 * 60) continue;
       turnos.push({
+        linha: linhaTurno,
         turno: t, inicioMin: inicio, fimMin: fim, minutos,
         primeiraPartida: fmtHHMM(primeira), ultimaChegada: fmtHHMM(ultima),
         antecipacao: antec, prestacao: prest,
@@ -273,28 +318,28 @@ export function buildJornadas(
       const minutosTotal = t12.reduce((a, t) => a + t.minutos, 0);
       const lim = LIMITE_TU_MIN;
       out.push({
-        versao: g.versao, linha: linhaDom, tipoServico: "TU", servico: g.servico,
+        versao: g.versao, linha: linhaTU, tipoServico: "TU", servico: g.servico,
         vehicleKey, bucket: "TU", turnos: t12,
         minutosTotal, limiteMin: lim,
         horasExtras: Math.max(0, minutosTotal - lim),
         acimaDe7h: minutosTotal > ALERTA_MIN,
         acimaDe9h: minutosTotal > CRITICO_MIN,
         incompleto,
-        semCadastroLinha,
+        semCadastroLinha: !linhaMap.has(linhaTU),
       });
     } else {
       for (const tj of turnos) {
         const bucket = tj.turno === "1" ? "DIR_T1" : tj.turno === "2" ? "DIR_T2" : "APROV";
         const lim = LIMITE_DIR_MIN;
         out.push({
-          versao: g.versao, linha: linhaDom, tipoServico: "DIR", servico: g.servico,
+          versao: g.versao, linha: tj.linha, tipoServico: "DIR", servico: g.servico,
           vehicleKey, bucket, turnos: [tj],
           minutosTotal: tj.minutos, limiteMin: lim,
           horasExtras: Math.max(0, tj.minutos - lim),
           acimaDe7h: tj.minutos > ALERTA_MIN,
           acimaDe9h: tj.minutos > CRITICO_MIN,
           incompleto: false,
-          semCadastroLinha,
+          semCadastroLinha: !linhaMap.has(tj.linha),
         });
       }
     }
