@@ -14,6 +14,7 @@ import { Switch } from "@/components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -59,6 +60,12 @@ function Kpi({ label, value, icon: Icon, tone = "primary", onClick }: any) {
   );
 }
 
+/** "HH:MM" digitado -> minutos; vazio/inválido = null (filtro desligado). */
+function acimaDeMin(v: string | undefined): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec((v ?? "").trim());
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+}
+
 function JornadaPage() {
   useAuditView("jornada");
   const { isAdmin } = useAuth();
@@ -68,11 +75,13 @@ function JornadaPage() {
   const [fLinha, setFLinha] = usePersistentState<string[]>("jornada.fLinha", []);
   const [fUnidade, setFUnidade] = usePersistentState("jornada.fUnidade", "__all");
   const [fGrupoOrdem, setFGrupoOrdem] = usePersistentState("jornada.fGrupoOrdem", "__all");
+  // "Jornada acima de" (HH:MM digitado) — vazio = sem esse filtro.
+  const [fAcimaDe, setFAcimaDe] = usePersistentState("jornada.fAcimaDe", "");
   const [modal, setModal] = useState<null | "7" | "9" | "he" | "sem_param">(null);
   const [pageSize, setPageSize] = usePersistentState("jornada.pageSize", 50);
   const [page, setPage] = useState(0);
   const [somenteAtivos, setSomenteAtivos] = usePersistentState("jornada.somenteAtivos", false);
-  type Snap = { dia: string; versao: string; tipo: string; linha: string[]; unidade: string; grupoOrdem: string };
+  type Snap = { dia: string; versao: string; tipo: string; linha: string[]; unidade: string; grupoOrdem: string; acimaDe?: string };
   // Aplica filtros automaticamente ao abrir (usa cache se houver, sem recarregar)
   const [applied, setApplied] = useState<Snap | null>({ dia: "__all", versao: "__all", tipo: "__all", linha: [], unidade: "__all", grupoOrdem: "__all" });
 
@@ -133,10 +142,13 @@ function JornadaPage() {
   const { params: custoParams } = useParametrosCusto();
   const jornadas = useMemo(() => {
     if (!applied) return [];
-    const all = buildJornadas(filtered, linhasParaJornada(linhas, custoParams?.somarAntecPrest)).filter(passaFiltroJornada);
-    if (applied.tipo === "__all") return all;
-    if (applied.tipo === "TU") return all.filter((j) => j.tipoServico === "TU");
-    if (applied.tipo === "DIR") return all.filter((j) => j.tipoServico === "DIR");
+    let all = buildJornadas(filtered, linhasParaJornada(linhas, custoParams?.somarAntecPrest)).filter(passaFiltroJornada);
+    if (applied.tipo === "TU") all = all.filter((j) => j.tipoServico === "TU");
+    else if (applied.tipo === "DIR") all = all.filter((j) => j.tipoServico === "DIR");
+    // "Jornada acima de": só jornadas MAIORES que a hora digitada (TU
+    // incompleto fica fora, mesma regra dos totais).
+    const acima = acimaDeMin(applied.acimaDe);
+    if (acima != null) all = all.filter((j) => !j.incompleto && j.minutosTotal > acima);
     return all;
   }, [applied, filtered, linhas, passaFiltroJornada, custoParams?.somarAntecPrest]);
 
@@ -156,6 +168,20 @@ function JornadaPage() {
   }, [jornadas, ordenarPor, unidadePorServico]);
 
   const totais = useMemo(() => jornadaTotais(jornadas), [jornadas]);
+  // Resumo do filtro "Jornada acima de": quantas, soma das horas extras
+  // (acima do limite legal 7h DIR / 8h24 TU) e o quanto passou da hora
+  // digitada.
+  const acimaMinAplicado = acimaDeMin(applied?.acimaDe);
+  const resumoAcima = useMemo(() => {
+    if (acimaMinAplicado == null) return null;
+    let excedente = 0, horasExtras = 0, dir = 0, tu = 0;
+    for (const j of jornadas) {
+      excedente += j.minutosTotal - acimaMinAplicado;
+      horasExtras += j.horasExtras;
+      if (j.tipoServico === "TU") tu++; else dir++;
+    }
+    return { quantidade: jornadas.length, horasExtras, excedente, dir, tu };
+  }, [jornadas, acimaMinAplicado]);
 
   const totalPaginas = Math.max(1, Math.ceil(jornadas.length / pageSize));
   const paginaAtual = Math.min(page, totalPaginas - 1);
@@ -265,6 +291,7 @@ function JornadaPage() {
       applied?.dia && applied.dia !== "__all" ? applied.dia : "Todos os dias",
       applied?.versao && applied.versao !== "__all" ? `Versão ${applied.versao}` : null,
       applied?.tipo && applied.tipo !== "__all" ? `Tipo ${applied.tipo}` : null,
+      acimaMinAplicado != null ? `Jornada acima de ${fmtDur(acimaMinAplicado)}` : null,
     ].filter(Boolean).join(" · ");
     const kpiTxt = `Jornadas ${totais.totalJornadas.toLocaleString("pt-BR")}  ·  Jornada total ${fmtDur(totais.minutosTotal)}  ·  ` +
       `Horas extras ${fmtDur(totais.horasExtrasTotal)}  ·  Acima de 9h ${totais.acimaDe7h}  ·  Acima de 10h (crítico) ${totais.acimaDe9h}`;
@@ -500,18 +527,46 @@ function JornadaPage() {
               </SelectContent>
             </Select>
           </div>
+          <div className="flex flex-col gap-1 min-w-[130px]">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Jornada acima de</label>
+            <div className="flex items-center gap-1">
+              <Input
+                type="time"
+                value={fAcimaDe}
+                onChange={(e) => setFAcimaDe(e.target.value)}
+                className="h-8 w-[110px] text-xs"
+                title="Mostra só jornadas maiores que essa duração (horas:minutos). Vazio = todas."
+              />
+              {fAcimaDe && (
+                <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => setFAcimaDe("")} title="Limpar">×</Button>
+              )}
+            </div>
+          </div>
           <label className="flex items-end gap-2 text-xs cursor-pointer select-none pb-1">
             <Checkbox checked={somenteAtivos} onCheckedChange={(v) => setSomenteAtivos(!!v)} />
             Somente projetos ativos
           </label>
           <div className="ml-auto flex gap-2">
-            <Button size="sm" onClick={() => setApplied({ dia: fDia, versao: fVersao, tipo: fTipo, linha: fLinha, unidade: fUnidade, grupoOrdem: fGrupoOrdem })} disabled={viagensQ.isLoading || linhasQ.isLoading}>
+            <Button size="sm" onClick={() => setApplied({ dia: fDia, versao: fVersao, tipo: fTipo, linha: fLinha, unidade: fUnidade, grupoOrdem: fGrupoOrdem, acimaDe: fAcimaDe })} disabled={viagensQ.isLoading || linhasQ.isLoading}>
               Consultar
             </Button>
             {applied && <Button variant="outline" size="sm" onClick={() => setApplied(null)}>Limpar</Button>}
           </div>
         </CardContent>
       </Card>
+
+      {resumoAcima && acimaMinAplicado != null && (
+        <Card className="shadow-[var(--shadow-card)] border-warning/40">
+          <CardContent className="p-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+            <span className="font-semibold">Jornadas acima de {fmtDur(acimaMinAplicado)}</span>
+            <span>Quantidade: <strong className="tabular-nums">{resumoAcima.quantidade.toLocaleString("pt-BR")}</strong>
+              <span className="text-xs text-muted-foreground"> (DIR {resumoAcima.dir} · TU {resumoAcima.tu})</span></span>
+            <span>Soma das horas extras: <strong className="tabular-nums">{fmtDur(resumoAcima.horasExtras)}</strong>
+              <span className="text-xs text-muted-foreground"> (acima de {fmtDur(LIMITE_DIR_MIN)} DIR / {fmtDur(LIMITE_TU_MIN)} TU)</span></span>
+            <span>Excedente acima de {fmtDur(acimaMinAplicado)}: <strong className="tabular-nums">{fmtDur(resumoAcima.excedente)}</strong></span>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-3 grid-cols-2 md:grid-cols-5">
         <Kpi label="Jornadas" value={totais.totalJornadas.toLocaleString("pt-BR")} icon={Users} />
