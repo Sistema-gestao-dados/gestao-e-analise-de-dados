@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { fetchRealizado, fetchRealizadoDatasDisponiveis } from "@/lib/viagens-realizado";
 import { fetchLinhas } from "@/lib/data";
-import { classificar, STATUS_LABEL, STATUS_COLOR, type StatusViagem, type RealizadoRow } from "@/lib/realizado";
+import { classificar, difPartidaMin, STATUS_LABEL, STATUS_COLOR, type StatusViagem, type RealizadoRow } from "@/lib/realizado";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -80,7 +80,8 @@ function RealizadoPage() {
       // Só quem saiu ATRASADO (dif > 0): somar adiantamento como negativo
       // fazia atraso e adiantamento se anularem e o "atraso médio" parecia
       // melhor do que é.
-      if (r.real_partida && r.dif_partida != null && r.dif_partida > 0) { somaAtraso += r.dif_partida; nAtraso++; }
+      const dif = difPartidaMin(r);
+      if (r.real_partida && dif != null && dif > 0) { somaAtraso += dif; nAtraso++; }
     }
     const realizadas = total - contagem.perdida;
     const pontualidade = realizadas > 0 ? (contagem.no_horario / realizadas) * 100 : 0;

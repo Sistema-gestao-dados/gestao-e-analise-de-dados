@@ -79,23 +79,40 @@ export async function fetchAllPaginado<T>(
   const quote = (v: any) => `"${String(v).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 
   const all: T[] = [];
+  let primeira = true;
   let cursorOrder: any = null;
   let cursorTiebreak: any = null;
+
+  // Valor VAZIO (null) na coluna de ordenação: o Postgres põe os nulls no
+  // FIM em ordem crescente e no COMEÇO em decrescente. Antes, um null no fim
+  // de uma página era confundido com "ainda não começou" (recomeçava do
+  // zero, em loop) e os nulls depois do último valor eram pulados pelo
+  // `gt` — só aparece quando a tabela passa de uma página, por isso nunca
+  // tinha dado problema (linhas/histórico ainda cabem numa página só).
+  const nullsFirst = !ascending;
+  const filtroCursor = (q: any) => {
+    if (!compound) return q[cmpOrder](orderColumn, cursorOrder);
+    const tb = `${tiebreak}.gt.${quote(cursorTiebreak)}`;
+    if (cursorOrder === null || cursorOrder === undefined) {
+      // Ainda dentro do bloco de nulls.
+      return nullsFirst
+        ? q.or(`${orderColumn}.not.is.null,and(${orderColumn}.is.null,${tb})`)
+        : q.is(orderColumn, null).gt(tiebreak, cursorTiebreak);
+    }
+    const base = `${orderColumn}.${cmpOrder}.${quote(cursorOrder)},and(${orderColumn}.eq.${quote(cursorOrder)},${tb})`;
+    // Crescente: os nulls ainda estão por vir (no fim) — inclui eles.
+    return q.or(nullsFirst ? base : `${base},${orderColumn}.is.null`);
+  };
 
   for (;;) {
     let q = client.from(table).select(fetchSelect);
     if (opts?.filtro) q = opts.filtro(q);
     q = applyOrder(q).limit(pageSize);
-    if (cursorOrder !== null) {
-      q = compound
-        ? q.or(
-            `${orderColumn}.${cmpOrder}.${quote(cursorOrder)},and(${orderColumn}.eq.${quote(cursorOrder)},${tiebreak}.gt.${quote(cursorTiebreak)})`,
-          )
-        : q[cmpOrder](orderColumn, cursorOrder);
-    }
+    if (!primeira) q = filtroCursor(q);
     const { data, error } = await q;
     if (error) throw error;
     const chunk = (data ?? []) as any[];
+    primeira = false;
     if (chunk.length) {
       const last = chunk[chunk.length - 1];
       cursorOrder = last[orderColumn];

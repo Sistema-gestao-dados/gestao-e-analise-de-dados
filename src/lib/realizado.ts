@@ -240,10 +240,28 @@ export type StatusViagem = "perdida" | "incompleta" | "atrasada" | "adiantada" |
 
 /** Tolerância padrão: até 5 min de diferença (pra mais ou pra menos) conta
  * como "no horário". Ajustável pelo relatório. */
+/** Diferença real − previsto da partida, em minutos. Usa a coluna "Dif" do
+ *  arquivo; se ela vier vazia, calcula pelos horários (antes vazio contava
+ *  como 0 = "No horário", mesmo com a viagem saindo atrasada). Virada de
+ *  meia-noite: diferença fica entre −12h e +12h (23:55 → 00:05 = +10). */
+export function difPartidaMin(r: Pick<RealizadoRow, "dif_partida" | "prev_partida" | "real_partida">): number | null {
+  if (r.dif_partida != null) return r.dif_partida;
+  const min = (h: string | null) => {
+    const m = h ? /^(\d{1,2}):(\d{2})/.exec(h) : null;
+    return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+  };
+  const prev = min(r.prev_partida), real = min(r.real_partida);
+  if (prev == null || real == null) return null;
+  let d = real - prev;
+  if (d > 720) d -= 1440;
+  if (d < -720) d += 1440;
+  return d;
+}
+
 export function classificar(r: RealizadoRow, toleranciaMin = 5): StatusViagem {
   if (!r.real_partida) return "perdida";
   if (!r.real_chegada) return "incompleta";
-  const dif = r.dif_partida ?? 0;
+  const dif = difPartidaMin(r) ?? 0;
   if (dif > toleranciaMin) return "atrasada";
   if (dif < -toleranciaMin) return "adiantada";
   return "no_horario";

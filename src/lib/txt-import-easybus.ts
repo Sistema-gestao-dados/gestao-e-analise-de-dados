@@ -85,7 +85,8 @@ function parseServicoTurno(raw: string): { servico: string | null; turno: string
   const v = raw.trim();
   if (v.includes(".")) {
     const [servicoRaw, turnoRaw] = v.split(".");
-    return { servico: servicoRaw?.trim() || null, turno: turnoRaw?.trim() || null };
+    // "01.01" -> turno "1" (zero à esquerda não casava com 1/2/3 nos cálculos).
+    return { servico: servicoRaw?.trim() || null, turno: turnoRaw?.trim() ? turnoRaw.trim().replace(/^0+(?=\d)/, "") : null };
   }
   const letra = v.match(/^(\d+)\s*([ABCEabce])$/);
   if (letra) {

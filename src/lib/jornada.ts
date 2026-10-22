@@ -22,7 +22,7 @@
 
 import type { Linha } from "@/lib/data";
 import type { ViagemLite, ServiceUnit, CriterioLinha } from "@/lib/resumo";
-import { dominantLinha, chaveUnidadeViagem } from "@/lib/resumo";
+import { dominantLinha, chaveUnidadeViagem, ajustarVirada, normalizarTurno } from "@/lib/resumo";
 
 export const LIMITE_DIR_MIN = 420;    // 7h — motorista DIR
 export const LIMITE_TU_MIN = 504;     // 8h24 — motorista TU
@@ -214,17 +214,23 @@ function linhaDominanteDe(viagens: ViagemLite[], criterio: CriterioLinha): strin
   const partidasPorLinha = new Map<string, number>();
   const primeiraPartidaPorLinha = new Map<string, number>();
   const viagensPorLinha = new Map<string, number>();
+  const brutas: { linha: string; min: number }[] = [];
   for (const v of viagens) {
     viagensPorLinha.set(v.linha, (viagensPorLinha.get(v.linha) ?? 0) + 1);
     const isPartida = (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && Boolean(v.partida);
     if (isPartida) {
       partidasPorLinha.set(v.linha, (partidasPorLinha.get(v.linha) ?? 0) + 1);
       const min = parseHHMM(v.partida);
-      if (min != null) {
-        const atual = primeiraPartidaPorLinha.get(v.linha);
-        if (atual == null || min < atual) primeiraPartidaPorLinha.set(v.linha, min);
-      }
+      if (min != null) brutas.push({ linha: v.linha, min });
     }
+  }
+  // 1ª partida em ordem cronológica (virada de meia-noite) — mesma conta
+  // da ServiceUnit (ver ajustarVirada em resumo.ts).
+  const adj = ajustarVirada(brutas.map((b) => b.min));
+  for (const b of brutas) {
+    const m = adj(b.min);
+    const atual = primeiraPartidaPorLinha.get(b.linha);
+    if (atual == null || m < atual) primeiraPartidaPorLinha.set(b.linha, m);
   }
   return dominantLinha({ partidasPorLinha, primeiraPartidaPorLinha, viagensPorLinha } as ServiceUnit, criterio);
 }
@@ -289,7 +295,7 @@ export function buildJornadas(
 
     const porTurno = new Map<string, ViagemLite[]>();
     for (const v of g.viagens) {
-      const t = (v.turno ?? "").trim();
+      const t = normalizarTurno(v.turno);
       if (t !== "1" && t !== "2" && t !== "3") continue;
       if (!porTurno.has(t)) porTurno.set(t, []);
       porTurno.get(t)!.push(v);
@@ -322,8 +328,11 @@ export function buildJornadas(
     if (!turnos.length) continue;
 
     if (g.tipo === "TU") {
-      const t12 = turnos.filter((t) => t.turno === "1" || t.turno === "2");
-      if (!t12.length) continue;
+      // TU = soma de TODOS os trechos trabalhados do mesmo motorista. No
+      // EasyBus, cada "Intra-jorn" abre um turno novo — com 2 intervalos no
+      // dia o serviço tem T1, T2 e T3, e antes o T3 era descartado (jornada,
+      // hora extra e custo saíam menores). "Fechar" continua exigindo T1 e T2.
+      const t12 = turnos;
       const incompleto = !t12.some((t) => t.turno === "1") || !t12.some((t) => t.turno === "2");
       const minutosTotal = t12.reduce((a, t) => a + t.minutos, 0);
       const lim = LIMITE_TU_MIN;

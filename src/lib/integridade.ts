@@ -173,8 +173,8 @@ export function runVerificacaoIntegridade(args: {
         id: "jornada_sem_param",
         categoria: "Jornada",
         severidade: "atencao",
-        titulo: "Jornadas sem parâmetro de antecipação/prestação",
-        descricao: "A linha não tem esses minutos cadastrados — a jornada calculada fica sem esse acréscimo, ficando menor do que a real.",
+        titulo: "Jornadas de linha sem cadastro (sem antecipação/prestação)",
+        descricao: "A linha da jornada não existe no Cadastro de Linhas — fica sem antecipação e prestação de contas, e a jornada calculada sai menor do que a real. Cadastre a linha em /linhas.",
         quantidade: semParam.length,
         amostra: amostra(semParam.map((j) => `Linha ${j.linha}, serviço ${j.servico}, versão ${j.versao}`)),
       });

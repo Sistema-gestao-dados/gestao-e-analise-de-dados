@@ -64,7 +64,8 @@ function parseServico(raw: string): { tipo_servico: string; servico: string | nu
   return {
     tipo_servico: hasTU ? "TU" : "DIR",
     servico: svc?.trim() || null,
-    turno: turno?.trim() || null,
+    // "07.01" -> turno "1" (zero à esquerda não casava com 1/2/3 nos cálculos).
+    turno: turno?.trim() ? String(turno.trim()).replace(/^0+(?=\d)/, "") : null,
   };
 }
 

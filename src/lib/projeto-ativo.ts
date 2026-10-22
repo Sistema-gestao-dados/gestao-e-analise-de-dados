@@ -73,14 +73,14 @@ async function linhasDoGrupo(linha: string, tipo_operacao: string): Promise<stri
  *  substituindo qualquer ativação anterior dessas combinações. Também propaga
  *  para as linhas do mesmo grupo (parametro_multilinha), igual ao ativarProjeto. */
 export async function ativarVersao(versao_programacao: string, podeLinha: (l: string) => boolean = () => true) {
-  const { data, error } = await (supabase as any)
-    .from("viagens")
-    .select("linha,tipo_operacao")
-    .eq("versao_programacao", versao_programacao);
-  if (error) throw error;
+  // Paginado: um select direto parava no limite do servidor (6000 linhas) e
+  // uma versão grande ativava só parte das combinações linha/dia tipo.
+  const data = await fetchAllPaginado<{ linha: string; tipo_operacao: string | null }>("viagens", "linha,tipo_operacao", {
+    filtro: (q) => q.eq("versao_programacao", versao_programacao),
+  });
   const set = new Set<string>();
   const combos: { linha: string; tipo_operacao: string }[] = [];
-  for (const v of (data ?? []) as any[]) {
+  for (const v of data) {
     const key = `${v.linha}||${v.tipo_operacao ?? ""}`;
     if (set.has(key) || !v.tipo_operacao) continue;
     set.add(key);

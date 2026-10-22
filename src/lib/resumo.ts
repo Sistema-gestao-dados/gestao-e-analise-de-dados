@@ -84,12 +84,20 @@ export type AggRow = {
   heMin: number; // horas extras programadas (minutos) — preenchido sob demanda
 };
 
+/** Turno como texto canônico: "01" -> "1", " 2 " -> "2". Arquivo com zero
+ *  à esquerda (ex.: serviço "07.01") fazia a viagem não casar com "1"/"2"/
+ *  "3" e sumir de serviços, frota, jornada e custo. */
+export function normalizarTurno(t: string | null | undefined): string {
+  const s = (t ?? "").trim();
+  return /^\d+$/.test(s) ? String(Number(s)) : s;
+}
+
 function unitKey(v: ViagemLite): { key: string; bucket: Bucket } | null {
   const ts = (v.tipo_servico ?? "").toUpperCase();
   const sv = v.servico ?? "";
   const ver = v.versao_programacao ?? "";
   const dia = v.tipo_operacao ?? "";
-  const tu = (v.turno ?? "").trim();
+  const tu = normalizarTurno(v.turno);
   if (!sv || !ver) return null;
   if (ts === "TU") return { key: `${ver}||${dia}||${sv}||TU`, bucket: "TU" };
   if (ts === "DIR") {
@@ -115,11 +123,37 @@ export function chaveUnidade(u: ServiceUnit): string {
   return `${u.vehicleKey}||${u.bucket}`;
 }
 
+/**
+ * Ordem cronológica de horários de UM serviço/veículo que pode virar a
+ * meia-noite (ex.: 23:00, 23:50, 00:30). Pelo relógio, 00:30 vem antes de
+ * 23:00 e a "1ª partida" saía errada em serviço noturno (linha errada no
+ * critério "1ª partida", no desempate da predominância e na origem da
+ * frota). Mesma regra de ajustarTurno (jornada.ts): se os horários se
+ * espalham por mais de 12h e o maior intervalo entre eles passa de 4h, com
+ * o trecho antes dele de madrugada (até 06:00), esse trecho é do dia
+ * seguinte (+24h). Devolve a função que converte cada horário.
+ */
+export function ajustarVirada(minutos: number[]): (m: number) => number {
+  const ident = (m: number) => m;
+  const s = Array.from(new Set(minutos)).sort((a, b) => a - b);
+  if (s.length < 2 || s[s.length - 1] - s[0] <= 12 * 60) return ident;
+  let gapIdx = -1, gap = 0;
+  for (let i = 1; i < s.length; i++) {
+    if (s[i] - s[i - 1] > gap) { gap = s[i] - s[i - 1]; gapIdx = i; }
+  }
+  if (gapIdx < 1 || gap < 4 * 60 || s[gapIdx - 1] > 6 * 60) return ident;
+  const corte = s[gapIdx];
+  return (m) => (m < corte ? m + 1440 : m);
+}
+
 export function buildServiceUnits(
   viagens: ViagemLite[],
   kmFn: (v: ViagemLite) => number,
 ): Map<string, ServiceUnit> {
   const units = new Map<string, ServiceUnit>();
+  // Partidas comerciais por unidade/linha, pra achar a 1ª partida em ordem
+  // CRONOLÓGICA (com virada de meia-noite) depois de juntar todas.
+  const partidasBrutas = new Map<string, Map<string, number[]>>();
   for (const v of viagens) {
     const k = unitKey(v);
     if (!k) continue;
@@ -133,7 +167,7 @@ export function buildServiceUnits(
         tipo_operacao: v.tipo_operacao ?? "",
         servico: v.servico ?? "",
         tipo_servico: ts,
-        turno: k.bucket === "TU" ? "" : (v.turno ?? ""),
+        turno: k.bucket === "TU" ? "" : normalizarTurno(v.turno),
         // FROTA: 1 CARRO = 1 nº de SERVIÇO. Independente de turno OU tipo_servico.
         // TU#01 e DIR#01 na mesma versão = MESMO carro (001). Rendição idem.
         // Inclui o dia-tipo para não colidir o mesmo número entre projetos.
@@ -155,14 +189,22 @@ export function buildServiceUnits(
       u.partidasPorLinha.set(v.linha, (u.partidasPorLinha.get(v.linha) ?? 0) + 1);
       const min = parseTimeToMinutes(v.partida);
       if (min != null) {
-        const atual = u.primeiraPartidaPorLinha.get(v.linha);
-        if (atual == null || min < atual) u.primeiraPartidaPorLinha.set(v.linha, min);
+        const porLinha = partidasBrutas.get(u.key) ?? new Map<string, number[]>();
+        const arr = porLinha.get(v.linha) ?? [];
+        arr.push(min);
+        porLinha.set(v.linha, arr);
+        partidasBrutas.set(u.key, porLinha);
       }
     }
     const kmViagem = kmFn(v);
     u.kmTotal += kmViagem;
     u.kmPorLinha.set(v.linha, (u.kmPorLinha.get(v.linha) ?? 0) + kmViagem);
     u.viagensPorLinha.set(v.linha, (u.viagensPorLinha.get(v.linha) ?? 0) + 1);
+  }
+  for (const [key, porLinha] of partidasBrutas) {
+    const u = units.get(key)!;
+    const adj = ajustarVirada(Array.from(porLinha.values()).flat());
+    for (const [linha, mins] of porLinha) u.primeiraPartidaPorLinha.set(linha, Math.min(...mins.map(adj)));
   }
   return units;
 }
@@ -300,10 +342,12 @@ function predominantLineWithDepartureTieBreak(viagens: ViagemLite[], fallbackVia
     }
   }
 
+  const adj = ajustarVirada(viagens.map((v) => parseTimeToMinutes(v.partida)).filter((m): m is number => m != null));
   const partidas = viagens
     .filter((v) => empatadas.includes(v.linha))
     .map((v) => ({ linha: v.linha, minutes: parseTimeToMinutes(v.partida) }))
     .filter((v): v is { linha: string; minutes: number } => v.minutes != null)
+    .map((v) => ({ ...v, minutes: adj(v.minutes) }))
     .sort((a, b) => a.minutes - b.minutes || a.linha.localeCompare(b.linha));
 
   return partidas[0]?.linha ?? empatadas[0];
@@ -360,9 +404,12 @@ export function vehicleOrigemLinha(
     if (criterio === "primeira_partida") {
       // Regra alternativa: o veículo pertence à linha da sua PRIMEIRA partida
       // comercial do dia, independente de onde rodou mais.
-      const ordenadas = comerciais
+      const brutas = comerciais
         .map((v) => ({ linha: v.linha, minutes: parseTimeToMinutes(v.partida) }))
-        .filter((x): x is { linha: string; minutes: number } => x.minutes != null)
+        .filter((x): x is { linha: string; minutes: number } => x.minutes != null);
+      const adj = ajustarVirada(brutas.map((x) => x.minutes));
+      const ordenadas = brutas
+        .map((x) => ({ ...x, minutes: adj(x.minutes) }))
         .sort((a, b) => a.minutes - b.minutes || a.linha.localeCompare(b.linha));
       if (ordenadas.length) {
         origem.set(vk, ordenadas[0].linha);
@@ -372,7 +419,7 @@ export function vehicleOrigemLinha(
 
     const primeiroTurno = firstOperationalTurno(comerciais);
     const baseOrigem = primeiroTurno
-      ? comerciais.filter((v) => (v.turno ?? "").trim() === primeiroTurno)
+      ? comerciais.filter((v) => normalizarTurno(v.turno) === primeiroTurno)
       : comerciais;
     const linhaOrigem = predominantLineWithDepartureTieBreak(baseOrigem, comerciais);
 
@@ -540,7 +587,7 @@ export function detectTUIncompletos(
   for (const v of allViagens) {
     if ((v.tipo_servico ?? "").toUpperCase() !== "TU") continue;
     const key = `${v.versao_programacao ?? ""}||${v.tipo_operacao ?? ""}||${v.servico ?? ""}`;
-    const t = (v.turno ?? "").trim();
+    const t = normalizarTurno(v.turno);
     if (!t) continue;
     if (!turnosPor.has(key)) turnosPor.set(key, new Set());
     turnosPor.get(key)!.add(t);

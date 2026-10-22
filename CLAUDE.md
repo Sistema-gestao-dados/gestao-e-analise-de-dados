@@ -14,7 +14,10 @@ Armazenado em `viagens.tipo_servico` (text, valores `"TU"`/`"DIR"`).
 **TU**
 - Mesmo motorista cobre dois turnos (T1 + T2) no mesmo dia; a jornada do
   serviço é a soma dos minutos de T1 + T2. O intervalo entre os turnos
-  (intrajornada) **não** conta como jornada trabalhada.
+  (intrajornada) **não** conta como jornada trabalhada. Se o EasyBus tiver
+  2 intervalos "Intra-jorn" no dia, vira T1 + T2 + T3 e a jornada soma os
+  três trechos (a intra-jornada medida continua sendo T1 → T2).
+- Turno é normalizado ("01" = "1") em todo cálculo e na importação.
 - Limite de jornada: **8h24 (504 min)** — `LIMITE_TU_MIN` em `src/lib/jornada.ts`.
 - Precisa das duas pontas (T1 e T2) para "fechar"; TU com só um turno é
   "incompleto" — excluído dos totais e sinalizado como erro de cadastro
