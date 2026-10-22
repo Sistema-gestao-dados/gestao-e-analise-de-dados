@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { Loader2, Save, DollarSign } from "lucide-react";
 import { logAudit } from "@/lib/audit";
@@ -95,6 +96,34 @@ function ParametrosCustoPage() {
           <div>
             <Label>Hora refeição (R$/serviço/dia)</Label>
             <Input type="number" step="0.01" value={form.valorHoraRefeicao} onChange={(e) => setForm({ ...form, valorHoraRefeicao: Number(e.target.value) })} />
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="shadow-[var(--shadow-card)]">
+        <CardHeader>
+          <CardTitle className="text-base">Jornada de trabalho</CardTitle>
+          <CardDescription>
+            Antecipação e prestação de contas por turno vêm do Cadastro de Linhas (antec_t1, prest_t1,
+            antec_t2, prest_t2, antec_t3, prest_t3).
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-start justify-between gap-4 rounded-md border border-border p-3">
+            <div className="space-y-1">
+              <Label htmlFor="somar-antec-prest" className="text-sm">Somar antecipação e prestação de contas na jornada</Label>
+              <p className="text-xs text-muted-foreground">
+                {form.somarAntecPrest
+                  ? "Ligado: jornada do turno = (1ª partida − antecipação) até (última chegada + prestação de contas)."
+                  : "Desligado: jornada do turno = 1ª partida até a última chegada, sem antecipação nem prestação."}
+                {" "}Vale pra Jornada, Intra Jornada, hora extra e Custo M.O. em todos os relatórios.
+              </p>
+            </div>
+            <Switch
+              id="somar-antec-prest"
+              checked={form.somarAntecPrest}
+              onCheckedChange={(v) => setForm({ ...form, somarAntecPrest: v })}
+            />
           </div>
         </CardContent>
       </Card>

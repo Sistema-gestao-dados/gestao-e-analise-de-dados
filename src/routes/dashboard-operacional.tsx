@@ -6,7 +6,7 @@ import { fetchAllViagens } from "@/lib/viagens";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
 import { buildServiceUnits, dominantLinha, vehicleOrigemLinha, type ViagemLite } from "@/lib/resumo";
 import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
-import { jornadasCompletas, type JornadaServico } from "@/lib/jornada";
+import { jornadasCompletas, type JornadaServico, linhasParaJornada } from "@/lib/jornada";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -364,8 +364,8 @@ function DashOperacional() {
     [viagens, fDia],
   );
   const jornadasParaCusto = useMemo(
-    () => jornadasCompletas(baseServico, filtered, linhas),
-    [baseServico, filtered, linhas],
+    () => jornadasCompletas(baseServico, filtered, linhasParaJornada(linhas, custoParams?.somarAntecPrest)),
+    [baseServico, filtered, linhas, custoParams?.somarAntecPrest],
   );
   const custoTotalDashboard = useMemo(
     // TU incompleto (só T1 ou só T2) não entra em nenhum total de jornada

@@ -1,11 +1,12 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useAuth } from "@/lib/auth-context";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
-import { buildJornadas, jornadaTotais, fmtDur, LIMITE_DIR_MIN, LIMITE_TU_MIN, type JornadaServico } from "@/lib/jornada";
+import { buildJornadas, jornadaTotais, fmtDur, LIMITE_DIR_MIN, LIMITE_TU_MIN, type JornadaServico, linhasParaJornada } from "@/lib/jornada";
 import { buildEmpresaOverrideMap, resolveGrupoViagem, resolveEmpresaViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
 import { custoServico, fmtMoeda } from "@/lib/custo";
 import { useParametrosCusto } from "@/components/salario-motorista";
@@ -60,6 +61,7 @@ function Kpi({ label, value, icon: Icon, tone = "primary", onClick }: any) {
 
 function JornadaPage() {
   useAuditView("jornada");
+  const { isAdmin } = useAuth();
   const [fDia, setFDia] = usePersistentState("jornada.fDia", "__all");
   const [fVersao, setFVersao] = usePersistentState("jornada.fVersao", "__all");
   const [fTipo, setFTipo] = usePersistentState("jornada.fTipo", "__all");
@@ -128,14 +130,15 @@ function JornadaPage() {
     return true;
   }, [applied, unidadePorServico, grupoPorServico, linhaMap]);
 
+  const { params: custoParams } = useParametrosCusto();
   const jornadas = useMemo(() => {
     if (!applied) return [];
-    const all = buildJornadas(filtered, linhas).filter(passaFiltroJornada);
+    const all = buildJornadas(filtered, linhasParaJornada(linhas, custoParams?.somarAntecPrest)).filter(passaFiltroJornada);
     if (applied.tipo === "__all") return all;
     if (applied.tipo === "TU") return all.filter((j) => j.tipoServico === "TU");
     if (applied.tipo === "DIR") return all.filter((j) => j.tipoServico === "DIR");
     return all;
-  }, [applied, filtered, linhas, passaFiltroJornada]);
+  }, [applied, filtered, linhas, passaFiltroJornada, custoParams?.somarAntecPrest]);
 
   const [ordenarPor, setOrdenarPor] = usePersistentState<"padrao" | "unidade">("jornada.ordenarPor", "padrao");
 
@@ -162,7 +165,6 @@ function JornadaPage() {
   );
   useEffect(() => setPage(0), [applied, pageSize]);
 
-  const { params: custoParams } = useParametrosCusto();
   const [mostrarCusto, setMostrarCusto] = usePersistentState("jornada.mostrarCusto", false);
   const comCustoTabela = mostrarCusto && !!custoParams && custoParams.salarioMotoristaMensal > 0;
   const colSpanTabela = comCustoTabela ? 8 : 7;
@@ -366,8 +368,16 @@ function JornadaPage() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Jornada de Trabalho</h1>
           <p className="text-sm text-muted-foreground">
-            Cálculo por serviço/motorista usando antecipação e prestação de contas cadastradas por linha/turno.
+            Cálculo por serviço/motorista.
             Limite jornada: DIR <strong>{fmtDur(LIMITE_DIR_MIN)}</strong> · TU <strong>{fmtDur(LIMITE_TU_MIN)}</strong>.
+          </p>
+          {/* Deixa claro qual cálculo está na tela — o liga/desliga fica em
+              Parâmetros de Custo e muda jornada, hora extra e custo. */}
+          <p className={`mt-1 inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs ${custoParams?.somarAntecPrest === false ? "border-warning/40 bg-warning/10 text-warning" : "border-border bg-muted/40 text-muted-foreground"}`}>
+            {custoParams?.somarAntecPrest === false
+              ? "Antecipação e prestação de contas NÃO somadas: jornada = 1ª partida → última chegada."
+              : "Antecipação e prestação de contas somadas na jornada (cadastro por linha/turno)."}
+            {isAdmin && <Link to="/parametros-custo" className="underline underline-offset-2 hover:opacity-80">Alterar</Link>}
           </p>
         </div>
         <div className="flex items-center gap-2">

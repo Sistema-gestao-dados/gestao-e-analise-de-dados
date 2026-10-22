@@ -10,7 +10,7 @@ import {
   chaveUnidade,
 } from "@/lib/resumo";
 import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
-import { jornadasCompletas, chaveUnidadeJornada, type JornadaServico } from "@/lib/jornada";
+import { jornadasCompletas, chaveUnidadeJornada, type JornadaServico, linhasParaJornada } from "@/lib/jornada";
 import { custoServico, fmtMoeda } from "@/lib/custo";
 import { useSalarioMotorista } from "@/components/salario-motorista";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt, normKey } from "@/lib/km";
@@ -521,8 +521,8 @@ const totals = useMemo(() => {
       (S.dia === "__all" || v.tipo_operacao === S.dia) && (S.versao === "__all" || v.versao_programacao === S.versao));
   }, [viagens, applied, S.dia, S.versao]);
   const jornadasParaCusto = useMemo(
-    () => jornadasCompletas(baseServico, filtered, linhas, S.criterio),
-    [baseServico, filtered, linhas, S.criterio],
+    () => jornadasCompletas(baseServico, filtered, linhasParaJornada(linhas, custoParams?.somarAntecPrest), S.criterio),
+    [baseServico, filtered, linhas, S.criterio, custoParams?.somarAntecPrest],
   );
   function custoPorChave(chaveFn: (j: JornadaServico) => string): Map<string, number> {
     const m = new Map<string, number>();

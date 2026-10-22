@@ -34,7 +34,7 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { PdfPreviewDialog, type PdfOrientation } from "@/components/pdf-preview-dialog";
 import { logAudit } from "@/lib/audit";
-import { jornadasCompletas, chaveUnidadeJornada, fmtDur, type JornadaServico } from "@/lib/jornada";
+import { jornadasCompletas, chaveUnidadeJornada, fmtDur, type JornadaServico, linhasParaJornada } from "@/lib/jornada";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { useAcessoDados, cadastroParaOpcoes } from "@/lib/acesso";
 import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico, type EmpresaOverrideMap } from "@/lib/empresa-estacao";
@@ -580,18 +580,19 @@ export function ComparativoView() {
   // cálculos sobre a base inteira por consulta). Montadas sobre o SERVIÇO
   // INTEIRO (só dia tipo/versão/somente ativos do lado), ficando com as
   // unidades do recorte filtrado — ver jornadasCompletas.
+  const linhasJornada = useMemo(() => linhasParaJornada(linhas, custoParams?.somarAntecPrest), [linhas, custoParams?.somarAntecPrest]);
   const baseServicoFor = (f: Filters) =>
     baseFor(f).filter((v) => {
       const dia = diaEfetivo(f, linhaMap.get(v.linha)?.categoria);
       return (dia === "__all" || v.tipo_operacao === dia) && (f.versao === "__all" || v.versao_programacao === f.versao);
     });
   const jornadasAtual = useMemo(
-    () => (applied ? jornadasCompletas(baseServicoFor(applied.a), atualFiltradoBase, linhas, criterio) : []),
-    [applied, baseFor, linhaMap, atualFiltradoBase, linhas, criterio],
+    () => (applied ? jornadasCompletas(baseServicoFor(applied.a), atualFiltradoBase, linhasJornada, criterio) : []),
+    [applied, baseFor, linhaMap, atualFiltradoBase, linhasJornada, criterio],
   );
   const jornadasPropostaFiltrada = useMemo(
-    () => (applied ? jornadasCompletas(baseServicoFor(applied.p), propostaFiltradoBase, linhas, criterio) : []),
-    [applied, baseFor, linhaMap, propostaFiltradoBase, linhas, criterio],
+    () => (applied ? jornadasCompletas(baseServicoFor(applied.p), propostaFiltradoBase, linhasJornada, criterio) : []),
+    [applied, baseFor, linhaMap, propostaFiltradoBase, linhasJornada, criterio],
   );
   // Proposta + linhas repetidas da Proposta 1 (mesmo conjunto de
   // `propostaPreenchida`): as jornadas das linhas repetidas vêm do Atual.

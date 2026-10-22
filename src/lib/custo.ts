@@ -37,6 +37,10 @@ export type ParametrosCusto = {
   noturnoFimMin: number;    // minutos desde 00:00 (ex.: 05:00 = 300)
   tuInicioMinimoMin: number; // 04:00 = 240
   tuFimMaximoMin: number;    // 21:00 = 1260
+  /** Somar antecipação/prestação de contas (linhas.antec_tN/prest_tN) na
+   *  jornada. true = comportamento de sempre. Ver linhasParaJornada
+   *  (src/lib/jornada.ts). */
+  somarAntecPrest: boolean;
 };
 
 const PADRAO: ParametrosCusto = {
@@ -50,6 +54,7 @@ const PADRAO: ParametrosCusto = {
   noturnoFimMin: 5 * 60,
   tuInicioMinimoMin: 4 * 60,
   tuFimMaximoMin: 21 * 60,
+  somarAntecPrest: true,
 };
 
 export async function fetchParametrosCusto(): Promise<ParametrosCusto> {
@@ -67,6 +72,8 @@ export async function fetchParametrosCusto(): Promise<ParametrosCusto> {
     noturnoFimMin: Number(data.noturno_fim_min ?? PADRAO.noturnoFimMin),
     tuInicioMinimoMin: Number(data.tu_inicio_minimo_min ?? PADRAO.tuInicioMinimoMin),
     tuFimMaximoMin: Number(data.tu_fim_maximo_min ?? PADRAO.tuFimMaximoMin),
+    // Coluna nova — banco ainda sem a migração devolve undefined = ligado.
+    somarAntecPrest: (data as any).somar_antec_prest ?? PADRAO.somarAntecPrest,
   };
 }
 
@@ -75,7 +82,7 @@ export async function salvarParametrosCusto(p: ParametrosCusto): Promise<void> {
   // de salvar, mesmo que por algum motivo ela não existisse antes (um
   // UPDATE simples, nesse caso, "funcionaria" sem erro mas não salvaria
   // nada — foi exatamente o bug do salário voltando a zero em outro local).
-  const { error } = await supabase.from("parametros_custo").upsert({
+  const linha = {
     id: 1,
     salario_motorista_mensal: p.salarioMotoristaMensal,
     encargos_percentual: p.encargosPercentual,
@@ -87,8 +94,20 @@ export async function salvarParametrosCusto(p: ParametrosCusto): Promise<void> {
     noturno_fim_min: p.noturnoFimMin,
     tu_inicio_minimo_min: p.tuInicioMinimoMin,
     tu_fim_maximo_min: p.tuFimMaximoMin,
-  });
-  if (error) throw error;
+    somar_antec_prest: p.somarAntecPrest,
+  };
+  const { error } = await supabase.from("parametros_custo").upsert(linha as any);
+  if (!error) return;
+  // Banco ainda sem a coluna somar_antec_prest (migração
+  // 20261022100000 não aplicada): salva o resto e avisa — não pode
+  // impedir de salvar salário/percentuais por causa da coluna nova.
+  if (/somar_antec_prest/.test(error.message)) {
+    const { somar_antec_prest: _ignorado, ...semColuna } = linha;
+    const r = await supabase.from("parametros_custo").upsert(semColuna);
+    if (r.error) throw r.error;
+    throw new Error("Os outros parâmetros foram salvos, mas o liga/desliga de antecipação/prestação precisa do SQL 20261022100000_parametros_custo_somar_antec_prest.sql aplicado no banco.");
+  }
+  throw error;
 }
 
 export function valorHora(p: ParametrosCusto): number {

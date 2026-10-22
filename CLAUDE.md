@@ -88,7 +88,12 @@ administrador em `/parametros-custo`):
 `adicional_noturno_percentual` (padrão 20%), `hora_extra_percentual`
 (padrão 50%), `horas_mensais_referencia` (padrão 210), `valor_hora_refeicao`,
 `noturno_inicio_min`/`noturno_fim_min` (padrão 22:00–05:00),
-`tu_inicio_minimo_min`/`tu_fim_maximo_min` (padrão 04:00–21:00).
+`tu_inicio_minimo_min`/`tu_fim_maximo_min` (padrão 04:00–21:00),
+`somar_antec_prest` (padrão ligado) — liga/desliga a soma da antecipação/
+prestação de contas na jornada. Desligado, a jornada do turno vai da 1ª
+partida à última chegada (`linhasParaJornada()` em `src/lib/jornada.ts`
+zera antec/prest); muda jornada, intra-jornada, hora extra e custo em todas
+as telas, não só na Jornada.
 
 O cálculo por serviço depende de `JornadaServico` (`buildJornadas()` em
 `src/lib/jornada.ts`), que por sua vez usa `viagens` (partida/chegada/

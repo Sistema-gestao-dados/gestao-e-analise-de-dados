@@ -6,7 +6,7 @@ import { fetchAllViagens } from "@/lib/viagens";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import {
   buildJornadas, fmtDur, intraJornadaMin, classificarIntra,
-  INTRA_MINIMO_MIN, INTRA_CRITICO_MIN, type JornadaServico, type ClassificacaoIntra,
+  INTRA_MINIMO_MIN, INTRA_CRITICO_MIN, type JornadaServico, type ClassificacaoIntra, linhasParaJornada,
 } from "@/lib/jornada";
 import { buildEmpresaOverrideMap, resolveGrupoViagem, resolveEmpresaViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
 import { custoServico, tuForaDaJanela, fmtMoeda } from "@/lib/custo";
@@ -139,7 +139,7 @@ function IntraJornadaPage() {
   const { params: custoParams } = useParametrosCusto();
   const intras = useMemo(() => {
     if (!applied) return [];
-    const jornadas = buildJornadas(filtered, linhas).filter((j) => j.tipoServico === "TU" && !j.incompleto && passaFiltroJornada(j));
+    const jornadas = buildJornadas(filtered, linhasParaJornada(linhas, custoParams?.somarAntecPrest)).filter((j) => j.tipoServico === "TU" && !j.incompleto && passaFiltroJornada(j));
     return jornadas
       .map((j) => ({ jornada: j, intraMin: intraJornadaMin(j) }))
       .filter((x): x is { jornada: JornadaServico; intraMin: number } => x.intraMin != null)

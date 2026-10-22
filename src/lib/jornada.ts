@@ -192,6 +192,16 @@ function ajustarTurno(viagens: ViagemLite[]): { partidas: number[]; chegadas: nu
 /**
  * Constrói as jornadas por (versao+tipo+servico). Para TU soma T1+T2.
  */
+/** Cadastro de linhas pra montar a jornada, respeitando o liga/desliga
+ *  "Somar antecipação/prestação" de /parametros-custo: desligado, zera
+ *  antec_tN/prest_tN (jornada = 1ª partida → última chegada). As linhas
+ *  continuam todas lá — só os minutos somem —, então "linha sem cadastro"
+ *  segue funcionando igual. */
+export function linhasParaJornada(linhas: Linha[], somarAntecPrest: boolean | undefined): Linha[] {
+  if (somarAntecPrest !== false) return linhas;
+  return linhas.map((l) => ({ ...l, antec_t1: 0, prest_t1: 0, antec_t2: 0, prest_t2: 0, antec_t3: 0, prest_t3: 0 }));
+}
+
 /** Chave da unidade de serviço da jornada — bate com `chaveUnidade` /
  *  `chaveUnidadeViagem` (src/lib/resumo.ts). */
 export function chaveUnidadeJornada(j: JornadaServico): string {
