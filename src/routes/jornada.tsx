@@ -195,39 +195,60 @@ function JornadaPage() {
   const comCustoTabela = mostrarCusto && !!custoParams && custoParams.salarioMotoristaMensal > 0;
   const colSpanTabela = comCustoTabela ? 8 : 7;
 
-  function resumoPorChave(chaveFn: (j: JornadaServico) => string) {
-    const m = new Map<string, { jornadas: number; frota: Set<string>; minutosTotal: number; horasExtras: number; custo: number }>();
+  function resumoPorChave(chaveFn: (j: JornadaServico) => string): ResumoJornadaRow[] {
+    const m = new Map<string, { jornadas: number; dir: number; tu: number; frota: Set<string>; minutosTotal: number; horasExtras: number; excedente: number; custo: number }>();
     for (const j of jornadas) {
       // Mesma regra do cabeçalho (jornadaTotais): TU incompleto (só T1 ou só
       // T2) não entra em nenhum total — senão "Custo M.O." e os outros
       // totais desse resumo ficam maiores que o total mostrado no topo.
       if (j.incompleto) continue;
       const k = chaveFn(j);
-      const cur = m.get(k) ?? { jornadas: 0, frota: new Set<string>(), minutosTotal: 0, horasExtras: 0, custo: 0 };
+      const cur = m.get(k) ?? { jornadas: 0, dir: 0, tu: 0, frota: new Set<string>(), minutosTotal: 0, horasExtras: 0, excedente: 0, custo: 0 };
       cur.jornadas++;
+      if (j.tipoServico === "TU") cur.tu++; else cur.dir++;
       cur.frota.add(j.vehicleKey);
       cur.minutosTotal += j.minutosTotal;
       cur.horasExtras += j.horasExtras;
+      // Quanto passou da hora digitada em "Jornada acima de" (só com filtro).
+      if (acimaMinAplicado != null) cur.excedente += Math.max(0, j.minutosTotal - acimaMinAplicado);
       if (custoParams) cur.custo += custoServico(j, custoParams);
       m.set(k, cur);
     }
     return Array.from(m, ([chave, x]) => ({
-      chave, jornadas: x.jornadas, frota: x.frota.size, minutosTotal: x.minutosTotal, horasExtras: x.horasExtras, custo: x.custo,
-    })).sort((a, b) => a.chave.localeCompare(b.chave));
+      chave, jornadas: x.jornadas, dir: x.dir, tu: x.tu, frota: x.frota.size, minutosTotal: x.minutosTotal,
+      horasExtras: x.horasExtras, excedente: x.excedente, custo: x.custo,
+    })).sort((a, b) => a.chave.localeCompare(b.chave, "pt-BR", { numeric: true }));
   }
 
   const resumoEmpresa = useMemo(
     () => resumoPorChave((j) => empresaPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.empresa || "Sem empresa"),
-    [jornadas, empresaPorServico, linhaMap, custoParams],
+    [jornadas, empresaPorServico, linhaMap, custoParams, acimaMinAplicado],
   );
   const resumoUnidade = useMemo(
     () => resumoPorChave((j) => unidadePorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.unidade || "Sem unidade"),
-    [jornadas, linhaMap, unidadePorServico, custoParams],
+    [jornadas, linhaMap, unidadePorServico, custoParams, acimaMinAplicado],
   );
   const resumoGrupo = useMemo(
     () => resumoPorChave((j) => grupoPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.ordem || "Sem grupo"),
-    [jornadas, grupoPorServico, linhaMap, custoParams],
+    [jornadas, grupoPorServico, linhaMap, custoParams, acimaMinAplicado],
   );
+  const resumoLinha = useMemo(
+    () => resumoPorChave((j) => j.linha || "Sem linha"),
+    [jornadas, custoParams, acimaMinAplicado],
+  );
+  const resumoDiaTipo = useMemo(
+    () => resumoPorChave((j) => j.vehicleKey.split("||")[1] || "Sem dia tipo"),
+    [jornadas, custoParams, acimaMinAplicado],
+  );
+  // Ordem usada na tela, no Excel (uma aba cada) e no PDF.
+  const resumosGerenciais = [
+    { titulo: "Resumo por Empresa", aba: "Por Empresa", coluna: "Empresa", rows: resumoEmpresa },
+    { titulo: "Resumo por Grupo", aba: "Por Grupo", coluna: "Grupo", rows: resumoGrupo },
+    { titulo: "Resumo por Unidade", aba: "Por Unidade", coluna: "Unidade", rows: resumoUnidade },
+    { titulo: "Resumo por Linha", aba: "Por Linha", coluna: "Linha", rows: resumoLinha },
+    { titulo: "Resumo por Dia Tipo", aba: "Por Dia Tipo", coluna: "Dia Tipo", rows: resumoDiaTipo },
+  ];
+  const comCustoResumo = comCustoTabela;
 
   const listaModal = useMemo((): JornadaServico[] => {
     if (!modal) return [];
@@ -258,6 +279,28 @@ function JornadaPage() {
     void logAudit({ action: "export", entity: "jornada", details: { format: "xlsx", filtro: nome, rows: rows.length } });
   }
 
+  function periodoTexto() {
+    return [
+      applied?.dia && applied.dia !== "__all" ? applied.dia : "Todos os dias",
+      applied?.versao && applied.versao !== "__all" ? `Versão ${applied.versao}` : null,
+      applied?.tipo && applied.tipo !== "__all" ? `Tipo ${applied.tipo}` : null,
+      acimaMinAplicado != null ? `Jornada acima de ${fmtDur(acimaMinAplicado)}` : null,
+      custoParams?.somarAntecPrest === false ? "Sem antecipação/prestação" : null,
+    ].filter(Boolean).join(" · ");
+  }
+  // Colunas dos resumos — Excedente só com o filtro "acima de"; Custo só
+  // com "Mostrar custo" ligado e salário configurado.
+  function resumoHead(primeira: string): string[] {
+    return [primeira, "Jornadas", "DIR", "TU", "Frota", "Jornada Total", "Horas Extras",
+      ...(acimaMinAplicado != null ? [`Excedente > ${fmtDur(acimaMinAplicado)}`] : []),
+      ...(comCustoResumo ? ["Custo M.O."] : [])];
+  }
+  function resumoLinhaValores(r: ResumoJornadaRow): string[] {
+    return [r.chave, String(r.jornadas), String(r.dir), String(r.tu), String(r.frota), fmtDur(r.minutosTotal), fmtDur(r.horasExtras),
+      ...(acimaMinAplicado != null ? [fmtDur(r.excedente)] : []),
+      ...(comCustoResumo ? [fmtMoeda(r.custo)] : [])];
+  }
+
   function exportXLSX() {
     const wb = XLSX.utils.book_new();
     const rows = jornadasOrdenadas.map((j) => ({
@@ -275,6 +318,36 @@ function JornadaPage() {
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
     XLSX.utils.book_append_sheet(wb, ws, "Jornada");
+    // Aba "Resumo": filtros aplicados + totais (e o quadro do filtro
+    // "Jornada acima de", quando ativo).
+    const resumoAoa: (string | number)[][] = [
+      ["JORNADA DE TRABALHO"],
+      ["Filtros", periodoTexto()],
+      ["Gerado em", new Date().toLocaleString("pt-BR")],
+      [],
+      ["Jornadas", totais.totalJornadas],
+      ["Jornada total (h:mm)", fmtDur(totais.minutosTotal)],
+      ["Horas extras (h:mm)", fmtDur(totais.horasExtrasTotal)],
+      ["Acima de 9h", totais.acimaDe7h],
+      ["Acima de 10h (crítico)", totais.acimaDe9h],
+    ];
+    if (resumoAcima && acimaMinAplicado != null) {
+      resumoAoa.push([], [`Jornadas acima de ${fmtDur(acimaMinAplicado)}`],
+        ["Quantidade", resumoAcima.quantidade], ["DIR", resumoAcima.dir], ["TU", resumoAcima.tu],
+        ["Soma das horas extras (h:mm)", fmtDur(resumoAcima.horasExtras)],
+        [`Excedente acima de ${fmtDur(acimaMinAplicado)} (h:mm)`, fmtDur(resumoAcima.excedente)]);
+    }
+    const wsResumo = XLSX.utils.aoa_to_sheet(resumoAoa);
+    wsResumo["!cols"] = [{ wch: 34 }, { wch: 60 }];
+    XLSX.utils.book_append_sheet(wb, wsResumo, "Resumo");
+    for (const r of resumosGerenciais) {
+      if (!r.rows.length) continue;
+      const head = resumoHead(r.coluna);
+      const aoa = [head, ...r.rows.map(resumoLinhaValores), resumoLinhaValores(totalResumo(r.rows, "TOTAL"))];
+      const wsR = XLSX.utils.aoa_to_sheet(aoa);
+      wsR["!cols"] = head.map((_, i) => ({ wch: i === 0 ? 24 : 14 }));
+      XLSX.utils.book_append_sheet(wb, wsR, r.aba);
+    }
     XLSX.writeFile(wb, `jornada_${new Date().toISOString().slice(0, 10)}.xlsx`);
     void logAudit({ action: "export", entity: "jornada", details: { format: "xlsx", rows: jornadas.length } });
   }
@@ -287,12 +360,7 @@ function JornadaPage() {
     const usableW = pageW - 20;
     const usableH = pageH - (HEADER_H + 3) - 12;
 
-    const periodo = [
-      applied?.dia && applied.dia !== "__all" ? applied.dia : "Todos os dias",
-      applied?.versao && applied.versao !== "__all" ? `Versão ${applied.versao}` : null,
-      applied?.tipo && applied.tipo !== "__all" ? `Tipo ${applied.tipo}` : null,
-      acimaMinAplicado != null ? `Jornada acima de ${fmtDur(acimaMinAplicado)}` : null,
-    ].filter(Boolean).join(" · ");
+    const periodo = periodoTexto();
     const kpiTxt = `Jornadas ${totais.totalJornadas.toLocaleString("pt-BR")}  ·  Jornada total ${fmtDur(totais.minutosTotal)}  ·  ` +
       `Horas extras ${fmtDur(totais.horasExtrasTotal)}  ·  Acima de 9h ${totais.acimaDe7h}  ·  Acima de 10h (crítico) ${totais.acimaDe9h}`;
 
@@ -377,6 +445,57 @@ function JornadaPage() {
     const marginLeft = Math.max(6, (pageW - finalW) / 2);
     const final = draw(zoom, marginLeft);
     const doc2 = final.doc;
+
+    // Resumos depois da tabela principal: quadro do filtro "Jornada acima
+    // de" (se ativo) + Empresa / Grupo / Unidade / Linha / Dia Tipo.
+    let y = (doc2 as any).lastAutoTable.finalY + 6;
+    const novaPaginaSePreciso = (alturaMin: number) => {
+      if (y + alturaMin > pageH - 14) { doc2.addPage(); drawHeader(doc2); y = HEADER_H + 4; }
+    };
+    if (resumoAcima && acimaMinAplicado != null) {
+      novaPaginaSePreciso(24);
+      autoTable(doc2, {
+        startY: y,
+        head: [[`Jornadas acima de ${fmtDur(acimaMinAplicado)}`, ""]],
+        body: [
+          ["Quantidade", `${resumoAcima.quantidade} (DIR ${resumoAcima.dir} · TU ${resumoAcima.tu})`],
+          ["Soma das horas extras", fmtDur(resumoAcima.horasExtras)],
+          [`Excedente acima de ${fmtDur(acimaMinAplicado)}`, fmtDur(resumoAcima.excedente)],
+        ],
+        styles: { fontSize: 7.5, cellPadding: 1.4, lineColor: [180, 180, 180], lineWidth: 0.18 },
+        headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: "bold" },
+        columnStyles: { 0: { fontStyle: "bold" } },
+        margin: { left: 10, right: 10, top: HEADER_H + 3, bottom: 12 },
+        theme: "grid",
+        tableWidth: "wrap",
+        didDrawPage: () => drawHeader(doc2),
+      });
+      y = (doc2 as any).lastAutoTable.finalY + 6;
+    }
+    for (const r of resumosGerenciais) {
+      if (!r.rows.length) continue;
+      novaPaginaSePreciso(20);
+      doc2.setFont("helvetica", "bold"); doc2.setFontSize(9); doc2.setTextColor(37, 99, 235);
+      doc2.text(r.titulo, 10, y);
+      doc2.setTextColor(20);
+      autoTable(doc2, {
+        startY: y + 2,
+        head: [resumoHead(r.coluna)],
+        body: r.rows.map(resumoLinhaValores),
+        foot: [resumoLinhaValores(totalResumo(r.rows, "TOTAL"))],
+        styles: { fontSize: 7, cellPadding: 1.2, halign: "right", lineColor: [180, 180, 180], lineWidth: 0.18 },
+        columnStyles: { 0: { halign: "left", fontStyle: "bold" } },
+        headStyles: { fillColor: [37, 99, 235], textColor: 255, fontStyle: "bold", halign: "center" },
+        footStyles: { fillColor: [219, 234, 254], textColor: 20, fontStyle: "bold", halign: "right" },
+        margin: { left: 10, right: 10, top: HEADER_H + 3, bottom: 12 },
+        theme: "grid",
+        tableWidth: "wrap",
+        showFoot: "lastPage",
+        rowPageBreak: "avoid",
+        didDrawPage: () => drawHeader(doc2),
+      });
+      y = (doc2 as any).lastAutoTable.finalY + 6;
+    }
 
     const pages = doc2.getNumberOfPages();
     for (let i = 1; i <= pages; i++) {
@@ -651,9 +770,9 @@ function JornadaPage() {
         </CardContent>
       </Card>
 
-      <ResumoJornadaTable titulo="Resumo Gerencial por Empresa" rows={resumoEmpresa} mostrarCusto={comCustoTabela} />
-      <ResumoJornadaTable titulo="Resumo Gerencial por Grupo" rows={resumoGrupo} mostrarCusto={comCustoTabela} />
-      <ResumoJornadaTable titulo="Resumo Gerencial por Unidade" rows={resumoUnidade} mostrarCusto={comCustoTabela} />
+      {resumosGerenciais.map((r) => (
+        <ResumoJornadaTable key={r.aba} titulo={r.titulo} rows={r.rows} mostrarCusto={comCustoTabela} acimaMin={acimaMinAplicado} />
+      ))}
       </div>
 
       <Dialog open={!!modal} onOpenChange={(o) => !o && setModal(null)}>
@@ -703,46 +822,58 @@ function JornadaPage() {
   );
 }
 
-type ResumoJornadaRow = { chave: string; jornadas: number; frota: number; minutosTotal: number; horasExtras: number; custo: number };
-function ResumoJornadaTable({ titulo, rows, mostrarCusto }: { titulo: string; rows: ResumoJornadaRow[]; mostrarCusto?: boolean }) {
+type ResumoJornadaRow = { chave: string; jornadas: number; dir: number; tu: number; frota: number; minutosTotal: number; horasExtras: number; excedente: number; custo: number };
+
+/** Linha de TOTAL de um resumo. Frota soma as linhas do resumo (cada
+ *  veículo aparece numa linha só quando a chave é por veículo; por Linha/Dia
+ *  Tipo um veículo que roda em mais de uma linha conta em cada uma). */
+function totalResumo(rows: ResumoJornadaRow[], chave: string): ResumoJornadaRow {
+  return rows.reduce((s, r) => ({
+    chave, jornadas: s.jornadas + r.jornadas, dir: s.dir + r.dir, tu: s.tu + r.tu, frota: s.frota + r.frota,
+    minutosTotal: s.minutosTotal + r.minutosTotal, horasExtras: s.horasExtras + r.horasExtras,
+    excedente: s.excedente + r.excedente, custo: s.custo + r.custo,
+  }), { chave, jornadas: 0, dir: 0, tu: 0, frota: 0, minutosTotal: 0, horasExtras: 0, excedente: 0, custo: 0 });
+}
+function ResumoJornadaTable({ titulo, rows, mostrarCusto, acimaMin }: { titulo: string; rows: ResumoJornadaRow[]; mostrarCusto?: boolean; acimaMin?: number | null }) {
   if (rows.length === 0) return null;
   const comCusto = !!mostrarCusto && rows.some((r) => r.custo > 0);
-  const tot = rows.reduce((s, r) => ({ jornadas: s.jornadas + r.jornadas, frota: s.frota + r.frota, minutosTotal: s.minutosTotal + r.minutosTotal, horasExtras: s.horasExtras + r.horasExtras, custo: s.custo + r.custo }), { jornadas: 0, frota: 0, minutosTotal: 0, horasExtras: 0, custo: 0 });
+  const comExcedente = acimaMin != null;
+  const tot = totalResumo(rows, "TOTAL");
+  const linha = (r: ResumoJornadaRow, total = false) => (
+    <TableRow key={total ? "__total" : r.chave} className={total ? "bg-muted/50 font-bold h-9" : "h-8"}>
+      <TableCell className={`px-2 py-1 ${total ? "" : "font-medium"}`}>{r.chave}</TableCell>
+      <TableCell className="px-2 py-1 text-right tabular-nums">{r.jornadas}</TableCell>
+      <TableCell className="px-2 py-1 text-right tabular-nums">{r.dir}</TableCell>
+      <TableCell className="px-2 py-1 text-right tabular-nums">{r.tu}</TableCell>
+      <TableCell className="px-2 py-1 text-right tabular-nums">{r.frota}</TableCell>
+      <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(r.minutosTotal)}</TableCell>
+      <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(r.horasExtras)}</TableCell>
+      {comExcedente && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(r.excedente)}</TableCell>}
+      {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(r.custo)}</TableCell>}
+    </TableRow>
+  );
   return (
     <Card className="shadow-[var(--shadow-card)]">
       <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">{titulo}</CardTitle></CardHeader>
       <CardContent className="pt-0">
-        <div className="overflow-auto">
+        <div className="overflow-auto max-h-[420px]">
           <Table className="text-xs">
             <TableHeader>
               <TableRow className="h-8">
                 <TableHead className="px-2 py-1"></TableHead>
                 <TableHead className="px-2 py-1 text-right">Jornadas</TableHead>
+                <TableHead className="px-2 py-1 text-right">DIR</TableHead>
+                <TableHead className="px-2 py-1 text-right">TU</TableHead>
                 <TableHead className="px-2 py-1 text-right">Frota</TableHead>
                 <TableHead className="px-2 py-1 text-right">Jornada Total</TableHead>
                 <TableHead className="px-2 py-1 text-right">Horas Extras</TableHead>
+                {comExcedente && <TableHead className="px-2 py-1 text-right">Excedente &gt; {fmtDur(acimaMin!)}</TableHead>}
                 {comCusto && <TableHead className="px-2 py-1 text-right">Custo M.O.</TableHead>}
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((r) => (
-                <TableRow key={r.chave} className="h-8">
-                  <TableCell className="px-2 py-1 font-medium">{r.chave}</TableCell>
-                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.jornadas}</TableCell>
-                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.frota}</TableCell>
-                  <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(r.minutosTotal)}</TableCell>
-                  <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(r.horasExtras)}</TableCell>
-                  {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(r.custo)}</TableCell>}
-                </TableRow>
-              ))}
-              <TableRow className="bg-muted/50 font-bold h-9">
-                <TableCell className="px-2 py-1">TOTAL</TableCell>
-                <TableCell className="px-2 py-1 text-right tabular-nums">{tot.jornadas}</TableCell>
-                <TableCell className="px-2 py-1 text-right tabular-nums">{tot.frota}</TableCell>
-                <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(tot.minutosTotal)}</TableCell>
-                <TableCell className="px-2 py-1 text-right tabular-nums">{fmtDur(tot.horasExtras)}</TableCell>
-                {comCusto && <TableCell className="px-2 py-1 text-right tabular-nums">{fmtMoeda(tot.custo)}</TableCell>}
-              </TableRow>
+              {rows.map((r) => linha(r))}
+              {linha(tot, true)}
             </TableBody>
           </Table>
         </div>
