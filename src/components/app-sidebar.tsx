@@ -32,6 +32,13 @@ export const groups: { label: string; items: Item[] }[] = [
     ],
   },
   {
+    label: "Passageiros e Receita",
+    items: [
+      { title: "Passageiros e Receita", url: "/passageiros", icon: Ticket, perm: "passageiros" },
+      { title: "Importação Passageiros", url: "/importacao-passageiros", icon: FileUp, perm: "importacao_passageiros" },
+    ],
+  },
+  {
     label: "Histórico de Programação",
     items: [
       { title: "Histórico de Reprogramação", url: "/historico-consultar", icon: History, perm: "historico_reprogramacao" },

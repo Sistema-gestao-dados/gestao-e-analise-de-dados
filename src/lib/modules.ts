@@ -21,6 +21,13 @@ export const MODULE_GROUPS: ModuleGroup[] = [
     ],
   },
   {
+    label: "Passageiros e Receita",
+    items: [
+      { key: "passageiros", label: "Passageiros e Receita" },
+      { key: "importacao_passageiros", label: "Importação Passageiros" },
+    ],
+  },
+  {
     label: "Histórico de Programação",
     items: [
       { key: "historico_reprogramacao", label: "Histórico de Reprogramação" },

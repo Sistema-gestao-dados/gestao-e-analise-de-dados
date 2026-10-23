@@ -249,6 +249,28 @@ sistema/banco por grupo — isolar dados dentro do mesmo sistema.
 - **Fase 3 (pendente)**: Dia Tipo criado por um usuário restrito só
   aparece pra quem tem acesso ao mesmo grupo/empresa.
 
+## Passageiros e Receita
+
+Planilha "DADOS PAX" (.xlsx) importada em `/importacao-passageiros`, analisada
+em `/passageiros`. Formato largo: um bloco de 6 colunas por linha (Viagens
+Realizadas, KM, Transportados, Pagantes, Receita, Gratuidades), uma linha por
+dia, mais linhas "Totais" por mês usadas só pra conferir a soma na importação.
+Parser e contas em `src/lib/passageiros.ts`.
+
+- Tabela `passageiros_diario`, chave única `(linha, data)`. Reimportar
+  sobrescreve; "-" na planilha = linha não rodou no dia (sem registro, e o
+  registro antigo daquele dia é apagado).
+- Empresa/Grupo/Unidade **não** são gravados: vêm do cadastro de `linhas`
+  (`empresa`, `ordem`, `unidade`) na hora de exibir. Não há exceção por
+  estação (a planilha não tem estação). Linha fora do cadastro aparece como
+  "(sem cadastro)".
+- RLS restritiva por Grupo/Empresa igual a `parametro_km`
+  (`acesso_linhas_usuario()`).
+- Indicadores: Pax/viagem = transportados ÷ viagens; IPK = transportados ÷
+  KM; tarifa média = receita ÷ pagantes; % gratuidade = gratuidades ÷
+  transportados. Semana = segunda a domingo. "Dia da semana" é pelo
+  calendário (a planilha não informa feriado).
+
 ## Observações / pontos em aberto
 
 - Os nomes por extenso de **TU** e **DIR** não estão confirmados em nenhum

@@ -473,6 +473,51 @@ export type Database = {
         }
         Relationships: []
       }
+      passageiros_diario: {
+        Row: {
+          id: string
+          linha: string
+          data: string
+          viagens: number | null
+          km: number | null
+          transportados: number | null
+          pagantes: number | null
+          receita: number | null
+          gratuidades: number | null
+          arquivo: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          linha: string
+          data: string
+          viagens?: number | null
+          km?: number | null
+          transportados?: number | null
+          pagantes?: number | null
+          receita?: number | null
+          gratuidades?: number | null
+          arquivo?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          linha?: string
+          data?: string
+          viagens?: number | null
+          km?: number | null
+          transportados?: number | null
+          pagantes?: number | null
+          receita?: number | null
+          gratuidades?: number | null
+          arquivo?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       viagens: {
         Row: {
           arquivo: string | null
@@ -545,6 +590,10 @@ export type Database = {
     }
     Functions: {
       bootstrap_first_admin: { Args: never; Returns: boolean }
+      passageiros_diario_meses: {
+        Args: never
+        Returns: { mes: string; dias: number; linhas: number; registros: number; inicio: string; fim: string }[]
+      }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
