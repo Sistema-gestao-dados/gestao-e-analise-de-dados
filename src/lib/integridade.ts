@@ -7,7 +7,6 @@ import type { Linha, ParametroMulti } from "./data";
 import type { KmMaps } from "./km";
 import { viagemKmResult } from "./km";
 import { buildJornadas } from "./jornada";
-import type { RealizadoDb } from "./viagens-realizado";
 import type { Importacao } from "./data";
 
 const DIAS_TIPO_BASE = ["Dias úteis", "Sábado", "Domingo"];
@@ -31,10 +30,9 @@ export function runVerificacaoIntegridade(args: {
   linhas: Linha[];
   kmMaps: KmMaps;
   importacoes: Importacao[];
-  realizado?: RealizadoDb[];
   multi?: ParametroMulti[];
 }): AlertaIntegridade[] {
-  const { viagens, linhas, kmMaps, importacoes, realizado, multi } = args;
+  const { viagens, linhas, kmMaps, importacoes, multi } = args;
   const linhaMap = new Map(linhas.map((l) => [l.linha, l]));
   const alertas: AlertaIntegridade[] = [];
   const amostra = (items: string[]) => items.slice(0, 20);
@@ -190,34 +188,14 @@ export function runVerificacaoIntegridade(args: {
         categoria: "Importação",
         severidade: "critico",
         titulo: "Importações recentes com erro de leitura",
-        descricao: "Arquivos que tiveram linhas rejeitadas na hora de importar (EasyBus, GPS/Cittati, Realizado, CSV). Vale conferir se o arquivo de origem está no formato esperado.",
+        descricao: "Arquivos que tiveram linhas rejeitadas na hora de importar (EasyBus, GPS/Cittati, CSV). Vale conferir se o arquivo de origem está no formato esperado.",
         quantidade: comErro.length,
         amostra: amostra(comErro.map((i) => `${i.tipo} — ${i.arquivo ?? "?"} — ${i.registros_erro} erro(s) — ${new Date(i.created_at).toLocaleDateString("pt-BR")}`)),
       });
     }
   }
 
-  // 8) Realizado (Cittati): linha não cadastrada (se um período foi carregado)
-  if (realizado && realizado.length > 0) {
-    const linhasFaltando = new Map<string, number>();
-    for (const r of realizado) {
-      if (!linhaMap.has(r.linha)) linhasFaltando.set(r.linha, (linhasFaltando.get(r.linha) ?? 0) + 1);
-    }
-    const total = Array.from(linhasFaltando.values()).reduce((s, n) => s + n, 0);
-    if (total > 0) {
-      alertas.push({
-        id: "realizado_linha_nao_cadastrada",
-        categoria: "Realizado",
-        severidade: "critico",
-        titulo: "Realizado com linha não cadastrada",
-        descricao: "No período carregado do relatório Previsto x Realizado, essas linhas não batem com nenhuma linha do cadastro.",
-        quantidade: total,
-        amostra: amostra(Array.from(linhasFaltando, ([linha, n]) => `Linha "${linha}" — ${n} viagem(ns)`)),
-      });
-    }
-  }
-
-  // 9) Linha sem Grupo de Linha (grupo_du) mapeado no dia tipo custom em que aparece
+  // 8) Linha sem Grupo de Linha (grupo_du) mapeado no dia tipo custom em que aparece
   if (multi) {
     // Comparação sem diferenciar maiúsculas/minúsculas — mesma razão do
     // .ilike() em linhasDoGrupo() (lib/projeto-ativo.ts): dia tipo é texto

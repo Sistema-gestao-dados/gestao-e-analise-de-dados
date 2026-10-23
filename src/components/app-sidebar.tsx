@@ -32,13 +32,6 @@ export const groups: { label: string; items: Item[] }[] = [
     ],
   },
   {
-    label: "Previsto e Realizado",
-    items: [
-      { title: "Realizado (Previsto x Real)", url: "/realizado", icon: Gauge, perm: "realizado" },
-      { title: "Importação Realizado (Cittati)", url: "/importacao-realizado", icon: FileUp, perm: "importacao_realizado" },
-    ],
-  },
-  {
     label: "Histórico de Programação",
     items: [
       { title: "Histórico de Reprogramação", url: "/historico-consultar", icon: History, perm: "historico_reprogramacao" },

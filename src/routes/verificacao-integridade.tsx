@@ -5,7 +5,6 @@ import { fetchLinhas, fetchKm, fetchMulti, fetchImportacoesComErro } from "@/lib
 import { fetchAllViagens } from "@/lib/viagens";
 import { buildKmMaps } from "@/lib/km";
 import { runVerificacaoIntegridade, type AlertaIntegridade, type Severidade } from "@/lib/integridade";
-import { fetchRealizado } from "@/lib/viagens-realizado";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,9 +23,6 @@ const SEVERIDADE_CFG: Record<Severidade, { label: string; icon: any; className: 
   info: { label: "Info", icon: Info, className: "border-primary/30 bg-primary/5" },
 };
 
-function todayISO() { return new Date().toISOString().slice(0, 10); }
-function daysAgoISO(n: number) { const d = new Date(); d.setDate(d.getDate() - n); return d.toISOString().slice(0, 10); }
-
 function VerificacaoIntegridadePage() {
   useAuditView("verificacao_integridade");
   const [rodou, setRodou] = useState(false);
@@ -37,13 +33,8 @@ function VerificacaoIntegridadePage() {
   const multiQ = useQuery({ queryKey: ["multi"], queryFn: fetchMulti });
   const viagensQ = useQuery({ queryKey: ["viagens-all"], queryFn: fetchAllViagens, enabled: rodou });
   const importacoesQ = useQuery({ queryKey: ["importacoes-com-erro"], queryFn: fetchImportacoesComErro, enabled: rodou });
-  const realizadoQ = useQuery({
-    queryKey: ["viagens-realizado", daysAgoISO(30), todayISO()],
-    queryFn: () => fetchRealizado(daysAgoISO(30), todayISO()),
-    enabled: rodou,
-  });
 
-  const carregando = viagensQ.isLoading || importacoesQ.isLoading || realizadoQ.isLoading || linhasQ.isLoading || kmQ.isLoading || multiQ.isLoading;
+  const carregando = viagensQ.isLoading || importacoesQ.isLoading || linhasQ.isLoading || kmQ.isLoading || multiQ.isLoading;
 
   const kmMaps = useMemo(() => buildKmMaps(kmQ.data ?? []), [kmQ.data]);
 
@@ -54,17 +45,15 @@ function VerificacaoIntegridadePage() {
       linhas: linhasQ.data ?? [],
       kmMaps,
       importacoes: importacoesQ.data ?? [],
-      realizado: realizadoQ.data,
       multi: multiQ.data ?? [],
     });
-  }, [rodou, carregando, viagensQ.data, linhasQ.data, kmMaps, importacoesQ.data, realizadoQ.data, multiQ.data]);
+  }, [rodou, carregando, viagensQ.data, linhasQ.data, kmMaps, importacoesQ.data, multiQ.data]);
 
   function rodar() {
     setRodou(true);
     void logAudit({ action: "view", entity: "verificacao_integridade", details: { acao: "rodou_verificacao" } });
     viagensQ.refetch();
     importacoesQ.refetch();
-    realizadoQ.refetch();
     multiQ.refetch();
   }
 

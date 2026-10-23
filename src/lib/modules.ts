@@ -21,13 +21,6 @@ export const MODULE_GROUPS: ModuleGroup[] = [
     ],
   },
   {
-    label: "Previsto e Realizado",
-    items: [
-      { key: "realizado", label: "Realizado (Previsto x Real)" },
-      { key: "importacao_realizado", label: "Importação Realizado (Cittati)" },
-    ],
-  },
-  {
     label: "Histórico de Programação",
     items: [
       { key: "historico_reprogramacao", label: "Histórico de Reprogramação" },
