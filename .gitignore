@@ -38,3 +38,8 @@ src/routeTree.gen.ts
 # Segredos locais — nunca commitar
 .env
 .env.local
+
+# Planilhas de dados (receita/passageiros etc.) — não versionar: repositório é público
+*.xlsx
+*.xls
+dados-analise/
