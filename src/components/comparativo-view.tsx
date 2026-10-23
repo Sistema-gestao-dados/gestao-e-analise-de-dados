@@ -319,7 +319,7 @@ function blankIfZero(ocultar: boolean, d: number, txt: string): string {
 // Cores compartilhadas com o Resumo por Linha / Resumo Operacional — ver
 // src/lib/report-style.ts.
 
-type MetricKeyName = "dir1" | "dir2" | "aprov" | "tu" | "totalServico" | "frota" | "partidas" | "km" | "heMin" | "custo";
+type MetricKeyName = "dir1" | "dir2" | "aprov" | "tu" | "dirTotal" | "totalServico" | "frota" | "partidas" | "km" | "heMin" | "custo";
 type UnidadeMetric = { key: MetricKeyName; label: string; fmt: (n: number) => string; round: (n: number) => number };
 
 /** Custo M.O. não está em AggRow (vem de custoPorLinha) — único metric "extra". */
@@ -335,6 +335,7 @@ function unidadeSubheaderRow(metrics: UnidadeMetric[]): string[] {
 function fromAgg(r: AggRow | null): Record<Exclude<MetricKeyName, "custo">, number> {
   return {
     dir1: r?.dir1 ?? 0, dir2: r?.dir2 ?? 0, aprov: r?.aprov ?? 0, tu: r?.tu ?? 0,
+    dirTotal: (r?.dir1 ?? 0) + (r?.dir2 ?? 0) + (r?.aprov ?? 0),
     totalServico: r?.totalServico ?? 0, frota: r?.frota ?? 0, partidas: r?.partidas ?? 0,
     km: r?.km ?? 0, heMin: r?.heMin ?? 0,
   };
@@ -675,16 +676,17 @@ export function ComparativoView() {
     jornadas: JornadaServico[],
   ) {
     const units = buildServiceUnits(viagens, kmFn);
-    const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
+    const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; dir: number; tu: number; veiculos: Set<string> }>();
     for (const u of units.values()) {
       const k = chaveUnit(u);
-      if (!m.has(k)) m.set(k, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      if (!m.has(k)) m.set(k, { partidas: 0, km: 0, servicos: new Set(), dir: 0, tu: 0, veiculos: new Set() });
       m.get(k)!.servicos.add(u.key);
+      if (u.bucket === "TU") m.get(k)!.tu += 1; else m.get(k)!.dir += 1;
       m.get(k)!.veiculos.add(u.vehicleKey);
     }
     for (const v of viagens) {
       const k = chaveViagem(v);
-      if (!m.has(k)) m.set(k, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      if (!m.has(k)) m.set(k, { partidas: 0, km: 0, servicos: new Set(), dir: 0, tu: 0, veiculos: new Set() });
       if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(k)!.partidas += 1;
       m.get(k)!.km += kmFn(v);
     }
@@ -699,13 +701,13 @@ export function ComparativoView() {
       if (j.horasExtras > 0) heMinPorChave.set(k, (heMinPorChave.get(k) ?? 0) + j.horasExtras);
     }
     const out = new Map<string, BreakdownVal>();
-    for (const [k, x] of m) out.set(k, { servicos: x.servicos.size, frota: x.veiculos.size, partidas: x.partidas, km: x.km, heMin: heMinPorChave.get(k) ?? 0, custo: custoPorChave.get(k) ?? 0 });
+    for (const [k, x] of m) out.set(k, { servicos: x.servicos.size, dir: x.dir, tu: x.tu, frota: x.veiculos.size, partidas: x.partidas, km: x.km, heMin: heMinPorChave.get(k) ?? 0, custo: custoPorChave.get(k) ?? 0 });
     return out;
   }
 
   function mergeBreakdown(a: Map<string, BreakdownVal>, p: Map<string, BreakdownVal>) {
     const chaves = new Set([...a.keys(), ...p.keys()]);
-    const zero: BreakdownVal = { servicos: 0, frota: 0, partidas: 0, km: 0, heMin: 0, custo: 0 };
+    const zero: BreakdownVal = { servicos: 0, dir: 0, tu: 0, frota: 0, partidas: 0, km: 0, heMin: 0, custo: 0 };
     return Array.from(chaves, (chave) => ({
       chave, atual: a.get(chave) ?? zero, proposta: p.get(chave) ?? zero,
     })).sort((x, y) => x.chave.localeCompare(y.chave));
@@ -975,7 +977,7 @@ export function ComparativoView() {
   }, [merged, unidadePorLinha, unidadePorGrupo, categoriaPorGrupo, agruparPorGrupo, applied, grupoMap, linhaMap]);
 
   const ZERO_UNIDADE_METRICS: Record<Exclude<MetricKeyName, "custo">, number> = {
-    dir1: 0, dir2: 0, aprov: 0, tu: 0, totalServico: 0, frota: 0, partidas: 0, km: 0, heMin: 0,
+    dir1: 0, dir2: 0, aprov: 0, tu: 0, dirTotal: 0, totalServico: 0, frota: 0, partidas: 0, km: 0, heMin: 0,
   };
 
   // Total de uma Unidade: dir1/dir2/aprov/tu/totalServico/partidas/km/heMin
@@ -989,6 +991,7 @@ export function ComparativoView() {
       const row = r[lado];
       return {
         dir1: s.dir1 + (row?.dir1 ?? 0), dir2: s.dir2 + (row?.dir2 ?? 0), aprov: s.aprov + (row?.aprov ?? 0), tu: s.tu + (row?.tu ?? 0),
+        dirTotal: s.dirTotal + (row?.dir1 ?? 0) + (row?.dir2 ?? 0) + (row?.aprov ?? 0),
         totalServico: s.totalServico + (row?.totalServico ?? 0), frota: s.frota + (row?.frota ?? 0), partidas: s.partidas + (row?.partidas ?? 0),
         km: s.km + (row?.km ?? 0), heMin: s.heMin + (row?.heMin ?? 0),
       };
@@ -1014,7 +1017,7 @@ export function ComparativoView() {
     const soma = (lado: "atual" | "proposta") => unidadeTotais.reduce((s, r) => {
       const row = r[lado];
       return {
-        dir1: s.dir1 + row.dir1, dir2: s.dir2 + row.dir2, aprov: s.aprov + row.aprov, tu: s.tu + row.tu,
+        dir1: s.dir1 + row.dir1, dir2: s.dir2 + row.dir2, aprov: s.aprov + row.aprov, tu: s.tu + row.tu, dirTotal: s.dirTotal + row.dirTotal,
         totalServico: s.totalServico + row.totalServico, frota: s.frota + row.frota, partidas: s.partidas + row.partidas,
         km: s.km + row.km, heMin: s.heMin + row.heMin, custo: s.custo + row.custo,
       };
@@ -1027,7 +1030,18 @@ export function ComparativoView() {
   // M.O. quando configurado — respeita 100% os campos escolhidos, igual a
   // tabela principal (antes tinha 4 métricas fixas sempre presentes).
   const unidadeMetrics = useMemo(() => {
-    const list: UnidadeMetric[] = shownMetrics.map((m) => ({ key: m.key as MetricKeyName, label: m.label, fmt: m.fmt, round: m.round }));
+    const list: UnidadeMetric[] = [];
+    const temTU = shownMetrics.some((m) => m.key === "tu");
+    for (const m of shownMetrics) {
+      list.push({ key: m.key as MetricKeyName, label: m.label, fmt: m.fmt, round: m.round });
+      // Depois de Serviços: Total DIR (1º T. + 2º T. + Aproveit.) e, se a
+      // coluna TU não estiver entre os campos visíveis, Total TU — pra
+      // fechar DIR + TU = Serviços no relatório.
+      if (m.key === "totalServico") {
+        list.push({ key: "dirTotal", label: "Total DIR", fmt: fmtInt, round: (n) => roundTo(n, 0) });
+        if (!temTU) list.push({ key: "tu", label: "Total TU", fmt: fmtInt, round: (n) => roundTo(n, 0) });
+      }
+    }
     if (mostrarCustoTabela) list.push(UNIDADE_CUSTO_METRIC);
     return list;
   }, [shownMetrics, mostrarCustoTabela]);
@@ -1691,10 +1705,13 @@ export function ComparativoView() {
   );
 }
 
-type BreakdownVal = { servicos: number; frota: number; partidas: number; km: number; heMin: number; custo: number };
+type BreakdownVal = { servicos: number; dir: number; tu: number; frota: number; partidas: number; km: number; heMin: number; custo: number };
 
 const BREAKDOWN_METRICS: { key: keyof BreakdownVal; label: string; fmt: (n: number) => string }[] = [
   { key: "servicos", label: "Serviços", fmt: fmtInt },
+  // DIR = 1º T. + 2º T. + Aproveit. (aproveitamento é DIR); DIR + TU = Serviços.
+  { key: "dir", label: "DIR", fmt: fmtInt },
+  { key: "tu", label: "TU", fmt: fmtInt },
   { key: "frota", label: "Frota", fmt: fmtInt },
   { key: "partidas", label: "Partidas", fmt: fmtInt },
   { key: "km", label: "KM", fmt: (n) => fmtKm(n) },
@@ -1705,8 +1722,12 @@ function ResumoComparativoTable({ titulo, rows, showPct, ocultarZeros }: { titul
   const comCusto = rows.some((r) => r.atual.custo > 0 || r.proposta.custo > 0);
   const metrics = comCusto ? [...BREAKDOWN_METRICS, { key: "custo" as const, label: "Custo M.O.", fmt: fmtMoeda }] : BREAKDOWN_METRICS;
   const colsPerMetric = showPct ? 4 : 3;
-  const totA = rows.reduce((s, r) => ({ servicos: s.servicos + r.atual.servicos, frota: s.frota + r.atual.frota, partidas: s.partidas + r.atual.partidas, km: s.km + r.atual.km, heMin: s.heMin + r.atual.heMin, custo: s.custo + r.atual.custo }), { servicos: 0, frota: 0, partidas: 0, km: 0, heMin: 0, custo: 0 });
-  const totP = rows.reduce((s, r) => ({ servicos: s.servicos + r.proposta.servicos, frota: s.frota + r.proposta.frota, partidas: s.partidas + r.proposta.partidas, km: s.km + r.proposta.km, heMin: s.heMin + r.proposta.heMin, custo: s.custo + r.proposta.custo }), { servicos: 0, frota: 0, partidas: 0, km: 0, heMin: 0, custo: 0 });
+  const somaLado = (lado: "atual" | "proposta"): BreakdownVal => rows.reduce((s, r) => {
+    const v = r[lado];
+    return { servicos: s.servicos + v.servicos, dir: s.dir + v.dir, tu: s.tu + v.tu, frota: s.frota + v.frota, partidas: s.partidas + v.partidas, km: s.km + v.km, heMin: s.heMin + v.heMin, custo: s.custo + v.custo };
+  }, { servicos: 0, dir: 0, tu: 0, frota: 0, partidas: 0, km: 0, heMin: 0, custo: 0 });
+  const totA = somaLado("atual");
+  const totP = somaLado("proposta");
   return (
     <Card className="shadow-[var(--shadow-card)]">
       <CardHeader className="pb-2"><CardTitle className="text-sm font-semibold">{titulo}</CardTitle></CardHeader>

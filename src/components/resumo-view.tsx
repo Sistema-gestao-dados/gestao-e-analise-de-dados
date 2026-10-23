@@ -566,44 +566,48 @@ const totals = useMemo(() => {
   );
 
   const resumoEmpresa = useMemo(() => {
-    const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
+    const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; dir: number; tu: number; veiculos: Set<string> }>();
     for (const u of units.values()) {
       const empresaServico = empresaPorServico.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, S.criterio))?.empresa || "Sem empresa";
-      if (!m.has(empresaServico)) m.set(empresaServico, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      if (!m.has(empresaServico)) m.set(empresaServico, { partidas: 0, km: 0, servicos: new Set(), dir: 0, tu: 0, veiculos: new Set() });
       m.get(empresaServico)!.servicos.add(u.key);
+      // DIR = 1º T. + 2º T. + Aproveit. (aproveitamento é DIR pra jornada); DIR + TU = Serviços.
+      if (u.bucket === "TU") m.get(empresaServico)!.tu += 1; else m.get(empresaServico)!.dir += 1;
       m.get(empresaServico)!.veiculos.add(u.vehicleKey);
     }
     for (const v of filtered) {
       const e = resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa";
-      if (!m.has(e)) m.set(e, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      if (!m.has(e)) m.set(e, { partidas: 0, km: 0, servicos: new Set(), dir: 0, tu: 0, veiculos: new Set() });
       if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(e)!.partidas += 1;
       m.get(e)!.km += kmFn(v);
     }
     const custoMap = custoPorChave((j) => empresaPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.empresa || "Sem empresa");
     return Array.from(m, ([empresa, x]) => ({
-      empresa, partidas: x.partidas, km: x.km, servicos: x.servicos.size, frota: x.veiculos.size,
+      empresa, partidas: x.partidas, km: x.km, servicos: x.servicos.size, dir: x.dir, tu: x.tu, frota: x.veiculos.size,
       custo: custoMap.get(empresa) ?? 0,
     })).sort((a, b) => a.empresa.localeCompare(b.empresa));
   }, [units, filtered, linhaMap, kmFn, S.criterio, empresaPorServico, empresaOverrideMap, jornadasParaCusto, custoParams]);
 
   // Resumo por Unidade (rodapé gerencial)
   const resumoUnidade = useMemo(() => {
-    const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
+    const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; dir: number; tu: number; veiculos: Set<string> }>();
     for (const u of units.values()) {
       const unidade = unidadePorServico.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, S.criterio))?.unidade || "Sem unidade";
-      if (!m.has(unidade)) m.set(unidade, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      if (!m.has(unidade)) m.set(unidade, { partidas: 0, km: 0, servicos: new Set(), dir: 0, tu: 0, veiculos: new Set() });
       m.get(unidade)!.servicos.add(u.key);
+      // DIR = 1º T. + 2º T. + Aproveit. (aproveitamento é DIR pra jornada); DIR + TU = Serviços.
+      if (u.bucket === "TU") m.get(unidade)!.tu += 1; else m.get(unidade)!.dir += 1;
       m.get(unidade)!.veiculos.add(u.vehicleKey);
     }
     for (const v of filtered) {
       const un = resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade";
-      if (!m.has(un)) m.set(un, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      if (!m.has(un)) m.set(un, { partidas: 0, km: 0, servicos: new Set(), dir: 0, tu: 0, veiculos: new Set() });
       if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(un)!.partidas += 1;
       m.get(un)!.km += kmFn(v);
     }
     const custoMap = custoPorChave((j) => unidadePorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.unidade || "Sem unidade");
     return Array.from(m, ([unidade, x]) => ({
-      unidade, partidas: x.partidas, km: x.km, servicos: x.servicos.size, frota: x.veiculos.size,
+      unidade, partidas: x.partidas, km: x.km, servicos: x.servicos.size, dir: x.dir, tu: x.tu, frota: x.veiculos.size,
       custo: custoMap.get(unidade) ?? 0,
     })).sort((a, b) => a.unidade.localeCompare(b.unidade));
   }, [units, filtered, linhaMap, kmFn, S.criterio, unidadePorServico, empresaOverrideMap, jornadasParaCusto, custoParams]);
@@ -616,22 +620,24 @@ const totals = useMemo(() => {
     [filtered, linhaMap, empresaOverrideMap],
   );
   const resumoGrupoLinha = useMemo(() => {
-    const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; veiculos: Set<string> }>();
+    const m = new Map<string, { partidas: number; km: number; servicos: Set<string>; dir: number; tu: number; veiculos: Set<string> }>();
     for (const u of units.values()) {
       const grupo = grupoPorServico.get(u.vehicleKey) || linhaMap.get(dominantLinha(u, S.criterio))?.ordem || "Sem grupo";
-      if (!m.has(grupo)) m.set(grupo, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      if (!m.has(grupo)) m.set(grupo, { partidas: 0, km: 0, servicos: new Set(), dir: 0, tu: 0, veiculos: new Set() });
       m.get(grupo)!.servicos.add(u.key);
+      // DIR = 1º T. + 2º T. + Aproveit. (aproveitamento é DIR pra jornada); DIR + TU = Serviços.
+      if (u.bucket === "TU") m.get(grupo)!.tu += 1; else m.get(grupo)!.dir += 1;
       m.get(grupo)!.veiculos.add(u.vehicleKey);
     }
     for (const v of filtered) {
       const grupo = resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo";
-      if (!m.has(grupo)) m.set(grupo, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
+      if (!m.has(grupo)) m.set(grupo, { partidas: 0, km: 0, servicos: new Set(), dir: 0, tu: 0, veiculos: new Set() });
       if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(grupo)!.partidas += 1;
       m.get(grupo)!.km += kmFn(v);
     }
     const custoMap = custoPorChave((j) => grupoPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.ordem || "Sem grupo");
     return Array.from(m, ([grupo, x]) => ({
-      grupo, partidas: x.partidas, km: x.km, servicos: x.servicos.size, frota: x.veiculos.size,
+      grupo, partidas: x.partidas, km: x.km, servicos: x.servicos.size, dir: x.dir, tu: x.tu, frota: x.veiculos.size,
       custo: custoMap.get(grupo) ?? 0,
     })).sort((a, b) => a.grupo.localeCompare(b.grupo));
   }, [units, filtered, linhaMap, kmFn, S.criterio, grupoPorServico, empresaOverrideMap, jornadasParaCusto, custoParams]);
@@ -690,11 +696,13 @@ const totals = useMemo(() => {
     }
 
     // Mini-resumo por Unidade (Serviços/Frota/Partidas/KM), no rodapé.
-    push(["Unidade", "Serviços", "Frota", "Partidas", "KM"], "miniHeader");
-    for (const u of resumoUnidade) push([u.unidade, u.servicos, u.frota, u.partidas, roundTo(u.km, 1)], "miniBody");
+    push(["Unidade", "Serviços", "DIR", "TU", "Frota", "Partidas", "KM"], "miniHeader");
+    for (const u of resumoUnidade) push([u.unidade, u.servicos, u.dir, u.tu, u.frota, u.partidas, roundTo(u.km, 1)], "miniBody");
     push([
       "TOTAL",
       resumoUnidade.reduce((s, u) => s + u.servicos, 0),
+      resumoUnidade.reduce((s, u) => s + u.dir, 0),
+      resumoUnidade.reduce((s, u) => s + u.tu, 0),
       resumoUnidade.reduce((s, u) => s + u.frota, 0),
       resumoUnidade.reduce((s, u) => s + u.partidas, 0),
       roundTo(resumoUnidade.reduce((s, u) => s + u.km, 0), 1),
@@ -766,26 +774,32 @@ const totals = useMemo(() => {
       const comDescricaoPdf = mode === "linha" && mostrarDescricao;
       const headersPdf = [firstColLabel, ...(comDescricaoPdf ? ["Descrição"] : []), ...shownFields.map((f) => f.label), ...(comCustoTabela ? ["Custo M.O."] : [])];
       const fieldValsPdf = (r: Record<ResumoFieldKey, number>) => shownFields.map((f) => f.fmt(r[f.key]));
-      const empBody = resumoEmpresa.map((e) => [e.empresa, fmtInt(e.servicos), fmtInt(e.frota), fmtInt(e.partidas), fmtKm(e.km)]);
-      const empHeaders = ["Empresa", "Serviços", "Frota", "Partidas", "KM"];
+      const empBody = resumoEmpresa.map((e) => [e.empresa, fmtInt(e.servicos), fmtInt(e.dir), fmtInt(e.tu), fmtInt(e.frota), fmtInt(e.partidas), fmtKm(e.km)]);
+      const empHeaders = ["Empresa", "Serviços", "DIR", "TU", "Frota", "Partidas", "KM"];
       const empFoot = ["TOTAL",
         fmtInt(resumoEmpresa.reduce((s, e) => s + e.servicos, 0)),
+        fmtInt(resumoEmpresa.reduce((s, e) => s + e.dir, 0)),
+        fmtInt(resumoEmpresa.reduce((s, e) => s + e.tu, 0)),
         fmtInt(resumoEmpresa.reduce((s, e) => s + e.frota, 0)),
         fmtInt(resumoEmpresa.reduce((s, e) => s + e.partidas, 0)),
         fmtKm(resumoEmpresa.reduce((s, e) => s + e.km, 0)),
       ];
-      const uniBody = resumoUnidade.map((e) => [e.unidade, fmtInt(e.servicos), fmtInt(e.frota), fmtInt(e.partidas), fmtKm(e.km)]);
-      const uniHeaders = ["Unidade", "Serviços", "Frota", "Partidas", "KM"];
+      const uniBody = resumoUnidade.map((e) => [e.unidade, fmtInt(e.servicos), fmtInt(e.dir), fmtInt(e.tu), fmtInt(e.frota), fmtInt(e.partidas), fmtKm(e.km)]);
+      const uniHeaders = ["Unidade", "Serviços", "DIR", "TU", "Frota", "Partidas", "KM"];
       const uniFoot = ["TOTAL",
         fmtInt(resumoUnidade.reduce((s, e) => s + e.servicos, 0)),
+        fmtInt(resumoUnidade.reduce((s, e) => s + e.dir, 0)),
+        fmtInt(resumoUnidade.reduce((s, e) => s + e.tu, 0)),
         fmtInt(resumoUnidade.reduce((s, e) => s + e.frota, 0)),
         fmtInt(resumoUnidade.reduce((s, e) => s + e.partidas, 0)),
         fmtKm(resumoUnidade.reduce((s, e) => s + e.km, 0)),
       ];
-      const grpBody = resumoGrupoLinha.map((e) => [e.grupo, fmtInt(e.servicos), fmtInt(e.frota), fmtInt(e.partidas), fmtKm(e.km)]);
-      const grpHeaders = ["Grupo", "Serviços", "Frota", "Partidas", "KM"];
+      const grpBody = resumoGrupoLinha.map((e) => [e.grupo, fmtInt(e.servicos), fmtInt(e.dir), fmtInt(e.tu), fmtInt(e.frota), fmtInt(e.partidas), fmtKm(e.km)]);
+      const grpHeaders = ["Grupo", "Serviços", "DIR", "TU", "Frota", "Partidas", "KM"];
       const grpFoot = ["TOTAL",
         fmtInt(resumoGrupoLinha.reduce((s, e) => s + e.servicos, 0)),
+        fmtInt(resumoGrupoLinha.reduce((s, e) => s + e.dir, 0)),
+        fmtInt(resumoGrupoLinha.reduce((s, e) => s + e.tu, 0)),
         fmtInt(resumoGrupoLinha.reduce((s, e) => s + e.frota, 0)),
         fmtInt(resumoGrupoLinha.reduce((s, e) => s + e.partidas, 0)),
         fmtKm(resumoGrupoLinha.reduce((s, e) => s + e.km, 0)),
@@ -886,16 +900,18 @@ const totals = useMemo(() => {
         }
         // Mini-resumo por Unidade, mesmo formato do Excel.
         d.setFontSize(9 * zoom); d.setFont("helvetica", "bold"); d.setTextColor(20);
-        const miniBody = resumoUnidade.map((u) => [u.unidade, fmtInt(u.servicos), fmtInt(u.frota), fmtInt(u.partidas), fmtKm(u.km)]);
+        const miniBody = resumoUnidade.map((u) => [u.unidade, fmtInt(u.servicos), fmtInt(u.dir), fmtInt(u.tu), fmtInt(u.frota), fmtInt(u.partidas), fmtKm(u.km)]);
         const miniFoot = ["TOTAL",
           fmtInt(resumoUnidade.reduce((s, u) => s + u.servicos, 0)),
+          fmtInt(resumoUnidade.reduce((s, u) => s + u.dir, 0)),
+          fmtInt(resumoUnidade.reduce((s, u) => s + u.tu, 0)),
           fmtInt(resumoUnidade.reduce((s, u) => s + u.frota, 0)),
           fmtInt(resumoUnidade.reduce((s, u) => s + u.partidas, 0)),
           fmtKm(resumoUnidade.reduce((s, u) => s + u.km, 0)),
         ];
         autoTable(d, {
           startY: y + 2 * zoom,
-          head: [["Unidade", "Serviços", "Frota", "Partidas", "KM"]],
+          head: [["Unidade", "Serviços", "DIR", "TU", "Frota", "Partidas", "KM"]],
           body: miniBody,
           foot: [miniFoot],
           styles: styleBase,
@@ -1095,13 +1111,15 @@ const totals = useMemo(() => {
         <div style={{ fontWeight: 700, fontSize: "11pt", margin: "10pt 0 4pt" }}>Resumo Gerencial por Empresa</div>
         <table className="print-table">
           <thead>
-            <tr><th>Empresa</th><th>Serviços</th><th>Frota</th><th>Partidas</th><th>KM</th></tr>
+            <tr><th>Empresa</th><th>Serviços</th><th>DIR</th><th>TU</th><th>Frota</th><th>Partidas</th><th>KM</th></tr>
           </thead>
           <tbody>
             {resumoEmpresa.map((e) => (
               <tr key={e.empresa}>
                 <td style={{ textAlign: "left", fontWeight: 600 }}>{e.empresa}</td>
                 <td>{fmtInt(e.servicos)}</td>
+                <td>{fmtInt(e.dir)}</td>
+                <td>{fmtInt(e.tu)}</td>
                 <td>{fmtInt(e.frota)}</td>
                 <td>{fmtInt(e.partidas)}</td>
                 <td>{fmtKm(e.km)}</td>
@@ -1112,6 +1130,8 @@ const totals = useMemo(() => {
             <tr>
               <td style={{ textAlign: "left" }}>TOTAL</td>
               <td>{fmtInt(resumoEmpresa.reduce((s, e) => s + e.servicos, 0))}</td>
+              <td>{fmtInt(resumoEmpresa.reduce((s, e) => s + e.dir, 0))}</td>
+              <td>{fmtInt(resumoEmpresa.reduce((s, e) => s + e.tu, 0))}</td>
               <td>{fmtInt(resumoEmpresa.reduce((s, e) => s + e.frota, 0))}</td>
               <td>{fmtInt(resumoEmpresa.reduce((s, e) => s + e.partidas, 0))}</td>
               <td>{fmtKm(resumoEmpresa.reduce((s, e) => s + e.km, 0))}</td>
@@ -1313,24 +1333,27 @@ const totals = useMemo(() => {
   );
 }
 
-type ResumoGerencialRow = { partidas: number; km: number; servicos: number; frota: number; [k: string]: string | number };
+type ResumoGerencialRow = { partidas: number; km: number; servicos: number; dir: number; tu: number; frota: number; [k: string]: string | number };
 
-function appendResumoSheet(wb: XLSX.WorkBook, nomeAba: string, keyField: string, rows: { [k: string]: string | number; servicos: number; frota: number; partidas: number; km: number }[]) {
+function appendResumoSheet(wb: XLSX.WorkBook, nomeAba: string, keyField: string, rows: { [k: string]: string | number; servicos: number; dir: number; tu: number; frota: number; partidas: number; km: number }[]) {
   const aoa: (string | number)[][] = [
     [`RESUMO GERENCIAL POR ${nomeAba.toUpperCase()}`],
     [],
-    [nomeAba, "Serviços", "Frota", "Partidas", "KM"],
-    ...rows.map((r) => [r[keyField], r.servicos, r.frota, r.partidas, roundTo(r.km, 1)]),
+    [nomeAba, "Serviços", "DIR", "TU", "Frota", "Partidas", "KM"],
+    ...rows.map((r) => [r[keyField], r.servicos, r.dir, r.tu, r.frota, r.partidas, roundTo(r.km, 1)]),
     ["TOTAL",
       rows.reduce((s, r) => s + r.servicos, 0),
+      rows.reduce((s, r) => s + r.dir, 0),
+      rows.reduce((s, r) => s + r.tu, 0),
       rows.reduce((s, r) => s + r.frota, 0),
       rows.reduce((s, r) => s + r.partidas, 0),
       roundTo(rows.reduce((s, r) => s + r.km, 0), 1),
     ],
   ];
+  const NCOLS = 7;
   const ws = XLSX.utils.aoa_to_sheet(aoa);
-  ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: 4 } }];
-  ws["!cols"] = [{ wch: 28 }, { wch: 12 }, { wch: 10 }, { wch: 12 }, { wch: 14 }];
+  ws["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: NCOLS - 1 } }];
+  ws["!cols"] = [{ wch: 28 }, { wch: 12 }, { wch: 9 }, { wch: 9 }, { wch: 10 }, { wch: 12 }, { wch: 14 }];
 
   const FILL_BLUE = { patternType: "solid", fgColor: { rgb: XLSX_BLUE } };
   const FILL_LIGHTBLUE = { patternType: "solid", fgColor: { rgb: XLSX_BLUE_LIGHT } };
@@ -1338,7 +1361,7 @@ function appendResumoSheet(wb: XLSX.WorkBook, nomeAba: string, keyField: string,
   const border = { top: THIN, bottom: THIN, left: THIN, right: THIN };
   const titleCell = (ws as any)["A1"];
   if (titleCell) titleCell.s = { font: { bold: true, sz: 13, color: { rgb: XLSX_LINE_BLUE } }, alignment: { horizontal: "center" } };
-  for (let c = 0; c < 5; c++) {
+  for (let c = 0; c < NCOLS; c++) {
     const headCell = (ws as any)[XLSX.utils.encode_cell({ r: 2, c })];
     if (headCell) headCell.s = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: FILL_BLUE, alignment: { horizontal: "center" }, border };
     for (let r = 3; r < 3 + rows.length; r++) {
@@ -1366,6 +1389,8 @@ function ResumoGerencialTable({ titulo, rows, keyField, loading }: { titulo: str
               <TableRow className="h-8">
                 <TableHead className="px-2 py-1 capitalize">{keyField}</TableHead>
                 <TableHead className="px-2 py-1 text-right">Serviços</TableHead>
+                <TableHead className="px-2 py-1 text-right">DIR</TableHead>
+                <TableHead className="px-2 py-1 text-right">TU</TableHead>
                 <TableHead className="px-2 py-1 text-right">Frota</TableHead>
                 <TableHead className="px-2 py-1 text-right">Partidas</TableHead>
                 <TableHead className="px-2 py-1 text-right">KM</TableHead>
@@ -1377,6 +1402,8 @@ function ResumoGerencialTable({ titulo, rows, keyField, loading }: { titulo: str
                 <TableRow key={String(r[keyField])} className="h-8">
                   <TableCell className="px-2 py-1 font-medium">{r[keyField]}</TableCell>
                   <TableCell className="px-2 py-1 text-right tabular-nums">{r.servicos}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.dir}</TableCell>
+                  <TableCell className="px-2 py-1 text-right tabular-nums">{r.tu}</TableCell>
                   <TableCell className="px-2 py-1 text-right tabular-nums">{r.frota}</TableCell>
                   <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(r.partidas)}</TableCell>
                   <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(r.km)}</TableCell>
@@ -1386,6 +1413,8 @@ function ResumoGerencialTable({ titulo, rows, keyField, loading }: { titulo: str
               <TableRow className="bg-muted/50 font-bold h-9">
                 <TableCell className="px-2 py-1">TOTAL</TableCell>
                 <TableCell className="px-2 py-1 text-right tabular-nums">{rows.reduce((s, r) => s + r.servicos, 0)}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{rows.reduce((s, r) => s + r.dir, 0)}</TableCell>
+                <TableCell className="px-2 py-1 text-right tabular-nums">{rows.reduce((s, r) => s + r.tu, 0)}</TableCell>
                 <TableCell className="px-2 py-1 text-right tabular-nums">{rows.reduce((s, r) => s + r.frota, 0)}</TableCell>
                 <TableCell className="px-2 py-1 text-right tabular-nums">{fmtInt(rows.reduce((s, r) => s + r.partidas, 0))}</TableCell>
                 <TableCell className="px-2 py-1 text-right tabular-nums">{fmtKm(rows.reduce((s, r) => s + r.km, 0))}</TableCell>
