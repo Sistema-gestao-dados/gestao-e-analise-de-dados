@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 import { fetchLinhas, type Linha } from "@/lib/data";
@@ -17,6 +17,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MultiSelect } from "@/components/multi-select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { usePersistentState } from "@/hooks/use-persistent-state";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend, CartesianGrid } from "recharts";
 import { Users, Ticket, DollarSign, Bus, Route as RouteIcon, Gauge, Percent, Loader2, Download, FileUp, type LucideIcon } from "lucide-react";
 
@@ -82,6 +84,90 @@ function agrupar<K extends string>(rows: PassageiroDia[], chave: (r: PassageiroD
 
 const ordenarCodigo = (a: string, b: string) => a.localeCompare(b, "pt-BR", { numeric: true });
 
+/** "07/08/26"; mesmo mês: "07 a 09/08/26"; mesmo ano: "28/08 a 03/09/26". */
+function fmtPeriodoCurto(inicio: string, fim: string): string {
+  const dd = (d: string) => d.slice(8, 10), mm = (d: string) => d.slice(5, 7), aa = (d: string) => d.slice(2, 4);
+  const cheia = (d: string) => `${dd(d)}/${mm(d)}/${aa(d)}`;
+  if (inicio === fim) return cheia(fim);
+  if (inicio.slice(0, 7) === fim.slice(0, 7)) return `${dd(inicio)} a ${cheia(fim)}`;
+  if (inicio.slice(0, 4) === fim.slice(0, 4)) return `${dd(inicio)}/${mm(inicio)} a ${cheia(fim)}`;
+  return `${cheia(inicio)} a ${cheia(fim)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Ordenação (mesmas opções do Relatório Comparativo)
+// ---------------------------------------------------------------------------
+
+type Ordem = "valor" | "padrao" | "unidade";
+const SEM_UNIDADE = "Sem unidade";
+
+/** Unidade de cada item da tabela: Linha = Unidade do cadastro; Empresa/
+ *  Grupo = a Unidade com mais registros entre as linhas dele. */
+function unidadePorItem(rows: PassageiroDia[], dim: Dimensao, linhaMap: Map<string, Linha>): Map<string, string> {
+  const cont = new Map<string, Map<string, number>>();
+  for (const r of rows) {
+    const item = dimValor(r, dim, linhaMap);
+    const un = linhaMap.get(r.linha)?.unidade?.trim() || SEM_UNIDADE;
+    if (!cont.has(item)) cont.set(item, new Map());
+    const m = cont.get(item)!;
+    m.set(un, (m.get(un) ?? 0) + 1);
+  }
+  const out = new Map<string, string>();
+  for (const [item, m] of cont) out.set(item, [...m].sort((a, b) => b[1] - a[1])[0][0]);
+  return out;
+}
+
+/** Ordena os itens. "unidade": Unidade, depois (por Linha) Categoria e
+ *  Grupo da linha, depois o código — igual ao Relatório Comparativo. */
+function ordenarItens<T extends { nome: string }>(
+  itens: T[], ordem: Ordem, valorDe: (t: T) => number, unidades: Map<string, string>,
+  dim: Dimensao, linhaMap: Map<string, Linha>,
+): T[] {
+  const porNome = (a: T, b: T) => {
+    if ((a.nome === SEM_CADASTRO) !== (b.nome === SEM_CADASTRO)) return a.nome === SEM_CADASTRO ? 1 : -1;
+    return ordenarCodigo(a.nome, b.nome);
+  };
+  return [...itens].sort((a, b) => {
+    if (ordem === "valor") return valorDe(b) - valorDe(a) || porNome(a, b);
+    if (ordem === "unidade") {
+      const ua = unidades.get(a.nome) ?? SEM_UNIDADE, ub = unidades.get(b.nome) ?? SEM_UNIDADE;
+      if (ua !== ub) return ua === SEM_UNIDADE ? 1 : ub === SEM_UNIDADE ? -1 : ua.localeCompare(ub, "pt-BR");
+      if (dim === "linha") {
+        const la = linhaMap.get(a.nome), lb = linhaMap.get(b.nome);
+        const ca = la?.categoria ?? "", cb = lb?.categoria ?? "";
+        if (ca !== cb) return ca.localeCompare(cb, "pt-BR");
+        const ga = la?.ordem ?? "", gb = lb?.ordem ?? "";
+        if (ga !== gb) return ga.localeCompare(gb, "pt-BR", { numeric: true, sensitivity: "base" });
+      }
+    }
+    return porNome(a, b);
+  });
+}
+
+/** Itens já ordenados por Unidade -> blocos consecutivos por Unidade. */
+function blocosPorUnidade<T extends { nome: string }>(itens: T[], unidades: Map<string, string>): { unidade: string; itens: T[] }[] {
+  const out: { unidade: string; itens: T[] }[] = [];
+  for (const it of itens) {
+    const un = unidades.get(it.nome) ?? SEM_UNIDADE;
+    if (out.at(-1)?.unidade !== un) out.push({ unidade: un, itens: [] });
+    out.at(-1)!.itens.push(it);
+  }
+  return out;
+}
+
+function SelectOrdem({ value, onChange }: { value: Ordem; onChange: (v: Ordem) => void }) {
+  return (
+    <Select value={value} onValueChange={(v) => onChange(v as Ordem)}>
+      <SelectTrigger className="w-44"><SelectValue /></SelectTrigger>
+      <SelectContent>
+        <SelectItem value="valor">Maior valor (métrica)</SelectItem>
+        <SelectItem value="padrao">Ordem padrão</SelectItem>
+        <SelectItem value="unidade">Ordenar por Unidade</SelectItem>
+      </SelectContent>
+    </Select>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Filtros (compartilhados pelas duas abas)
 // ---------------------------------------------------------------------------
@@ -107,6 +193,10 @@ function PassageirosPage() {
   const linhaMap = useMemo(() => new Map((linhasQ.data ?? []).map((l) => [l.linha, l])), [linhasQ.data]);
 
   const [filtros, setFiltros] = useState<Filtros>(FILTROS_VAZIOS);
+  const [colsVisiveis, setColsVisiveis] = usePersistentState<string[]>("passageiros.colsVisiveis", COLS.map((c) => c.key));
+  const cols = useMemo(() => COLS.filter((c) => colsVisiveis.includes(c.key)), [colsVisiveis]);
+  const toggleCol = (k: ColKey) =>
+    setColsVisiveis(colsVisiveis.includes(k) ? colsVisiveis.filter((x) => x !== k) : [...colsVisiveis, k]);
 
   // Opções de filtro: Linha = o que existe nos dados importados (o RLS já
   // tira as linhas de fora do Grupo/Empresa do usuário restrito);
@@ -146,6 +236,18 @@ function PassageirosPage() {
         </CardContent>
       </Card>
 
+      <Card className="shadow-[var(--shadow-card)]">
+        <CardContent className="p-3 flex flex-wrap items-center gap-4">
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Campos visíveis</span>
+          {COLS.map((c) => (
+            <label key={c.key} className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <Checkbox checked={colsVisiveis.includes(c.key)} onCheckedChange={() => toggleCol(c.key)} className="h-3.5 w-3.5" />
+              {c.label}
+            </label>
+          ))}
+        </CardContent>
+      </Card>
+
       {ultimoMes && (
         <Tabs defaultValue="geral">
           <TabsList>
@@ -155,11 +257,11 @@ function PassageirosPage() {
           <TabsContent value="geral">
             <VisaoGeral
               inicioPadrao={ultimoMes.inicio} fimPadrao={ultimoMes.fim}
-              filtros={filtros} linhaMap={linhaMap} onLinhas={setLinhasNosDados}
+              filtros={filtros} linhaMap={linhaMap} onLinhas={setLinhasNosDados} cols={cols}
             />
           </TabsContent>
           <TabsContent value="comparativo">
-            <Comparativo ultimoFim={ultimoMes.fim} filtros={filtros} linhaMap={linhaMap} onLinhas={setLinhasNosDados} />
+            <Comparativo ultimoFim={ultimoMes.fim} filtros={filtros} linhaMap={linhaMap} onLinhas={setLinhasNosDados} cols={cols} />
           </TabsContent>
         </Tabs>
       )}
@@ -183,15 +285,18 @@ function useRegistrarLinhas(rows: PassageiroDia[] | undefined, onLinhas: (fn: (p
 // Visão geral
 // ---------------------------------------------------------------------------
 
-function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, onLinhas }: {
+type Col = (typeof COLS)[number];
+
+function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, onLinhas, cols }: {
   inicioPadrao: string; fimPadrao: string; filtros: Filtros; linhaMap: Map<string, Linha>;
-  onLinhas: (fn: (prev: string[]) => string[]) => void;
+  onLinhas: (fn: (prev: string[]) => string[]) => void; cols: Col[];
 }) {
   const [inicio, setInicio] = useState(inicioPadrao);
   const [fim, setFim] = useState(fimPadrao);
   const [gran, setGran] = useState<Granularidade>("dia");
   const [metrica, setMetrica] = useState<ColKey>("transportados");
   const [dim, setDim] = useState<Dimensao>("linha");
+  const [ordem, setOrdem] = usePersistentState<Ordem>("passageiros.geral.ordem", "valor");
 
   const q = useQuery({
     queryKey: ["passageiros", inicio, fim],
@@ -211,18 +316,29 @@ function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, onLinhas }: {
     return lista.map((p, i) => ({ ...p, anterior: i > 0 ? lista[i - 1].t : null }));
   }, [rows, gran]);
 
+  const unidades = useMemo(() => unidadePorItem(rows, dim, linhaMap), [rows, dim, linhaMap]);
   const porDim = useMemo(() => {
     const g = agrupar(rows, (r) => dimValor(r, dim, linhaMap));
-    return Array.from(g, ([nome, rs]) => ({ nome, t: somar(rs) })).sort((a, b) => b.t.transportados - a.t.transportados);
-  }, [rows, dim, linhaMap]);
+    const itens = Array.from(g, ([nome, rs]) => ({ nome, t: somar(rs) }));
+    return ordenarItens(itens, ordem, (d) => valor(d.t, metrica) ?? 0, unidades, dim, linhaMap);
+  }, [rows, dim, linhaMap, ordem, metrica, unidades]);
+  const totalPorUnidade = useMemo(
+    () => new Map(Array.from(agrupar(rows, (r) => unidades.get(dimValor(r, dim, linhaMap)) ?? SEM_UNIDADE), ([u, rs]) => [u, somar(rs)])),
+    [rows, unidades, dim, linhaMap],
+  );
+  const blocos = ordem === "unidade" ? blocosPorUnidade(porDim, unidades) : [{ unidade: "", itens: porDim }];
 
   const grafico = porPeriodo.map((p) => ({ rotulo: p.rotulo, valor: valor(p.t, metrica) }));
 
   function exportar() {
     const wb = XLSX.utils.book_new();
-    const colunas = (t: Totais) => Object.fromEntries(COLS.map((c) => [c.label, valor(t, c.key)]));
+    const colunas = (t: Totais) => Object.fromEntries(cols.map((c) => [c.label, valor(t, c.key)]));
     const sheetPeriodo = porPeriodo.map((p) => ({ Período: p.rotulo, Dias: p.t.dias, ...colunas(p.t) }));
-    const sheetDim = porDim.map((d) => ({ [DIMENSOES.find((x) => x.key === dim)!.label]: d.nome, ...colunas(d.t) }));
+    const sheetDim = porDim.map((d) => ({
+      [DIMENSOES.find((x) => x.key === dim)!.label]: d.nome,
+      ...(ordem === "unidade" ? { Unidade: unidades.get(d.nome) ?? SEM_UNIDADE } : {}),
+      ...colunas(d.t),
+    }));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheetPeriodo), `Por ${gran}`);
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheetDim), `Por ${dim}`);
     XLSX.writeFile(wb, `passageiros_${inicio}_${fim}.xlsx`);
@@ -232,7 +348,7 @@ function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, onLinhas }: {
   return (
     <div className="space-y-4 pt-2">
       <Card className="shadow-[var(--shadow-card)]">
-        <CardContent className="p-4 grid grid-cols-2 gap-3 md:grid-cols-6 items-end">
+        <CardContent className="p-4 grid grid-cols-2 gap-3 md:grid-cols-7 items-end">
           <Campo rotulo="De"><Input type="date" value={inicio} onChange={(e) => setInicio(e.target.value)} /></Campo>
           <Campo rotulo="Até"><Input type="date" value={fim} onChange={(e) => setFim(e.target.value)} /></Campo>
           <Campo rotulo="Agrupar tempo por">
@@ -247,12 +363,13 @@ function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, onLinhas }: {
               <SelectContent>{COLS.map((c) => <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>)}</SelectContent>
             </Select>
           </Campo>
-          <Campo rotulo="Ranking por">
+          <Campo rotulo="Tabela por">
             <Select value={dim} onValueChange={(v) => setDim(v as Dimensao)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>{DIMENSOES.map((d) => <SelectItem key={d.key} value={d.key}>{d.label}</SelectItem>)}</SelectContent>
             </Select>
           </Campo>
+          <Campo rotulo="Ordenar"><SelectOrdem value={ordem} onChange={setOrdem} /></Campo>
           <Button variant="outline" onClick={exportar} disabled={!rows.length}><Download className="h-4 w-4 mr-1" /> Excel</Button>
         </CardContent>
       </Card>
@@ -297,7 +414,7 @@ function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, onLinhas }: {
                   <TableRow>
                     <TableHead>Período</TableHead>
                     <TableHead className="text-right">Dias</TableHead>
-                    {COLS.map((c) => <TableHead key={c.key} className="text-right whitespace-nowrap">{c.curto}</TableHead>)}
+                    {cols.map((c) => <TableHead key={c.key} className="text-right whitespace-nowrap">{c.curto}</TableHead>)}
                     <TableHead className="text-right whitespace-nowrap">Δ Transp.</TableHead>
                     <TableHead className="text-right whitespace-nowrap">Δ Receita</TableHead>
                   </TableRow>
@@ -307,12 +424,12 @@ function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, onLinhas }: {
                     <TableRow key={p.chave}>
                       <TableCell className="whitespace-nowrap font-medium">{p.rotulo}</TableCell>
                       <TableCell className="text-right tabular-nums">{p.t.dias}</TableCell>
-                      {COLS.map((c) => <TableCell key={c.key} className="text-right tabular-nums">{c.fmt(valor(p.t, c.key))}</TableCell>)}
+                      {cols.map((c) => <TableCell key={c.key} className="text-right tabular-nums">{c.fmt(valor(p.t, c.key))}</TableCell>)}
                       <TableCell className="text-right"><Delta v={p.anterior ? variacao(p.anterior.transportados, p.t.transportados) : null} /></TableCell>
                       <TableCell className="text-right"><Delta v={p.anterior ? variacao(p.anterior.receita, p.t.receita) : null} /></TableCell>
                     </TableRow>
                   ))}
-                  <TotalRow t={total} colsExtras={2} dias />
+                  <TotalRow t={total} cols={cols} colsExtras={2} dias />
                 </TableBody>
               </Table>
             </CardContent>
@@ -325,19 +442,35 @@ function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, onLinhas }: {
                 <TableHeader>
                   <TableRow>
                     <TableHead>{DIMENSOES.find((d) => d.key === dim)!.label}</TableHead>
-                    {COLS.map((c) => <TableHead key={c.key} className="text-right whitespace-nowrap">{c.curto}</TableHead>)}
+                    {cols.map((c) => <TableHead key={c.key} className="text-right whitespace-nowrap">{c.curto}</TableHead>)}
                     <TableHead className="text-right whitespace-nowrap">% do total (transp.)</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {porDim.map((d) => (
-                    <TableRow key={d.nome}>
-                      <TableCell className="whitespace-nowrap font-medium">{d.nome}</TableCell>
-                      {COLS.map((c) => <TableCell key={c.key} className="text-right tabular-nums">{c.fmt(valor(d.t, c.key))}</TableCell>)}
-                      <TableCell className="text-right tabular-nums">{fmtNum(total.transportados ? (d.t.transportados * 100) / total.transportados : null, 1)}%</TableCell>
-                    </TableRow>
-                  ))}
-                  <TotalRow t={total} colsExtras={1} />
+                  {blocos.map((bl) => {
+                    const pct = (t: Totais) => `${fmtNum(total.transportados ? (t.transportados * 100) / total.transportados : null, 1)}%`;
+                    const sub = totalPorUnidade.get(bl.unidade);
+                    return (
+                      <Fragment key={bl.unidade || "_"}>
+                        {bl.unidade && <CabUnidade unidade={bl.unidade} span={cols.length + 2} />}
+                        {bl.itens.map((d) => (
+                          <TableRow key={d.nome}>
+                            <TableCell className="whitespace-nowrap font-medium">{d.nome}</TableCell>
+                            {cols.map((c) => <TableCell key={c.key} className="text-right tabular-nums">{c.fmt(valor(d.t, c.key))}</TableCell>)}
+                            <TableCell className="text-right tabular-nums">{pct(d.t)}</TableCell>
+                          </TableRow>
+                        ))}
+                        {bl.unidade && sub && (
+                          <TableRow className="font-semibold bg-muted/30">
+                            <TableCell className="whitespace-nowrap">Total {bl.unidade}</TableCell>
+                            {cols.map((c) => <TableCell key={c.key} className="text-right tabular-nums">{c.fmt(valor(sub, c.key))}</TableCell>)}
+                            <TableCell className="text-right tabular-nums">{pct(sub)}</TableCell>
+                          </TableRow>
+                        )}
+                      </Fragment>
+                    );
+                  })}
+                  <TotalRow t={total} cols={cols} colsExtras={1} />
                 </TableBody>
               </Table>
             </CardContent>
@@ -354,9 +487,9 @@ function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, onLinhas }: {
 
 type Base = "total" | "media";
 
-function Comparativo({ ultimoFim, filtros, linhaMap, onLinhas }: {
+function Comparativo({ ultimoFim, filtros, linhaMap, onLinhas, cols }: {
   ultimoFim: string; filtros: Filtros; linhaMap: Map<string, Linha>;
-  onLinhas: (fn: (prev: string[]) => string[]) => void;
+  onLinhas: (fn: (prev: string[]) => string[]) => void; cols: Col[];
 }) {
   // Padrão: última semana completa importada (B) x semana anterior (A).
   const fimB0 = ultimoFim;
@@ -366,6 +499,8 @@ function Comparativo({ ultimoFim, filtros, linhaMap, onLinhas }: {
   const [base, setBase] = useState<Base>("total");
   const [dim, setDim] = useState<Dimensao>("linha");
   const [metrica, setMetrica] = useState<ColKey>("transportados");
+  const [ordem, setOrdem] = usePersistentState<Ordem>("passageiros.comp.ordem", "valor");
+  const [showPct, setShowPct] = usePersistentState("passageiros.comp.showPct", true);
 
   function atalho(tipo: "semana" | "mes" | "mesmo_mes") {
     if (tipo === "semana") {
@@ -411,14 +546,20 @@ function Comparativo({ ultimoFim, filtros, linhaMap, onLinhas }: {
     return x != null && base === "media" && COL[k].soma ? x / dias : x;
   };
 
+  const unidades = useMemo(() => unidadePorItem([...dados.rA, ...dados.rB], dim, linhaMap), [dados, dim, linhaMap]);
   const porDim = useMemo(() => {
     const gA = agrupar(dados.rA, (r) => dimValor(r, dim, linhaMap));
     const gB = agrupar(dados.rB, (r) => dimValor(r, dim, linhaMap));
     const nomes = Array.from(new Set([...gA.keys(), ...gB.keys()]));
-    return nomes
-      .map((nome) => ({ nome, tA: somar(gA.get(nome) ?? []), tB: somar(gB.get(nome) ?? []) }))
-      .sort((x, y) => (valor(y.tB, metrica) ?? 0) - (valor(x.tB, metrica) ?? 0));
-  }, [dados, dim, linhaMap, metrica]);
+    const itens = nomes.map((nome) => ({ nome, tA: somar(gA.get(nome) ?? []), tB: somar(gB.get(nome) ?? []) }));
+    return ordenarItens(itens, ordem, (d) => valor(d.tB, metrica) ?? 0, unidades, dim, linhaMap);
+  }, [dados, dim, linhaMap, metrica, ordem, unidades]);
+  const subtotais = useMemo(() => {
+    const un = (r: PassageiroDia) => unidades.get(dimValor(r, dim, linhaMap)) ?? SEM_UNIDADE;
+    const gA = agrupar(dados.rA, un), gB = agrupar(dados.rB, un);
+    return (u: string) => ({ nome: `Total ${u}`, tA: somar(gA.get(u) ?? []), tB: somar(gB.get(u) ?? []) });
+  }, [dados, unidades, dim, linhaMap]);
+  const blocos = ordem === "unidade" ? blocosPorUnidade(porDim, unidades) : [{ unidade: "", itens: porDim }];
 
   // Dia a dia alinhado: 1º dia de A com 1º dia de B, e assim por diante.
   const diaADia = useMemo(() => {
@@ -430,32 +571,33 @@ function Comparativo({ ultimoFim, filtros, linhaMap, onLinhas }: {
       const tA = porDiaA.get(dA), tB = porDiaB.get(dB);
       return {
         rotulo: `Dia ${i + 1}`,
-        dataA: dA <= a.fim ? `${fmtData(dA)} ${DIAS_SEMANA[diaSemana(dA)]}` : "",
-        dataB: dB <= b.fim ? `${fmtData(dB)} ${DIAS_SEMANA[diaSemana(dB)]}` : "",
+        dataA: dA <= a.fim ? `${fmtPeriodoCurto(dA, dA)} ${DIAS_SEMANA[diaSemana(dA)]}` : "",
+        dataB: dB <= b.fim ? `${fmtPeriodoCurto(dB, dB)} ${DIAS_SEMANA[diaSemana(dB)]}` : "",
         A: tA && dA <= a.fim ? valor(somar(tA), metrica) : null,
         B: tB && dB <= b.fim ? valor(somar(tB), metrica) : null,
       };
     });
   }, [dados, a, b, metrica]);
 
-  const rotA = `A: ${fmtData(a.inicio)} a ${fmtData(a.fim)}`;
-  const rotB = `B: ${fmtData(b.inicio)} a ${fmtData(b.fim)}`;
+  const rotA = `A = ${fmtPeriodoCurto(a.inicio, a.fim)}`;
+  const rotB = `B = ${fmtPeriodoCurto(b.inicio, b.fim)}`;
   const nomeDim = DIMENSOES.find((d) => d.key === dim)!.label;
 
   function exportar() {
     const linhas = porDim.map((d) => {
       const o: Record<string, string | number | null> = { [nomeDim]: d.nome };
-      for (const c of COLS) {
+      if (ordem === "unidade") o.Unidade = unidades.get(d.nome) ?? SEM_UNIDADE;
+      for (const c of cols) {
         const va = v(d.tA, c.key, dados.diasA), vb = v(d.tB, c.key, dados.diasB);
-        o[`${c.label} (A)`] = va;
-        o[`${c.label} (B)`] = vb;
-        o[`${c.label} Δ%`] = variacao(va, vb);
+        o[`${c.label} (${rotA})`] = va;
+        o[`${c.label} (${rotB})`] = vb;
+        if (showPct) o[`${c.label} Δ%`] = variacao(va, vb);
       }
       return o;
     });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), "Comparativo");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(diaADia.map((d) => ({ Dia: d.rotulo, "Data A": d.dataA, [`${COL[metrica].label} A`]: d.A, "Data B": d.dataB, [`${COL[metrica].label} B`]: d.B }))), "Dia a dia");
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(diaADia.map((d) => ({ Dia: d.rotulo, "Data A": d.dataA, [`${COL[metrica].label} (${rotA})`]: d.A, "Data B": d.dataB, [`${COL[metrica].label} (${rotB})`]: d.B }))), "Dia a dia");
     XLSX.writeFile(wb, `passageiros_comparativo_${a.inicio}_${b.inicio}.xlsx`);
     void logAudit({ action: "export", entity: "passageiros", details: { comparativo: true, a, b, base, dim } });
   }
@@ -496,6 +638,11 @@ function Comparativo({ ultimoFim, filtros, linhaMap, onLinhas }: {
                   <SelectContent>{COLS.map((c) => <SelectItem key={c.key} value={c.key}>{c.label}</SelectItem>)}</SelectContent>
                 </Select>
               </Campo>
+              <Campo rotulo="Ordenar"><SelectOrdem value={ordem} onChange={setOrdem} /></Campo>
+              <label className="flex items-center gap-1.5 text-xs cursor-pointer h-9">
+                <Checkbox checked={showPct} onCheckedChange={(x) => setShowPct(!!x)} className="h-3.5 w-3.5" />
+                Mostrar Δ%
+              </label>
               <Button variant="outline" onClick={exportar} disabled={!porDim.length}><Download className="h-4 w-4 mr-1" /> Excel</Button>
             </div>
           </div>
@@ -516,7 +663,8 @@ function Comparativo({ ultimoFim, filtros, linhaMap, onLinhas }: {
                   <CardContent className="p-4">
                     <div className="text-xs text-muted-foreground">{COL[k].label}{base === "media" && COL[k].soma ? " / dia" : ""}</div>
                     <div className="mt-1 text-xl font-bold tabular-nums">{COL[k].fmt(vb)}</div>
-                    <div className="text-xs text-muted-foreground tabular-nums">A: {COL[k].fmt(va)} · <Delta v={variacao(va, vb)} /></div>
+                    <div className="text-[11px] text-muted-foreground">{rotB}</div>
+                    <div className="text-xs text-muted-foreground tabular-nums">{rotA}: {COL[k].fmt(va)} · <Delta v={variacao(va, vb)} /></div>
                   </CardContent>
                 </Card>
               );
@@ -544,32 +692,38 @@ function Comparativo({ ultimoFim, filtros, linhaMap, onLinhas }: {
           </Card>
 
           <Card className="shadow-[var(--shadow-card)]">
-            <CardHeader className="pb-2"><CardTitle className="text-sm">Por {nomeDim} — {base === "media" ? "média por dia" : "totais"}</CardTitle></CardHeader>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm">Por {nomeDim} — {base === "media" ? "média por dia" : "totais"}</CardTitle>
+              <p className="text-xs text-muted-foreground">
+                <span className="font-semibold" style={{ color: CORES[1] }}>{rotA}</span>
+                {" · "}
+                <span className="font-semibold" style={{ color: CORES[0] }}>{rotB}</span>
+              </p>
+            </CardHeader>
             <CardContent className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead rowSpan={2}>{nomeDim}</TableHead>
-                    {COLS.map((c) => <TableHead key={c.key} colSpan={3} className="text-center whitespace-nowrap border-l">{c.curto}</TableHead>)}
+                    {cols.map((c) => <TableHead key={c.key} colSpan={showPct ? 3 : 2} className="text-center whitespace-nowrap border-l">{c.curto}</TableHead>)}
                   </TableRow>
                   <TableRow>
-                    {COLS.map((c) => (
-                      <SubCab key={c.key} />
+                    {cols.map((c) => (
+                      <SubCab key={c.key} rotA={rotA} rotB={rotB} showPct={showPct} />
                     ))}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {[...porDim, { nome: "Total", tA: dados.tA, tB: dados.tB }].map((d) => (
-                    <TableRow key={d.nome} className={d.nome === "Total" ? "font-semibold bg-muted/50" : undefined}>
-                      <TableCell className="whitespace-nowrap font-medium">{d.nome}</TableCell>
-                      {COLS.map((c) => {
-                        const va = v(d.tA, c.key, dados.diasA), vb = v(d.tB, c.key, dados.diasB);
-                        return (
-                          <CelulasComparacao key={c.key} a={c.fmt(va)} b={c.fmt(vb)} delta={variacao(va, vb)} />
-                        );
-                      })}
-                    </TableRow>
+                  {blocos.map((bl) => (
+                    <Fragment key={bl.unidade || "_"}>
+                      {bl.unidade && <CabUnidade unidade={bl.unidade} span={1 + cols.length * (showPct ? 3 : 2)} />}
+                      {[...bl.itens, ...(bl.unidade ? [subtotais(bl.unidade)] : [])].map((d) => (
+                        <LinhaComparacao key={d.nome} d={d} cols={cols} v={v} diasA={dados.diasA} diasB={dados.diasB} showPct={showPct}
+                          className={bl.unidade && d.nome === `Total ${bl.unidade}` ? "font-semibold bg-muted/30" : undefined} />
+                      ))}
+                    </Fragment>
                   ))}
+                  <LinhaComparacao d={{ nome: "Total", tA: dados.tA, tB: dados.tB }} cols={cols} v={v} diasA={dados.diasA} diasB={dados.diasB} showPct={showPct} className="font-semibold bg-muted/50" />
                 </TableBody>
               </Table>
             </CardContent>
@@ -591,32 +745,53 @@ function addMeses(data: string, n: number): string {
 // Pedaços de UI
 // ---------------------------------------------------------------------------
 
-function SubCab() {
+function SubCab({ rotA, rotB, showPct }: { rotA: string; rotB: string; showPct: boolean }) {
   return (
     <>
-      <TableHead className="text-right border-l text-xs">A</TableHead>
-      <TableHead className="text-right text-xs">B</TableHead>
-      <TableHead className="text-right text-xs">Δ%</TableHead>
+      <TableHead className="text-right border-l text-xs whitespace-nowrap" style={{ color: CORES[1] }}>{rotA}</TableHead>
+      <TableHead className="text-right text-xs whitespace-nowrap" style={{ color: CORES[0] }}>{rotB}</TableHead>
+      {showPct && <TableHead className="text-right text-xs">Δ%</TableHead>}
     </>
   );
 }
 
-function CelulasComparacao({ a, b, delta }: { a: string; b: string; delta: number | null }) {
+type ItemComparacao = { nome: string; tA: Totais; tB: Totais };
+
+function LinhaComparacao({ d, cols, v, diasA, diasB, showPct, className }: {
+  d: ItemComparacao; cols: Col[]; v: (t: Totais, k: ColKey, dias: number) => number | null;
+  diasA: number; diasB: number; showPct: boolean; className?: string;
+}) {
   return (
-    <>
-      <TableCell className="text-right tabular-nums border-l text-muted-foreground">{a}</TableCell>
-      <TableCell className="text-right tabular-nums">{b}</TableCell>
-      <TableCell className="text-right"><Delta v={delta} /></TableCell>
-    </>
+    <TableRow className={className}>
+      <TableCell className="whitespace-nowrap font-medium">{d.nome}</TableCell>
+      {cols.map((c) => {
+        const va = v(d.tA, c.key, diasA), vb = v(d.tB, c.key, diasB);
+        return (
+          <Fragment key={c.key}>
+            <TableCell className="text-right tabular-nums border-l text-muted-foreground">{c.fmt(va)}</TableCell>
+            <TableCell className="text-right tabular-nums">{c.fmt(vb)}</TableCell>
+            {showPct && <TableCell className="text-right"><Delta v={variacao(va, vb)} /></TableCell>}
+          </Fragment>
+        );
+      })}
+    </TableRow>
   );
 }
 
-function TotalRow({ t, colsExtras, dias }: { t: Totais; colsExtras: number; dias?: boolean }) {
+function CabUnidade({ unidade, span }: { unidade: string; span: number }) {
+  return (
+    <TableRow className="bg-primary/5 hover:bg-primary/5">
+      <TableCell colSpan={span} className="py-1.5 text-xs font-semibold uppercase tracking-wider text-primary">{unidade}</TableCell>
+    </TableRow>
+  );
+}
+
+function TotalRow({ t, cols, colsExtras, dias }: { t: Totais; cols: Col[]; colsExtras: number; dias?: boolean }) {
   return (
     <TableRow className="font-semibold bg-muted/50">
       <TableCell>Total</TableCell>
       {dias && <TableCell className="text-right tabular-nums">{t.dias}</TableCell>}
-      {COLS.map((c) => <TableCell key={c.key} className="text-right tabular-nums">{c.fmt(valor(t, c.key))}</TableCell>)}
+      {cols.map((c) => <TableCell key={c.key} className="text-right tabular-nums">{c.fmt(valor(t, c.key))}</TableCell>)}
       {Array.from({ length: colsExtras }, (_, i) => <TableCell key={i} />)}
     </TableRow>
   );
