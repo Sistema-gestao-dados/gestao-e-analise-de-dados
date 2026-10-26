@@ -472,6 +472,9 @@ export function ComparativoView() {
   );
   const visibleMetrics = useMemo(() => new Set(visibleMetricsArr), [visibleMetricsArr]);
   const [showPct, setShowPct] = usePersistentState("comparativo.showPct", true);
+  // "Total DIR"/"Total TU" no Excel/PDF por Unidade (depois de Serviços) —
+  // opcional, desligado por padrão.
+  const [totaisDirTu, setTotaisDirTu] = usePersistentState("comparativo.totaisDirTu", false);
   // Quando ligado, Dif/% iguais a zero (Atual = Proposta) ficam em branco em
   // vez de "0"/"0,0%" — reduz a poluição visual nas linhas sem diferença.
   const [ocultarZeros, setOcultarZeros] = usePersistentState("comparativo.ocultarZeros", false);
@@ -1037,14 +1040,14 @@ export function ComparativoView() {
       // Depois de Serviços: Total DIR (1º T. + 2º T. + Aproveit.) e, se a
       // coluna TU não estiver entre os campos visíveis, Total TU — pra
       // fechar DIR + TU = Serviços no relatório.
-      if (m.key === "totalServico") {
+      if (m.key === "totalServico" && totaisDirTu) {
         list.push({ key: "dirTotal", label: "Total DIR", fmt: fmtInt, round: (n) => roundTo(n, 0) });
         if (!temTU) list.push({ key: "tu", label: "Total TU", fmt: fmtInt, round: (n) => roundTo(n, 0) });
       }
     }
     if (mostrarCustoTabela) list.push(UNIDADE_CUSTO_METRIC);
     return list;
-  }, [shownMetrics, mostrarCustoTabela]);
+  }, [shownMetrics, mostrarCustoTabela, totaisDirTu]);
 
   // Injeta o Custo M.O. (não faz parte de AggRow) na linha de uma unidade de
   // serviço, reaproveitando custoPorLinha (já calculado pra tabela principal).
@@ -1497,6 +1500,10 @@ export function ComparativoView() {
             <label className="flex items-center gap-1.5 text-xs cursor-pointer">
               <Checkbox checked={showPct} onCheckedChange={(v) => setShowPct(!!v)} className="h-3.5 w-3.5" />
               Mostrar %
+            </label>
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer" title="Inclui Total DIR (1º T. + 2º T. + Aproveit.) e Total TU depois de Serviços no Excel/PDF">
+              <Checkbox checked={totaisDirTu} onCheckedChange={(v) => setTotaisDirTu(!!v)} className="h-3.5 w-3.5" />
+              Total DIR/TU no relatório
             </label>
             <label className="flex items-center gap-1.5 text-xs cursor-pointer">
               <Checkbox checked={ocultarZeros} onCheckedChange={(v) => setOcultarZeros(!!v)} className="h-3.5 w-3.5" />
