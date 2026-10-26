@@ -389,6 +389,9 @@ export const fmtReais = (v: number | null | undefined) =>
 
 /** Variação % de `b` (atual) sobre `a` (anterior). null se `a` = 0. */
 export function variacao(a: number | null, b: number | null): number | null {
-  if (a == null || b == null || a === 0) return null;
+  if (a == null || b == null) return null;
+  // Mesma regra do Relatório Comparativo (e do Excel/PDF): 0 -> 0 = 0%;
+  // 0 -> x = indefinido.
+  if (a === 0) return b === 0 ? 0 : null;
   return ((b - a) / Math.abs(a)) * 100;
 }
