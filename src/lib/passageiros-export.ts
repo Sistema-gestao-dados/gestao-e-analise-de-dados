@@ -78,7 +78,16 @@ export function planilhaRelatorio(rel: Relatorio): XLSX.WorkSheet {
 
   const ws = XLSX.utils.aoa_to_sheet(linhas);
   ws["!merges"] = merges;
-  ws["!cols"] = Array.from({ length: nCols }, (_, i) => ({ wch: i === 0 ? 22 : 13 }));
+  // Largura pelo conteúdo (cabeçalho e valores formatados) — com largura
+  // fixa, rótulos de período como "16/02/26 Seg" ou "01 a 31/03/26 Dom"
+  // eram cortados/quebrados no meio.
+  const larg: number[] = Array.from({ length: nCols }, (_, i) => (i === 0 ? 12 : 8));
+  for (const s of rel.secoes) {
+    for (const row of [s.cabecalho, ...s.corpoTxt, s.totalTxt]) {
+      row.forEach((v, c) => { larg[c] = Math.max(larg[c], String(v ?? "").length + 2); });
+    }
+  }
+  ws["!cols"] = larg.map((w) => ({ wch: Math.min(w, 30) }));
 
   linhas.forEach((row, r) => {
     const t = tipos[r];
