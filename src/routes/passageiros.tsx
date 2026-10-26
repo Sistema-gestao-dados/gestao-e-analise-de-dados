@@ -1,7 +1,6 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import * as XLSX from "xlsx";
 import { fetchLinhas, type Linha } from "@/lib/data";
 import {
   fetchPassageiros, fetchMesesImportados, somar, indicadores, periodoDe, diaSemana, addDias, difDias,
@@ -9,6 +8,8 @@ import {
 } from "@/lib/passageiros";
 import { useAuditView } from "@/lib/use-audit-view";
 import { logAudit } from "@/lib/audit";
+import { planilhaRelatorio, pdfRelatorio, salvarExcel, type Relatorio, type Secao, type Celula } from "@/lib/passageiros-export";
+import { PdfPreviewDialog, type PdfOrientation } from "@/components/pdf-preview-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,7 +21,7 @@ import { MultiSelect } from "@/components/multi-select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend, CartesianGrid } from "recharts";
-import { Users, Ticket, DollarSign, Bus, Route as RouteIcon, Gauge, Percent, Loader2, Download, FileUp, type LucideIcon } from "lucide-react";
+import { Users, Ticket, DollarSign, Bus, Route as RouteIcon, Gauge, Percent, Loader2, FileSpreadsheet, FileUp, type LucideIcon } from "lucide-react";
 
 export const Route = createFileRoute("/passageiros")({
   head: () => ({ meta: [{ title: "Passageiros e Receita — Gestão e Análise de Dados" }] }),
@@ -153,6 +154,122 @@ function blocosPorUnidade<T extends { nome: string }>(itens: T[], unidades: Map<
     out.at(-1)!.itens.push(it);
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Exportação (Excel/PDF) — layout por Unidade, ver src/lib/passageiros-export.ts
+// ---------------------------------------------------------------------------
+
+const XLSX_FMT: Record<ColKey, string> = {
+  transportados: "#,##0", pagantes: "#,##0", gratuidades: "#,##0", viagens: "#,##0",
+  receita: '"R$" #,##0.00', tarifaMedia: '"R$" #,##0.00', km: "#,##0.0",
+  paxPorViagem: "#,##0.0", ipk: "#,##0.00", pctGratuidade: "0.0%",
+};
+const CASAS: Record<ColKey, number> = {
+  transportados: 0, pagantes: 0, gratuidades: 0, viagens: 0, receita: 2, tarifaMedia: 2, km: 1,
+  paxPorViagem: 1, ipk: 2, pctGratuidade: 1,
+};
+const arred = (v: number, casas: number) => Math.round(v * 10 ** casas) / 10 ** casas;
+/** Valor pro Excel: arredondado; % Gratuidade como fração (formato nativo de %). */
+const xlsxVal = (v: number | null, k: ColKey): number | null =>
+  v == null ? null : k === "pctGratuidade" ? arred(v / 100, 3) : arred(v, CASAS[k]);
+/** Mesma regra do Relatório Comparativo: 0→0 = 0%, 0→x = indefinido. */
+const difPct = (a: number, b: number): number | null => (a === 0 ? (b === 0 ? 0 : null) : ((b - a) / a) * 100);
+const fmtPctTxt = (n: number | null) => (n == null ? "—" : `${n > 0 ? "+" : ""}${fmtNum(n, 1)}%`);
+const fmtDifTxt = (n: number, fmt: (v: number) => string) => (n === 0 ? fmt(0) : `${n > 0 ? "+" : ""}${fmt(n)}`);
+
+function descreverFiltros(f: Filtros): string {
+  const partes = [
+    f.empresas.length ? `Empresa: ${f.empresas.join(", ")}` : null,
+    f.grupos.length ? `Grupo: ${f.grupos.join(", ")}` : null,
+    f.unidades.length ? `Unidade: ${f.unidades.join(", ")}` : null,
+    f.linhas.length ? `Linha: ${f.linhas.join(", ")}` : null,
+    f.diasSemana.length ? `Dias: ${f.diasSemana.join(", ")}` : null,
+  ].filter(Boolean);
+  return partes.length ? ` · ${partes.join(" · ")}` : "";
+}
+
+const ordenarUnidades = (a: string, b: string) =>
+  a === SEM_UNIDADE ? 1 : b === SEM_UNIDADE ? -1 : a.localeCompare(b, "pt-BR");
+
+/** Seção simples (uma coluna por métrica) — Visão geral. */
+function secaoSimples(
+  nome: string, primeira: string, cols: Col[], itens: { nome: string; t: Totais }[], total: Totais,
+  opts: { totalNome?: string; comDias?: boolean; grupoLargura?: string } = {},
+): Secao {
+  const dias = opts.comDias ? ["Dias"] : [];
+  const linhaX = (n: string, t: Totais): Celula[] => [n, ...(opts.comDias ? [t.dias] : []), ...cols.map((c) => xlsxVal(valor(t, c.key), c.key))];
+  const linhaT = (n: string, t: Totais): string[] => [n, ...(opts.comDias ? [String(t.dias)] : []), ...cols.map((c) => c.fmt(valor(t, c.key)))];
+  const tn = opts.totalNome ?? "TOTAL";
+  return {
+    nome,
+    cabecalho: [primeira, ...dias, ...cols.map((c) => c.label)],
+    corpo: itens.map((i) => linhaX(i.nome, i.t)),
+    total: linhaX(tn, total),
+    corpoTxt: itens.map((i) => linhaT(i.nome, i.t)),
+    totalTxt: linhaT(tn, total),
+    formatos: [undefined, ...(opts.comDias ? ["0"] : []), ...cols.map((c) => XLSX_FMT[c.key])],
+    grupoLargura: opts.grupoLargura ?? "principal",
+  };
+}
+
+type ValoresAB = { nome: string; a: Record<string, number | null>; b: Record<string, number | null> };
+
+/** Seção comparativa (A, B, Dif, % por métrica) — igual ao Relatório Comparativo. */
+function secaoComparativa(nome: string, primeira: string, cols: Col[], pA: string, pB: string, itens: ValoresAB[], total: ValoresAB): Secao {
+  const linhaX = (it: ValoresAB): Celula[] => [it.nome, ...cols.flatMap((c) => {
+    const a = it.a[c.key] ?? 0, b = it.b[c.key] ?? 0;
+    const pct = difPct(a, b);
+    return [xlsxVal(a, c.key), xlsxVal(b, c.key), xlsxVal(b - a, c.key), pct == null ? null : arred(pct / 100, 4)];
+  })];
+  const linhaT = (it: ValoresAB): string[] => [it.nome, ...cols.flatMap((c) => {
+    const a = it.a[c.key] ?? 0, b = it.b[c.key] ?? 0;
+    return [c.fmt(a), c.fmt(b), fmtDifTxt(arred(b - a, CASAS[c.key] + 2), (v) => c.fmt(v)), fmtPctTxt(difPct(a, b))];
+  })];
+  return {
+    nome,
+    subCabecalho: [{ rotulo: "", span: 1 }, ...cols.map((c) => ({ rotulo: c.label, span: 4 }))],
+    cabecalho: [primeira, ...cols.flatMap(() => [pA, pB, "Dif", "%"])],
+    corpo: itens.map(linhaX),
+    total: linhaX(total),
+    corpoTxt: itens.map(linhaT),
+    totalTxt: linhaT(total),
+    formatos: [undefined, ...cols.flatMap((c) => [XLSX_FMT[c.key], XLSX_FMT[c.key], XLSX_FMT[c.key], "+0.0%;-0.0%;0.0%"])],
+    grupoLargura: "principal",
+  };
+}
+
+function BotoesExportar({ relatorio, arquivo, abasExtras, disabled, paisagem, onExport }: {
+  relatorio: () => Relatorio; arquivo: string; disabled: boolean; paisagem: boolean;
+  abasExtras?: () => { nome: string; rel: Relatorio }[];
+  onExport: (formato: string, o?: PdfOrientation) => void;
+}) {
+  return (
+    <div className="flex gap-2">
+      <Button variant="outline" disabled={disabled} onClick={() => {
+        const rel = relatorio();
+        salvarExcel([
+          { nome: "Por Unidade", ws: planilhaRelatorio(rel) },
+          ...(abasExtras?.() ?? []).map((x) => ({ nome: x.nome, ws: planilhaRelatorio(x.rel) })),
+        ], `${arquivo}.xlsx`);
+        onExport("xlsx");
+      }}>
+        <FileSpreadsheet className="h-4 w-4 mr-1" /> Excel
+      </Button>
+      <PdfPreviewDialog
+        build={(o) => {
+          const rel = relatorio();
+          const extras = abasExtras?.() ?? [];
+          return pdfRelatorio({ ...rel, secoes: [...rel.secoes, ...extras.flatMap((x) => x.rel.secoes)] }, o);
+        }}
+        filename={`${arquivo}.pdf`}
+        disabled={disabled}
+        defaultOrientation={paisagem ? "landscape" : "portrait"}
+        onDownload={(o) => onExport("pdf", o)}
+        onPrint={(o) => onExport("print", o)}
+      />
+    </div>
+  );
 }
 
 function SelectOrdem({ value, onChange }: { value: Ordem; onChange: (v: Ordem) => void }) {
@@ -330,25 +447,55 @@ function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, onLinhas, cols
 
   const grafico = porPeriodo.map((p) => ({ rotulo: p.rotulo, valor: valor(p.t, metrica) }));
 
-  function exportar() {
-    const wb = XLSX.utils.book_new();
-    const colunas = (t: Totais) => Object.fromEntries(cols.map((c) => [c.label, valor(t, c.key)]));
-    const sheetPeriodo = porPeriodo.map((p) => ({ Período: p.rotulo, Dias: p.t.dias, ...colunas(p.t) }));
-    const sheetDim = porDim.map((d) => ({
-      [DIMENSOES.find((x) => x.key === dim)!.label]: d.nome,
-      ...(ordem === "unidade" ? { Unidade: unidades.get(d.nome) ?? SEM_UNIDADE } : {}),
-      ...colunas(d.t),
-    }));
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheetPeriodo), `Por ${gran}`);
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheetDim), `Por ${dim}`);
-    XLSX.writeFile(wb, `passageiros_${inicio}_${fim}.xlsx`);
-    void logAudit({ action: "export", entity: "passageiros", details: { inicio, fim, gran, dim } });
+  const nomeDim = DIMENSOES.find((x) => x.key === dim)!.label;
+  const rotuloGran = gran === "dia" ? "Dia" : gran === "semana" ? "Semana" : "Mês";
+
+  // Excel/PDF: sempre "por Unidade" (igual ao Resumo por Linha), não
+  // importa a ordem escolhida na tela.
+  function relatorio(): Relatorio {
+    const itens = ordenarItens(porDim, "unidade", () => 0, unidades, dim, linhaMap);
+    const blocosU = blocosPorUnidade(itens, unidades);
+    const resumoUn = Array.from(totalPorUnidade, ([nome, t]) => ({ nome, t })).sort((x, y) => ordenarUnidades(x.nome, y.nome));
+    return {
+      titulo: `PASSAGEIROS E RECEITA — POR ${nomeDim.toUpperCase()}`,
+      subtitulo: `Período: ${fmtPeriodoCurto(inicio, fim)} (${total.dias} dia(s))${descreverFiltros(filtros)} — ${porDim.length} ${nomeDim.toLowerCase()}(s) em ${blocosU.length} unidade(s) — Gerado em ${new Date().toLocaleString("pt-BR")}`,
+      secoes: [
+        ...blocosU.map((bl) => secaoSimples(`UNIDADE ${bl.unidade.toUpperCase()}`, nomeDim, cols, bl.itens, totalPorUnidade.get(bl.unidade)!)),
+        secaoSimples("RESUMO POR UNIDADE", "Unidade", cols, resumoUn, total, { totalNome: "TOTAL GERAL" }),
+      ],
+    };
+  }
+
+  /** Resumos por Empresa/Grupo e a tabela por dia/semana/mês — abas
+   *  separadas no Excel, seções no fim do PDF. */
+  function abasExtras(): { nome: string; rel: Relatorio }[] {
+    const resumo = (d: Dimensao) => {
+      const g = agrupar(rows, (r) => dimValor(r, d, linhaMap));
+      return Array.from(g, ([nome, rs]) => ({ nome, t: somar(rs) })).sort((x, y) => ordenarCodigo(x.nome, y.nome));
+    };
+    const base = { subtitulo: `Período: ${fmtPeriodoCurto(inicio, fim)}${descreverFiltros(filtros)} — Gerado em ${new Date().toLocaleString("pt-BR")}` };
+    const extras = (["empresa", "grupo"] as Dimensao[]).filter((d) => d !== dim).map((d) => {
+      const rot = DIMENSOES.find((x) => x.key === d)!.label;
+      return {
+        nome: `Resumo ${rot}`,
+        rel: { ...base, titulo: `RESUMO POR ${rot.toUpperCase()}`, secoes: [secaoSimples(`RESUMO POR ${rot.toUpperCase()}`, rot, cols, resumo(d), total, { totalNome: "TOTAL GERAL" })] },
+      };
+    });
+    extras.push({
+      nome: `Por ${rotuloGran}`,
+      rel: {
+        ...base,
+        titulo: `PASSAGEIROS E RECEITA — POR ${rotuloGran.toUpperCase()}`,
+        secoes: [secaoSimples(`POR ${rotuloGran.toUpperCase()}`, "Período", cols, porPeriodo.map((p) => ({ nome: p.rotulo, t: p.t })), total, { comDias: true, grupoLargura: "periodo" })],
+      },
+    });
+    return extras;
   }
 
   return (
     <div className="space-y-4 pt-2">
       <Card className="shadow-[var(--shadow-card)]">
-        <CardContent className="p-4 grid grid-cols-2 gap-3 md:grid-cols-7 items-end">
+        <CardContent className="p-4 grid grid-cols-2 gap-3 md:grid-cols-6 items-end">
           <Campo rotulo="De"><Input type="date" value={inicio} onChange={(e) => setInicio(e.target.value)} /></Campo>
           <Campo rotulo="Até"><Input type="date" value={fim} onChange={(e) => setFim(e.target.value)} /></Campo>
           <Campo rotulo="Agrupar tempo por">
@@ -370,8 +517,14 @@ function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, onLinhas, cols
             </Select>
           </Campo>
           <Campo rotulo="Ordenar"><SelectOrdem value={ordem} onChange={setOrdem} /></Campo>
-          <Button variant="outline" onClick={exportar} disabled={!rows.length}><Download className="h-4 w-4 mr-1" /> Excel</Button>
         </CardContent>
+        <div className="px-4 pb-4 -mt-1 flex justify-end">
+          <BotoesExportar
+            relatorio={relatorio} abasExtras={abasExtras} disabled={!rows.length} paisagem={cols.length > 7}
+            arquivo={`passageiros_${dim}_${inicio}_${fim}`}
+            onExport={(formato, o) => void logAudit({ action: "export", entity: "passageiros", details: { formato, orientacao: o, inicio, fim, gran, dim } })}
+          />
+        </div>
       </Card>
 
       {q.isLoading ? <Carregando /> : q.error ? <Erro e={q.error} /> : !rows.length ? (
@@ -583,23 +736,53 @@ function Comparativo({ ultimoFim, filtros, linhaMap, onLinhas, cols }: {
   const rotB = `B = ${fmtPeriodoCurto(b.inicio, b.fim)}`;
   const nomeDim = DIMENSOES.find((d) => d.key === dim)!.label;
 
-  function exportar() {
-    const linhas = porDim.map((d) => {
-      const o: Record<string, string | number | null> = { [nomeDim]: d.nome };
-      if (ordem === "unidade") o.Unidade = unidades.get(d.nome) ?? SEM_UNIDADE;
-      for (const c of cols) {
-        const va = v(d.tA, c.key, dados.diasA), vb = v(d.tB, c.key, dados.diasB);
-        o[`${c.label} (${rotA})`] = va;
-        o[`${c.label} (${rotB})`] = vb;
-        if (showPct) o[`${c.label} Δ%`] = variacao(va, vb);
-      }
-      return o;
-    });
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), "Comparativo");
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(diaADia.map((d) => ({ Dia: d.rotulo, "Data A": d.dataA, [`${COL[metrica].label} (${rotA})`]: d.A, "Data B": d.dataB, [`${COL[metrica].label} (${rotB})`]: d.B }))), "Dia a dia");
-    XLSX.writeFile(wb, `passageiros_comparativo_${a.inicio}_${b.inicio}.xlsx`);
-    void logAudit({ action: "export", entity: "passageiros", details: { comparativo: true, a, b, base, dim } });
+  const perA = fmtPeriodoCurto(a.inicio, a.fim);
+  const perB = fmtPeriodoCurto(b.inicio, b.fim);
+  const valoresAB = (it: ItemComparacao, nome = it.nome): ValoresAB => ({
+    nome,
+    a: Object.fromEntries(cols.map((c) => [c.key, v(it.tA, c.key, dados.diasA)])),
+    b: Object.fromEntries(cols.map((c) => [c.key, v(it.tB, c.key, dados.diasB)])),
+  });
+
+  // Excel/PDF: sempre "por Unidade" — igual ao Relatório Comparativo.
+  function relatorio(): Relatorio {
+    const itens = ordenarItens(porDim, "unidade", () => 0, unidades, dim, linhaMap);
+    const blocosU = blocosPorUnidade(itens, unidades);
+    const nomesUn = Array.from(new Set(blocosU.map((bl) => bl.unidade))).sort(ordenarUnidades);
+    const totalGeral = valoresAB({ nome: "", tA: dados.tA, tB: dados.tB }, "TOTAL GERAL");
+    return {
+      titulo: `COMPARATIVO DE PASSAGEIROS E RECEITA — A = ${perA} vs B = ${perB}`,
+      subtitulo: `${base === "media" ? "Média por dia" : "Totais"} · Dias com dado: A ${dados.diasA}, B ${dados.diasB}${descreverFiltros(filtros)} — ${porDim.length} ${nomeDim.toLowerCase()}(s) em ${blocosU.length} unidade(s) — Gerado em ${new Date().toLocaleString("pt-BR")}`,
+      secoes: [
+        ...blocosU.map((bl) => secaoComparativa(
+          `UNIDADE ${bl.unidade.toUpperCase()}`, nomeDim, cols, perA, perB,
+          bl.itens.map((it) => valoresAB(it)), valoresAB(subtotais(bl.unidade), "TOTAL"),
+        )),
+        secaoComparativa("RESUMO POR UNIDADE", "Unidade", cols, perA, perB, nomesUn.map((u) => valoresAB(subtotais(u), u)), totalGeral),
+      ],
+    };
+  }
+
+  function abasExtras(): { nome: string; rel: Relatorio }[] {
+    const c = COL[metrica];
+    const corpo = diaADia.map((d) => ({ d, x: [d.rotulo, d.dataA, xlsxVal(d.A, c.key), d.dataB, xlsxVal(d.B, c.key)] as Celula[] }));
+    return [{
+      nome: "Dia a dia",
+      rel: {
+        titulo: `${c.label.toUpperCase()} DIA A DIA — A = ${perA} vs B = ${perB}`,
+        subtitulo: `1º dia de A com 1º dia de B${descreverFiltros(filtros)} — Gerado em ${new Date().toLocaleString("pt-BR")}`,
+        secoes: [{
+          nome: `${c.label.toUpperCase()} DIA A DIA`,
+          cabecalho: ["Dia", "Data A", `A = ${perA}`, "Data B", `B = ${perB}`],
+          corpo: corpo.map((r) => r.x),
+          total: ["TOTAL", "", xlsxVal(valor(dados.tA, c.key), c.key), "", xlsxVal(valor(dados.tB, c.key), c.key)],
+          corpoTxt: corpo.map(({ d }) => [d.rotulo, d.dataA, c.fmt(d.A), d.dataB, c.fmt(d.B)]),
+          totalTxt: ["TOTAL", "", c.fmt(valor(dados.tA, c.key)), "", c.fmt(valor(dados.tB, c.key))],
+          formatos: [undefined, undefined, XLSX_FMT[c.key], undefined, XLSX_FMT[c.key]],
+          grupoLargura: "dia",
+        }],
+      },
+    }];
   }
 
   return (
@@ -643,7 +826,11 @@ function Comparativo({ ultimoFim, filtros, linhaMap, onLinhas, cols }: {
                 <Checkbox checked={showPct} onCheckedChange={(x) => setShowPct(!!x)} className="h-3.5 w-3.5" />
                 Mostrar Δ%
               </label>
-              <Button variant="outline" onClick={exportar} disabled={!porDim.length}><Download className="h-4 w-4 mr-1" /> Excel</Button>
+              <BotoesExportar
+                relatorio={relatorio} abasExtras={abasExtras} disabled={!porDim.length} paisagem
+                arquivo={`passageiros_comparativo_${a.inicio}_x_${b.inicio}`}
+                onExport={(formato, o) => void logAudit({ action: "export", entity: "passageiros", details: { comparativo: true, formato, orientacao: o, a, b, base, dim } })}
+              />
             </div>
           </div>
           {dados.diasA !== dados.diasB && base === "total" && (
