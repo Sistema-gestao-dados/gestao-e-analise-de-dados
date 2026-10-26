@@ -260,16 +260,23 @@ Parser e contas em `src/lib/passageiros.ts`.
 - Tabela `passageiros_diario`, chave única `(linha, data)`. Reimportar
   sobrescreve; "-" na planilha = linha não rodou no dia (sem registro, e o
   registro antigo daquele dia é apagado).
-- Empresa/Grupo/Unidade **não** são gravados: vêm do cadastro de `linhas`
-  (`empresa`, `ordem`, `unidade`) na hora de exibir. Não há exceção por
-  estação (a planilha não tem estação). Linha fora do cadastro aparece como
-  "(sem cadastro)".
-- RLS restritiva por Grupo/Empresa igual a `parametro_km`
-  (`acesso_linhas_usuario()`).
+- Empresa/Grupo/Unidade vêm do cadastro de `linhas` (`empresa`, `ordem`,
+  `unidade`) na hora de exibir — **exceto linha compartilhada** (tem exceção
+  em `linha_empresa_estacao`, ex.: 07/07A Icaraí × Expresso Tanguá): a
+  planilha não tem estação, então na importação o usuário escolhe a quem a
+  linha pertence (padrão = 1ª exceção, escolha lembrada no navegador) e isso
+  é gravado em `passageiros_diario.empresa/grupo/unidade` (NULL = cadastro).
+  Linha fora do cadastro aparece como "(sem cadastro)".
+- RLS restritiva por Grupo/Empresa: registro com empresa/grupo gravados vale
+  por eles; sem, vale `acesso_linhas_usuario()` (igual a `parametro_km`).
+- Filtro "Tipo de dia" (Dias úteis/Sábado/Domingo/Feriado) e "Dia da semana"
+  tiram os outros dias do período inteiro — totais, média por dia e
+  comparativo contam só os dias escolhidos. Feriado vem do Calendário de
+  Informações (categoria começando com "Feriado"; com linha = só aquela
+  linha) e não conta como Dia útil.
 - Indicadores: Pax/viagem = transportados ÷ viagens; IPK = transportados ÷
   KM; tarifa média = receita ÷ pagantes; % gratuidade = gratuidades ÷
-  transportados. Semana = segunda a domingo. "Dia da semana" é pelo
-  calendário (a planilha não informa feriado).
+  transportados. Semana = segunda a domingo.
 
 ## Observações / pontos em aberto
 

@@ -485,6 +485,9 @@ export type Database = {
           receita: number | null
           gratuidades: number | null
           arquivo: string | null
+          empresa: string | null
+          grupo: string | null
+          unidade: string | null
           created_at: string
           updated_at: string
         }
@@ -499,6 +502,9 @@ export type Database = {
           receita?: number | null
           gratuidades?: number | null
           arquivo?: string | null
+          empresa?: string | null
+          grupo?: string | null
+          unidade?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -513,6 +519,9 @@ export type Database = {
           receita?: number | null
           gratuidades?: number | null
           arquivo?: string | null
+          empresa?: string | null
+          grupo?: string | null
+          unidade?: string | null
           created_at?: string
           updated_at?: string
         }

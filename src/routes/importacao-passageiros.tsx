@@ -3,7 +3,8 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
-import { fetchLinhas } from "@/lib/data";
+import { fetchLinhas, fetchEmpresaEstacao } from "@/lib/data";
+import { usePersistentState } from "@/hooks/use-persistent-state";
 import { useAcessoDados } from "@/lib/acesso";
 import {
   parsePlanilhaPax, salvarPassageiros, fetchMesesImportados, excluirPeriodo, somar,
@@ -15,6 +16,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Upload, FileUp, Loader2, ArrowRight, AlertTriangle, CheckCircle2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -26,12 +28,20 @@ export const Route = createFileRoute("/importacao-passageiros")({
 const MESES = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 const fmtData = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}`;
 
+type Dono = { empresa: string | null; grupo: string | null; unidade: string | null };
+const CADASTRO = "__cadastro";
+const chaveDono = (d: Dono) => [d.empresa, d.grupo, d.unidade].map((x) => x ?? "").join("|");
+const rotuloDono = (d: Dono) => [d.empresa, d.grupo, d.unidade].filter(Boolean).join(" · ") || "(sem empresa)";
+
 function ImportacaoPassageirosPage() {
   useAuditView("importacao_passageiros");
   const qc = useQueryClient();
   const acesso = useAcessoDados();
   const linhasQ = useQuery({ queryKey: ["linhas"], queryFn: fetchLinhas });
   const mesesQ = useQuery({ queryKey: ["passageiros-meses"], queryFn: fetchMesesImportados });
+  const eeQ = useQuery({ queryKey: ["empresa-estacao"], queryFn: fetchEmpresaEstacao });
+  // Linha compartilhada -> chave do dono escolhido (lembrado entre importações).
+  const [escolhas, setEscolhas] = usePersistentState<Record<string, string>>("passageiros.import.compartilhadas", {});
 
   const [arquivo, setArquivo] = useState<File | null>(null);
   const [lido, setLido] = useState<ResultadoPlanilha | null>(null);
@@ -40,17 +50,62 @@ function ImportacaoPassageirosPage() {
 
   const cadastro = useMemo(() => new Set((linhasQ.data ?? []).map((l) => l.linha)), [linhasQ.data]);
 
+  // Linhas compartilhadas (exceção por estação): a planilha não tem estação,
+  // então quem importa escolhe a Empresa/Grupo/Unidade daquela linha.
+  // Opções = cadastro da linha + cada exceção diferente dele.
+  const compartilhadas = useMemo(() => {
+    if (!lido) return [];
+    const linhaMap = new Map((linhasQ.data ?? []).map((l) => [l.linha, l]));
+    return lido.linhas.flatMap((linha) => {
+      const exc = (eeQ.data ?? []).filter((e) => e.linha === linha);
+      if (!exc.length) return [];
+      const l = linhaMap.get(linha);
+      const cad: Dono = { empresa: l?.empresa ?? null, grupo: l?.ordem ?? null, unidade: l?.unidade ?? null };
+      const opcoes = new Map<string, Dono>();
+      for (const e of exc) {
+        const d: Dono = { empresa: e.empresa, grupo: e.grupo ?? cad.grupo, unidade: e.unidade ?? cad.unidade };
+        if (chaveDono(d) !== chaveDono(cad)) opcoes.set(chaveDono(d), d);
+      }
+      return opcoes.size ? [{ linha, cad, opcoes }] : [];
+    });
+  }, [lido, eeQ.data, linhasQ.data]);
+  // Sem escolha salva: a 1ª exceção (o cadastro da linha é justamente o que
+  // a planilha costuma NÃO ser — ex.: 07/07A caíam em Expresso Tanguá).
+  const escolhaDe = (c: { linha: string; opcoes: Map<string, Dono> }) => {
+    const e = escolhas[c.linha];
+    return e === CADASTRO || (e && c.opcoes.has(e)) ? e : c.opcoes.keys().next().value ?? CADASTRO;
+  };
+  const donoEscolhido = useMemo(() => {
+    const m = new Map<string, Dono>();
+    for (const c of compartilhadas) {
+      const d = c.opcoes.get(escolhaDe(c));
+      if (d) m.set(c.linha, d);
+    }
+    return m;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [compartilhadas, escolhas]);
+
   // Usuário restrito só grava as linhas do próprio Grupo/Empresa (o banco
   // recusaria o lote inteiro se viesse uma linha de fora).
   const analise = useMemo(() => {
     if (!lido) return null;
     const foraCadastro = lido.linhas.filter((l) => !cadastro.has(l));
-    const foraAcesso = acesso.restrito ? lido.linhas.filter((l) => !acesso.podeLinha(l)) : [];
+    const foraAcesso = acesso.restrito
+      ? lido.linhas.filter((l) => {
+          const d = donoEscolhido.get(l);
+          return d ? !acesso.podeValores(d.grupo, d.empresa) : !acesso.podeLinha(l);
+        })
+      : [];
     const bloqueadas = new Set(foraAcesso);
-    const registros = lido.registros.filter((r) => !bloqueadas.has(r.linha));
+    const registros = lido.registros
+      .filter((r) => !bloqueadas.has(r.linha))
+      .map((r) => {
+        const d = donoEscolhido.get(r.linha);
+        return d ? { ...r, empresa: d.empresa, grupo: d.grupo, unidade: d.unidade } : r;
+      });
     const semOperacao = lido.semOperacao.filter((r) => !bloqueadas.has(r.linha));
     return { foraCadastro, foraAcesso, registros, semOperacao, totais: somar(registros) };
-  }, [lido, cadastro, acesso]);
+  }, [lido, cadastro, acesso, donoEscolhido]);
 
   async function ler(f: File) {
     setArquivo(f);
@@ -142,7 +197,7 @@ function ImportacaoPassageirosPage() {
               {lendo ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Upload className="h-4 w-4 mr-1" />}
               {arquivo ? arquivo.name : "Escolher arquivo"}
             </Button>
-            <Button onClick={gravar} disabled={!analise || !analise.registros.length || !!gravando || acesso.carregando}>
+            <Button onClick={gravar} disabled={!analise || !analise.registros.length || !!gravando || acesso.carregando || eeQ.isLoading}>
               {gravando
                 ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" /> Gravando {fmtNum(gravando.feitos)}/{fmtNum(gravando.total)}...</>
                 : "Gravar no sistema"}
@@ -168,6 +223,30 @@ function ImportacaoPassageirosPage() {
                   titulo="Linhas que não estão no Cadastro de Linhas — serão gravadas, mas aparecem sem Empresa/Grupo na análise até serem cadastradas"
                   itens={[analise.foraCadastro.join(", ")]}
                 />
+              )}
+              {compartilhadas.length > 0 && (
+                <div className="rounded-md border border-primary/30 bg-primary/5 p-3 text-sm space-y-2">
+                  <div className="font-medium">Linhas compartilhadas entre empresas — escolha a quem pertence o dado da planilha</div>
+                  <p className="text-xs text-muted-foreground">
+                    Essas linhas têm exceção por estação no cadastro (Empresa por Estação). A planilha não informa estação, então
+                    escolha aqui a Empresa/Grupo/Unidade de cada uma. A escolha fica salva para as próximas importações.
+                  </p>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {compartilhadas.map((c) => (
+                      <div key={c.linha} className="flex items-center gap-2">
+                        <span className="w-14 font-semibold text-primary">{c.linha}</span>
+                        <Select value={escolhaDe(c)}
+                          onValueChange={(v) => setEscolhas({ ...escolhas, [c.linha]: v })}>
+                          <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value={CADASTRO}>{rotuloDono(c.cad)} (cadastro da linha)</SelectItem>
+                            {Array.from(c.opcoes, ([k, d]) => <SelectItem key={k} value={k}>{rotuloDono(d)}</SelectItem>)}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
               )}
               {analise.foraAcesso.length > 0 && (
                 <Alerta titulo="Linhas fora do seu Grupo/Empresa — não serão gravadas" itens={[analise.foraAcesso.join(", ")]} />

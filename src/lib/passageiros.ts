@@ -26,6 +26,11 @@ export type PassageiroDia = {
   pagantes: number | null;
   receita: number | null;
   gratuidades: number | null;
+  /** Empresa/Grupo/Unidade escolhidos na importação pra linha compartilhada
+   *  (exceção por estação). null/ausente = vale o cadastro da linha. */
+  empresa?: string | null;
+  grupo?: string | null;
+  unidade?: string | null;
 };
 
 export const METRICAS = ["viagens", "km", "transportados", "pagantes", "receita", "gratuidades"] as const;
@@ -192,7 +197,7 @@ function lerAba(rows: unknown[][], iCab: number): ResultadoPlanilha {
 // Banco
 // ---------------------------------------------------------------------------
 
-const SELECT = "id,linha,data,viagens,km,transportados,pagantes,receita,gratuidades";
+const SELECT = "id,linha,data,viagens,km,transportados,pagantes,receita,gratuidades,empresa,grupo,unidade";
 
 /** Registros entre `inicio` e `fim` (inclusive, YYYY-MM-DD). */
 export async function fetchPassageiros(inicio: string, fim: string): Promise<PassageiroDia[]> {
@@ -208,6 +213,9 @@ export async function fetchPassageiros(inicio: string, fim: string): Promise<Pas
     pagantes: r.pagantes,
     receita: r.receita == null ? null : Number(r.receita),
     gratuidades: r.gratuidades,
+    empresa: r.empresa ?? null,
+    grupo: r.grupo ?? null,
+    unidade: r.unidade ?? null,
   }));
 }
 
@@ -314,8 +322,36 @@ export function diaSemana(data: string): number {
   return parseISO(data).getDay();
 }
 
-/** Tipo de dia pelo calendário (sem feriados — a planilha não informa). */
-export function tipoDiaCalendario(data: string): "Dias úteis" | "Sábado" | "Domingo" {
+export const TIPOS_DIA = ["Dias úteis", "Sábado", "Domingo", "Feriado"] as const;
+export type TipoDia = (typeof TIPOS_DIA)[number];
+
+/** Feriados por dia: data -> linhas afetadas (null = todas). Vem do
+ *  Calendário de Informações (eventos de categoria "Feriado ..."). */
+export type FeriadosMap = Map<string, Set<string> | null>;
+
+export function buildFeriados(eventos: { data_inicio: string; data_fim: string; categoria: string; linha: string | null }[]): FeriadosMap {
+  const m: FeriadosMap = new Map();
+  for (const ev of eventos) {
+    if (!/^feriado/i.test(ev.categoria.trim())) continue;
+    for (let d = ev.data_inicio, n = 0; d <= ev.data_fim && n < 400; d = addDias(d, 1), n++) {
+      if (!ev.linha) { m.set(d, null); continue; }
+      const atual = m.get(d);
+      if (atual === null) continue;
+      const s = atual ?? new Set<string>();
+      s.add(ev.linha);
+      m.set(d, s);
+    }
+  }
+  return m;
+}
+
+/** Tipo do dia: Feriado (Calendário, pra todas as linhas ou pra essa
+ *  linha), senão pelo dia da semana. Feriado não conta como Dia útil. */
+export function tipoDia(data: string, linha: string, feriados: FeriadosMap): TipoDia {
+  if (feriados.has(data)) {
+    const ls = feriados.get(data);
+    if (ls === null || ls?.has(linha)) return "Feriado";
+  }
   const d = diaSemana(data);
   return d === 0 ? "Domingo" : d === 6 ? "Sábado" : "Dias úteis";
 }

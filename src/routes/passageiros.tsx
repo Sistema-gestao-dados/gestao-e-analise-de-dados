@@ -2,9 +2,10 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchLinhas, type Linha } from "@/lib/data";
+import { fetchCalendarioEventos } from "@/lib/calendario";
 import {
   fetchPassageiros, fetchMesesImportados, somar, indicadores, periodoDe, diaSemana, addDias, difDias,
-  variacao, fmtNum, fmtReais, type PassageiroDia, type Granularidade, type Totais,
+  variacao, fmtNum, fmtReais, buildFeriados, tipoDia, TIPOS_DIA, type FeriadosMap, type PassageiroDia, type Granularidade, type Totais,
 } from "@/lib/passageiros";
 import { useAuditView } from "@/lib/use-audit-view";
 import { logAudit } from "@/lib/audit";
@@ -68,8 +69,10 @@ const fmtData = (d: string) => `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 
 
 function dimValor(r: PassageiroDia, d: Dimensao, linhaMap: Map<string, Linha>): string {
   if (d === "linha") return r.linha;
+  // Empresa/Grupo/Unidade escolhidos na importação (linha compartilhada)
+  // valem antes do cadastro da linha.
   const l = linhaMap.get(r.linha);
-  const v = d === "empresa" ? l?.empresa : d === "grupo" ? l?.ordem : l?.unidade;
+  const v = d === "empresa" ? r.empresa ?? l?.empresa : d === "grupo" ? r.grupo ?? l?.ordem : r.unidade ?? l?.unidade;
   return v?.trim() || SEM_CADASTRO;
 }
 
@@ -108,7 +111,8 @@ function unidadePorItem(rows: PassageiroDia[], dim: Dimensao, linhaMap: Map<stri
   const cont = new Map<string, Map<string, number>>();
   for (const r of rows) {
     const item = dimValor(r, dim, linhaMap);
-    const un = linhaMap.get(r.linha)?.unidade?.trim() || SEM_UNIDADE;
+    const u = dimValor(r, "unidade", linhaMap);
+    const un = u === SEM_CADASTRO ? SEM_UNIDADE : u;
     if (!cont.has(item)) cont.set(item, new Map());
     const m = cont.get(item)!;
     m.set(un, (m.get(un) ?? 0) + 1);
@@ -184,6 +188,7 @@ function descreverFiltros(f: Filtros): string {
     f.grupos.length ? `Grupo: ${f.grupos.join(", ")}` : null,
     f.unidades.length ? `Unidade: ${f.unidades.join(", ")}` : null,
     f.linhas.length ? `Linha: ${f.linhas.join(", ")}` : null,
+    f.tiposDia.length ? `Tipo de dia: ${f.tiposDia.join(", ")}` : null,
     f.diasSemana.length ? `Dias: ${f.diasSemana.join(", ")}` : null,
   ].filter(Boolean);
   return partes.length ? ` · ${partes.join(" · ")}` : "";
@@ -289,16 +294,20 @@ function SelectOrdem({ value, onChange }: { value: Ordem; onChange: (v: Ordem) =
 // Filtros (compartilhados pelas duas abas)
 // ---------------------------------------------------------------------------
 
-type Filtros = { empresas: string[]; grupos: string[]; unidades: string[]; linhas: string[]; diasSemana: string[] };
-const FILTROS_VAZIOS: Filtros = { empresas: [], grupos: [], unidades: [], linhas: [], diasSemana: [] };
+type Filtros = { empresas: string[]; grupos: string[]; unidades: string[]; linhas: string[]; tiposDia: string[]; diasSemana: string[] };
+const FILTROS_VAZIOS: Filtros = { empresas: [], grupos: [], unidades: [], linhas: [], tiposDia: [], diasSemana: [] };
 
-function aplicarFiltros(rows: PassageiroDia[], f: Filtros, linhaMap: Map<string, Linha>): PassageiroDia[] {
+/** Filtros da tela. Tipo de dia/Dia da semana tiram os OUTROS dias do
+ *  período inteiro — totais, médias por dia e comparativo passam a contar
+ *  só os dias escolhidos (ex.: só os sábados do mês). */
+function aplicarFiltros(rows: PassageiroDia[], f: Filtros, linhaMap: Map<string, Linha>, feriados: FeriadosMap): PassageiroDia[] {
   const tem = (arr: string[], v: string) => !arr.length || arr.includes(v);
   return rows.filter((r) =>
     tem(f.linhas, r.linha)
     && tem(f.empresas, dimValor(r, "empresa", linhaMap))
     && tem(f.grupos, dimValor(r, "grupo", linhaMap))
     && tem(f.unidades, dimValor(r, "unidade", linhaMap))
+    && tem(f.tiposDia, tipoDia(r.data, r.linha, feriados))
     && tem(f.diasSemana, DIAS_SEMANA[diaSemana(r.data)]),
   );
 }
@@ -310,6 +319,8 @@ function PassageirosPage() {
   const linhaMap = useMemo(() => new Map((linhasQ.data ?? []).map((l) => [l.linha, l])), [linhasQ.data]);
 
   const [filtros, setFiltros] = useState<Filtros>(FILTROS_VAZIOS);
+  const calendarioQ = useQuery({ queryKey: ["calendario-eventos"], queryFn: fetchCalendarioEventos });
+  const feriados = useMemo(() => buildFeriados(calendarioQ.data ?? []), [calendarioQ.data]);
   const [colsVisiveis, setColsVisiveis] = usePersistentState<string[]>("passageiros.colsVisiveis", COLS.map((c) => c.key));
   const cols = useMemo(() => COLS.filter((c) => colsVisiveis.includes(c.key)), [colsVisiveis]);
   const toggleCol = (k: ColKey) =>
@@ -320,9 +331,12 @@ function PassageirosPage() {
   // Empresa/Grupo/Unidade = do cadastro dessas linhas.
   const [linhasNosDados, setLinhasNosDados] = useState<string[]>([]);
   const opcoes = useMemo(() => {
-    const base = linhasNosDados.map((linha) => ({ linha } as PassageiroDia));
+    const base = linhasNosDados.map((k) => {
+      const [linha, empresa, grupo, unidade] = k.split(SEP).map((x) => x || null);
+      return { linha, empresa, grupo, unidade } as PassageiroDia;
+    });
     const de = (d: Dimensao) => Array.from(new Set(base.map((r) => dimValor(r, d, linhaMap)))).sort(ordenarCodigo);
-    return { linhas: [...linhasNosDados].sort(ordenarCodigo), empresas: de("empresa"), grupos: de("grupo"), unidades: de("unidade") };
+    return { linhas: Array.from(new Set(base.map((r) => r.linha))).sort(ordenarCodigo), empresas: de("empresa"), grupos: de("grupo"), unidades: de("unidade") };
   }, [linhasNosDados, linhaMap]);
 
   const ultimoMes = mesesQ.data?.[0];
@@ -344,11 +358,12 @@ function PassageirosPage() {
 
       <Card className="shadow-[var(--shadow-card)]">
         <CardHeader className="pb-3"><CardTitle className="text-base">Filtros</CardTitle></CardHeader>
-        <CardContent className="grid grid-cols-2 gap-2 md:grid-cols-5">
+        <CardContent className="grid grid-cols-2 gap-2 md:grid-cols-6">
           <MultiSelect label="Empresa" values={filtros.empresas} onChange={(v) => setFiltros((s) => ({ ...s, empresas: v }))} options={opcoes.empresas} />
           <MultiSelect label="Grupo" values={filtros.grupos} onChange={(v) => setFiltros((s) => ({ ...s, grupos: v }))} options={opcoes.grupos} placeholder="Todos" />
           <MultiSelect label="Unidade" values={filtros.unidades} onChange={(v) => setFiltros((s) => ({ ...s, unidades: v }))} options={opcoes.unidades} />
           <MultiSelect label="Linha" values={filtros.linhas} onChange={(v) => setFiltros((s) => ({ ...s, linhas: v }))} options={opcoes.linhas} />
+          <MultiSelect label="Tipo de dia" values={filtros.tiposDia} onChange={(v) => setFiltros((s) => ({ ...s, tiposDia: v }))} options={[...TIPOS_DIA]} placeholder="Todos" />
           <MultiSelect label="Dia da semana" values={filtros.diasSemana} onChange={(v) => setFiltros((s) => ({ ...s, diasSemana: v }))} options={DIAS_SEMANA} placeholder="Todos" />
         </CardContent>
       </Card>
@@ -374,11 +389,11 @@ function PassageirosPage() {
           <TabsContent value="geral">
             <VisaoGeral
               inicioPadrao={ultimoMes.inicio} fimPadrao={ultimoMes.fim}
-              filtros={filtros} linhaMap={linhaMap} onLinhas={setLinhasNosDados} cols={cols}
+              filtros={filtros} linhaMap={linhaMap} feriados={feriados} onLinhas={setLinhasNosDados} cols={cols}
             />
           </TabsContent>
           <TabsContent value="comparativo">
-            <Comparativo ultimoFim={ultimoMes.fim} filtros={filtros} linhaMap={linhaMap} onLinhas={setLinhasNosDados} cols={cols} />
+            <Comparativo ultimoFim={ultimoMes.fim} filtros={filtros} linhaMap={linhaMap} feriados={feriados} onLinhas={setLinhasNosDados} cols={cols} />
           </TabsContent>
         </Tabs>
       )}
@@ -386,11 +401,14 @@ function PassageirosPage() {
   );
 }
 
-/** Junta as linhas vistas nos dados (de qualquer aba) pras opções do filtro. */
+const SEP = "\u0001";
+
+/** Junta as linhas vistas nos dados (de qualquer aba) pras opções do filtro
+ *  — com a Empresa/Grupo/Unidade escolhida na importação, se houver. */
 function useRegistrarLinhas(rows: PassageiroDia[] | undefined, onLinhas: (fn: (prev: string[]) => string[]) => void) {
   useEffect(() => {
     if (!rows?.length) return;
-    const novas = new Set(rows.map((r) => r.linha));
+    const novas = new Set(rows.map((r) => [r.linha, r.empresa ?? "", r.grupo ?? "", r.unidade ?? ""].join(SEP)));
     onLinhas((prev) => {
       const tudo = new Set([...prev, ...novas]);
       return tudo.size === prev.length ? prev : Array.from(tudo);
@@ -404,8 +422,8 @@ function useRegistrarLinhas(rows: PassageiroDia[] | undefined, onLinhas: (fn: (p
 
 type Col = (typeof COLS)[number];
 
-function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, onLinhas, cols }: {
-  inicioPadrao: string; fimPadrao: string; filtros: Filtros; linhaMap: Map<string, Linha>;
+function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, feriados, onLinhas, cols }: {
+  inicioPadrao: string; fimPadrao: string; filtros: Filtros; linhaMap: Map<string, Linha>; feriados: FeriadosMap;
   onLinhas: (fn: (prev: string[]) => string[]) => void; cols: Col[];
 }) {
   const [inicio, setInicio] = useState(inicioPadrao);
@@ -422,7 +440,7 @@ function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, onLinhas, cols
   });
   useRegistrarLinhas(q.data, onLinhas);
 
-  const rows = useMemo(() => aplicarFiltros(q.data ?? [], filtros, linhaMap), [q.data, filtros, linhaMap]);
+  const rows = useMemo(() => aplicarFiltros(q.data ?? [], filtros, linhaMap, feriados), [q.data, filtros, linhaMap, feriados]);
   const total = useMemo(() => somar(rows), [rows]);
   const ind = indicadores(total);
 
@@ -640,8 +658,8 @@ function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, onLinhas, cols
 
 type Base = "total" | "media";
 
-function Comparativo({ ultimoFim, filtros, linhaMap, onLinhas, cols }: {
-  ultimoFim: string; filtros: Filtros; linhaMap: Map<string, Linha>;
+function Comparativo({ ultimoFim, filtros, linhaMap, feriados, onLinhas, cols }: {
+  ultimoFim: string; filtros: Filtros; linhaMap: Map<string, Linha>; feriados: FeriadosMap;
   onLinhas: (fn: (prev: string[]) => string[]) => void; cols: Col[];
 }) {
   // Padrão: última semana completa importada (B) x semana anterior (A).
@@ -683,7 +701,7 @@ function Comparativo({ ultimoFim, filtros, linhaMap, onLinhas, cols }: {
   useRegistrarLinhas(q.data, onLinhas);
 
   const dados = useMemo(() => {
-    const todos = aplicarFiltros(q.data ?? [], filtros, linhaMap);
+    const todos = aplicarFiltros(q.data ?? [], filtros, linhaMap, feriados);
     const rA = todos.filter((r) => r.data >= a.inicio && r.data <= a.fim);
     const rB = todos.filter((r) => r.data >= b.inicio && r.data <= b.fim);
     // Média por dia: divide pelos dias com dado no período (todas as linhas
@@ -692,7 +710,7 @@ function Comparativo({ ultimoFim, filtros, linhaMap, onLinhas, cols }: {
     const diasA = new Set(rA.map((r) => r.data)).size || 1;
     const diasB = new Set(rB.map((r) => r.data)).size || 1;
     return { rA, rB, diasA, diasB, tA: somar(rA), tB: somar(rB) };
-  }, [q.data, filtros, linhaMap, a, b]);
+  }, [q.data, filtros, linhaMap, feriados, a, b]);
 
   const v = (t: Totais, k: ColKey, dias: number) => {
     const x = valor(t, k);
