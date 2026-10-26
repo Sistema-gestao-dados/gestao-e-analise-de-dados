@@ -9,6 +9,7 @@
 //    ausência de cadastro em quilometragem fictícia nos relatórios.
 
 import type { ParametroKm } from "@/lib/data";
+import { supabase } from "@/integrations/supabase/client";
 
 export type KmMaps = {
   trecho: Map<string, number>;                       // linha|origem|destino -> km
@@ -117,4 +118,38 @@ export function fmtKm(n: number, decimals = 1): string {
 
 export function fmtInt(n: number): string {
   return n.toLocaleString("pt-BR", { maximumFractionDigits: 0 });
+}
+
+/** Sentido normalizado: GPS Cittati já vem "Ida"/"Volta"; EasyBus vem cru
+ *  do TXT (ex.: "IDA", "VOLTA", "I", "V"). */
+export function normSentido(s: string | null | undefined): string {
+  const t = (s ?? "").trim();
+  const u = t.toUpperCase();
+  if (u.startsWith("I")) return "Ida";
+  if (u.startsWith("V")) return "Volta";
+  return t;
+}
+
+/** Chave de trecho (linha + origem + destino), sem acento/maiúscula. */
+export const chaveTrecho = (linha: string, origem: string, destino: string) =>
+  `${linha.trim()}||${normKey(origem)}||${normKey(destino)}`;
+
+/** Sentido de cada trecho segundo as viagens importadas: o mais frequente
+ *  (um trecho pode aparecer com os dois sentidos em casos raros, ex.:
+ *  linha circular/garagem). */
+export async function fetchSentidoPorTrecho(): Promise<Map<string, string>> {
+  const { data, error } = await supabase.rpc("viagens_sentido_por_trecho");
+  if (error) throw error;
+  const cont = new Map<string, Map<string, number>>();
+  for (const r of data ?? []) {
+    const k = chaveTrecho(r.linha, r.origem, r.destino);
+    const sent = normSentido(r.sentido);
+    if (!sent) continue;
+    if (!cont.has(k)) cont.set(k, new Map());
+    const m = cont.get(k)!;
+    m.set(sent, (m.get(sent) ?? 0) + Number(r.viagens));
+  }
+  const out = new Map<string, string>();
+  for (const [k, m] of cont) out.set(k, [...m].sort((a, b) => b[1] - a[1])[0][0]);
+  return out;
 }

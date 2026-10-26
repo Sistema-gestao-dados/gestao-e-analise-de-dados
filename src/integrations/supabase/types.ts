@@ -599,6 +599,10 @@ export type Database = {
     }
     Functions: {
       bootstrap_first_admin: { Args: never; Returns: boolean }
+      viagens_sentido_por_trecho: {
+        Args: never
+        Returns: { linha: string; origem: string; destino: string; sentido: string; viagens: number }[]
+      }
       passageiros_diario_meses: {
         Args: never
         Returns: { mes: string; dias: number; linhas: number; registros: number; inicio: string; fim: string }[]

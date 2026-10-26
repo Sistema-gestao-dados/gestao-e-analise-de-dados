@@ -5,6 +5,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "@/integrations/supabase/client";
 import type { Linha, ParametroKm, ParametroMulti } from "@/lib/data";
 import type { SiglaEstacao } from "@/lib/siglas-estacao";
+import { chaveTrecho } from "@/lib/km";
 import { ACESSO_LIVRE, MSG_SEM_ACESSO, motivoBloqueioLinha, type AcessoDados } from "@/lib/acesso";
 
 const HEADERS_LINHAS = [
@@ -42,6 +43,8 @@ export function exportTemplateUnificado(data?: {
   km?: ParametroKm[];
   multi?: ParametroMulti[];
   siglas?: SiglaEstacao[];
+  /** Sentido por trecho (chaveTrecho -> "Ida"/"Volta"), das viagens importadas. */
+  sentidos?: Map<string, string>;
 }) {
   const wb = XLSX.utils.book_new();
 
@@ -68,11 +71,15 @@ export function exportTemplateUnificado(data?: {
   const kmRows = data?.km?.length
     ? data.km.map((k) => ({
         linha: k.linha, origem: k.origem, destino: k.destino,
+        sentido: data.sentidos?.get(chaveTrecho(k.linha, k.origem, k.destino)) ?? "",
         km: k.km ?? 0, descricao: k.descricao ?? "",
       }))
-    : [{ linha: "408M", origem: "Terminal A", destino: "Terminal B", km: 12.4, descricao: "Via Av. Principal" }];
-  const wsKm = XLSX.utils.json_to_sheet(kmRows, { header: [...HEADERS_KM] });
-  wsKm["!cols"] = HEADERS_KM.map(() => ({ wch: 16 }));
+    : [{ linha: "408M", origem: "Terminal A", destino: "Terminal B", sentido: "Ida", km: 12.4, descricao: "Via Av. Principal" }];
+  // "sentido" é só informativo (vem das viagens importadas) — a importação
+  // lê as colunas pelo nome e ignora essa.
+  const HEADERS_KM_EXPORT = ["linha", "origem", "destino", "sentido", "km", "descricao"];
+  const wsKm = XLSX.utils.json_to_sheet(kmRows, { header: HEADERS_KM_EXPORT });
+  wsKm["!cols"] = HEADERS_KM_EXPORT.map(() => ({ wch: 16 }));
   XLSX.utils.book_append_sheet(wb, wsKm, "KM");
 
   // --- Aba Grupos ---
@@ -119,6 +126,7 @@ export function exportTemplateUnificado(data?: {
     ["linha", "Código da linha (deve existir na aba Linhas ou já cadastrada)", "Sim"],
     ["origem", "Ponto de origem do trecho", "Sim"],
     ["destino", "Ponto de destino do trecho", "Sim"],
+    ["sentido", "Ida/Volta do trecho segundo as viagens importadas — só informativo, ignorado na importação", "Não"],
     ["km", "Quilometragem do trecho (use ponto ou vírgula decimal)", "Sim"],
     ["descricao", "Descrição / itinerário do trecho", "Não"],
     ["", "", ""],

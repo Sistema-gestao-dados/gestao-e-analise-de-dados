@@ -13,6 +13,7 @@ import { useAuditView } from "@/lib/use-audit-view";
 import { useAcessoDados, motivoBloqueioLinha } from "@/lib/acesso";
 import { fetchLinhas, fetchKm, fetchMulti } from "@/lib/data";
 import { fetchSiglasEstacao } from "@/lib/siglas-estacao";
+import { fetchSentidoPorTrecho } from "@/lib/km";
 import { exportTemplateUnificado, importTemplateUnificado, type ImportReportGeral } from "@/lib/cadastro-unificado";
 
 export const Route = createFileRoute("/importacao")({
@@ -97,18 +98,21 @@ function UnifiedImportCard() {
   const kmQ = useQuery({ queryKey: ["km"], queryFn: fetchKm });
   const multiQ = useQuery({ queryKey: ["multi"], queryFn: fetchMulti });
   const siglasQ = useQuery({ queryKey: ["siglas-estacao"], queryFn: fetchSiglasEstacao });
+  // Sentido (Ida/Volta) de cada trecho da aba KM, tirado das viagens importadas.
+  const sentidosQ = useQuery({ queryKey: ["sentido-por-trecho"], queryFn: fetchSentidoPorTrecho, retry: false });
   // Enquanto qualquer uma dessas 4 consultas ainda não carregou, `.data` fica
   // undefined e exportTemplateUnificado cai no exemplo genérico de 1 linha
   // pra aquela aba — parecia "sumir" dado real quando só não tinha chegado
   // ainda (KM em especial, com milhares de linhas, demora mais que Linhas).
-  const carregandoDadosAtuais = linhasQ.isLoading || kmQ.isLoading || multiQ.isLoading || siglasQ.isLoading;
+  const carregandoDadosAtuais = linhasQ.isLoading || kmQ.isLoading || multiQ.isLoading || siglasQ.isLoading || sentidosQ.isLoading;
 
   async function handleBaixarModelo() {
     if (carregandoDadosAtuais) {
       toast.error("Ainda carregando os dados atuais — aguarde um instante e tente de novo.");
       return;
     }
-    exportTemplateUnificado({ linhas: linhasQ.data, km: kmQ.data, multi: multiQ.data, siglas: siglasQ.data });
+    if (sentidosQ.error) toast.error("Não foi possível buscar o sentido dos trechos — a coluna \"sentido\" da aba KM vai sair vazia.", { description: (sentidosQ.error as Error).message });
+    exportTemplateUnificado({ linhas: linhasQ.data, km: kmQ.data, multi: multiQ.data, siglas: siglasQ.data, sentidos: sentidosQ.data });
   }
 
   async function handleFile(file: File) {
