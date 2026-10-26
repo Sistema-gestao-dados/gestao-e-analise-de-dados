@@ -35,7 +35,15 @@ export function MultiSelect({
     if (values.includes(o)) onChange(values.filter((x) => x !== o));
     else onChange([...values, o]);
   };
-  const selectAll = () => onChange([]);
+  // "Selecionar todas" marca de verdade todas as opções (antes chamava
+  // onChange([]) — como lista vazia = "todas", só limpava o que estava
+  // marcado). Com busca digitada, age só sobre as opções encontradas. Se
+  // todas (as visíveis) já estão marcadas, o botão desmarca.
+  const todasVisiveisMarcadas = filtered.length > 0 && filtered.every((o) => values.includes(o));
+  const selectAll = () => {
+    if (todasVisiveisMarcadas) onChange(values.filter((v) => !filtered.includes(v)));
+    else onChange([...values, ...filtered.filter((o) => !values.includes(o))]);
+  };
   const clear = () => onChange([]);
 
   return (
@@ -83,7 +91,7 @@ export function MultiSelect({
               className="text-[11px] text-primary hover:underline"
               onClick={selectAll}
             >
-              Selecionar todas
+              {todasVisiveisMarcadas ? "Desmarcar todas" : "Selecionar todas"}
             </button>
             <span className="text-[10px] text-muted-foreground">
               {values.length}/{options.length}
