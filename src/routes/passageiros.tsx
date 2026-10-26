@@ -22,7 +22,7 @@ import { MultiSelect } from "@/components/multi-select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 import { BarChart, Bar, LineChart, Line, XAxis, YAxis, ResponsiveContainer, Tooltip, Legend, CartesianGrid } from "recharts";
-import { Users, Ticket, DollarSign, Bus, Route as RouteIcon, Gauge, Percent, Loader2, FileSpreadsheet, FileUp, type LucideIcon } from "lucide-react";
+import { Users, Ticket, DollarSign, Bus, Route as RouteIcon, Gauge, Percent, Loader2, FileSpreadsheet, FileUp, Plus, Trash2, type LucideIcon } from "lucide-react";
 
 export const Route = createFileRoute("/passageiros")({
   head: () => ({ meta: [{ title: "Passageiros e Receita — Gestão e Análise de Dados" }] }),
@@ -218,28 +218,37 @@ function secaoSimples(
   };
 }
 
-type ValoresAB = { nome: string; a: Record<string, number | null>; b: Record<string, number | null> };
+type ValoresAB = { nome: string; a: Record<string, number | null>; bs: Record<string, number | null>[] };
 
-/** Seção comparativa (A, B, Dif, % por métrica) — igual ao Relatório Comparativo. */
-function secaoComparativa(nome: string, primeira: string, cols: Col[], pA: string, pB: string, itens: ValoresAB[], total: ValoresAB): Secao {
+/** Seção comparativa — igual ao Relatório Comparativo: por métrica, A e,
+ *  pra cada B, o valor, Dif e %. Com vários B (ex.: Seg, Ter, Qua contra a
+ *  média dos domingos de A), A aparece uma vez só por métrica. */
+function secaoComparativa(nome: string, primeira: string, cols: Col[], pA: string, pBs: string[], itens: ValoresAB[], total: ValoresAB): Secao {
   const linhaX = (it: ValoresAB): Celula[] => [it.nome, ...cols.flatMap((c) => {
-    const a = it.a[c.key] ?? 0, b = it.b[c.key] ?? 0;
-    const pct = difPct(a, b);
-    return [xlsxVal(a, c.key), xlsxVal(b, c.key), xlsxVal(b - a, c.key), pct == null ? null : arred(pct / 100, 4)];
+    const a = it.a[c.key] ?? 0;
+    return [xlsxVal(a, c.key), ...it.bs.flatMap((bv) => {
+      const b = bv[c.key] ?? 0;
+      const pct = difPct(a, b);
+      return [xlsxVal(b, c.key), xlsxVal(b - a, c.key), pct == null ? null : arred(pct / 100, 4)];
+    })];
   })];
   const linhaT = (it: ValoresAB): string[] => [it.nome, ...cols.flatMap((c) => {
-    const a = it.a[c.key] ?? 0, b = it.b[c.key] ?? 0;
-    return [c.fmt(a), c.fmt(b), fmtDifTxt(arred(b - a, CASAS[c.key] + 2), (v) => c.fmt(v)), fmtPctTxt(difPct(a, b))];
+    const a = it.a[c.key] ?? 0;
+    return [c.fmt(a), ...it.bs.flatMap((bv) => {
+      const b = bv[c.key] ?? 0;
+      return [c.fmt(b), fmtDifTxt(arred(b - a, CASAS[c.key] + 2), (v) => c.fmt(v)), fmtPctTxt(difPct(a, b))];
+    })];
   })];
+  const porMetrica = 1 + pBs.length * 3;
   return {
     nome,
-    subCabecalho: [{ rotulo: "", span: 1 }, ...cols.map((c) => ({ rotulo: c.label, span: 4 }))],
-    cabecalho: [primeira, ...cols.flatMap(() => [pA, pB, "Dif", "%"])],
+    subCabecalho: [{ rotulo: "", span: 1 }, ...cols.map((c) => ({ rotulo: c.label, span: porMetrica }))],
+    cabecalho: [primeira, ...cols.flatMap(() => [pA, ...pBs.flatMap((pB) => [pB, "Dif", "%"])])],
     corpo: itens.map(linhaX),
     total: linhaX(total),
     corpoTxt: itens.map(linhaT),
     totalTxt: linhaT(total),
-    formatos: [undefined, ...cols.flatMap((c) => [XLSX_FMT[c.key], XLSX_FMT[c.key], XLSX_FMT[c.key], "+0.0%;-0.0%;0.0%"])],
+    formatos: [undefined, ...cols.flatMap((c) => [XLSX_FMT[c.key], ...pBs.flatMap(() => [XLSX_FMT[c.key], XLSX_FMT[c.key], "+0.0%;-0.0%;0.0%"])])],
     grupoLargura: "principal",
   };
 }
@@ -657,6 +666,11 @@ function VisaoGeral({ inicioPadrao, fimPadrao, filtros, linhaMap, feriados, onLi
 // ---------------------------------------------------------------------------
 
 type Base = "total" | "media";
+type Periodo = { inicio: string; fim: string; tipos: string[] };
+const MAX_B = 6;
+const ABREV_TIPO: Record<string, string> = { "Dias úteis": "Úteis", Sábado: "Sáb", Domingo: "Dom", Feriado: "Fer" };
+/** Cor de cada período no gráfico/tabela: A laranja, B1 azul, B2 verde... */
+const corB = (i: number) => [CORES[0], CORES[2], CORES[3], CORES[4], "#0891b2", "#be185d"][i % 6];
 
 function Comparativo({ ultimoFim, filtros, linhaMap, feriados, onLinhas, cols }: {
   ultimoFim: string; filtros: Filtros; linhaMap: Map<string, Linha>; feriados: FeriadosMap;
@@ -665,38 +679,51 @@ function Comparativo({ ultimoFim, filtros, linhaMap, feriados, onLinhas, cols }:
   // Padrão: última semana completa importada (B) x semana anterior (A).
   const fimB0 = ultimoFim;
   const iniB0 = addDias(fimB0, -6);
-  const [a, setA] = useState({ inicio: addDias(iniB0, -7), fim: addDias(iniB0, -1) });
-  const [b, setB] = useState({ inicio: iniB0, fim: fimB0 });
+  // Tipo de dia próprio de cada período (ex.: A = Domingo, B = Dias úteis).
+  // Vazio = segue o "Tipo de dia" dos filtros de cima.
+  const [a, setA] = useState<Periodo>({ inicio: addDias(iniB0, -7), fim: addDias(iniB0, -1), tipos: [] });
+  // Vários B: cada um comparado com o MESMO A (ex.: A = domingos do mês,
+  // B1 = seg 08/03, B2 = ter 09/03, B3 = qua 10/03) — lado a lado, sem
+  // repetir A.
+  const [bs, setBs] = useState<Periodo[]>([{ inicio: iniB0, fim: fimB0, tipos: [] }]);
   const [base, setBase] = useState<Base>("total");
   const [dim, setDim] = useState<Dimensao>("linha");
   const [metrica, setMetrica] = useState<ColKey>("transportados");
   const [ordem, setOrdem] = usePersistentState<Ordem>("passageiros.comp.ordem", "valor");
   const [showPct, setShowPct] = usePersistentState("passageiros.comp.showPct", true);
-  // Tipo de dia próprio de cada período (ex.: A = Domingo, B = Dias úteis).
-  // Vazio = segue o "Tipo de dia" dos filtros de cima.
-  const [tiposA, setTiposA] = useState<string[]>([]);
-  const [tiposB, setTiposB] = useState<string[]>([]);
+  const b = bs[0];
+  const setB = (fn: (p: Periodo) => Periodo) => setBs((arr) => arr.map((x, i) => (i === 0 ? fn(x) : x)));
+  const setBi = (i: number, patch: Partial<Periodo>) => setBs((arr) => arr.map((x, k) => (k === i ? { ...x, ...patch } : x)));
+  function adicionarB() {
+    // Novo B = o dia seguinte ao último B (um dia só, fácil de ajustar).
+    const ult = bs[bs.length - 1];
+    const d = addDias(ult.fim, 1);
+    setBs([...bs, { inicio: d, fim: d, tipos: [] }]);
+    // A (um período) contra dias soltos só faz sentido em média por dia.
+    setBase("media");
+  }
 
   function atalho(tipo: "semana" | "mes" | "mesmo_mes") {
     if (tipo === "semana") {
-      setA({ inicio: addDias(b.inicio, -7), fim: addDias(b.fim, -7) });
+      setA((s) => ({ ...s, inicio: addDias(b.inicio, -7), fim: addDias(b.fim, -7) }));
     } else if (tipo === "mes") {
       // B = mês da data final de B; A = mês anterior inteiro.
       const mesB = b.fim.slice(0, 7);
       const iniB = `${mesB}-01`;
       const fimB = addDias(addMeses(iniB, 1), -1);
       const iniA = addMeses(iniB, -1);
-      setB({ inicio: iniB, fim: fimB });
-      setA({ inicio: iniA, fim: addDias(iniB, -1) });
+      setB((s) => ({ ...s, inicio: iniB, fim: fimB }));
+      setA((s) => ({ ...s, inicio: iniA, fim: addDias(iniB, -1) }));
     } else {
       // Mesmo intervalo de dias, um mês antes (ex.: 01–15/set x 01–15/ago).
-      setA({ inicio: addMeses(b.inicio, -1), fim: addMeses(b.fim, -1) });
+      setA((s) => ({ ...s, inicio: addMeses(b.inicio, -1), fim: addMeses(b.fim, -1) }));
     }
   }
 
-  const ini = a.inicio < b.inicio ? a.inicio : b.inicio;
-  const fim = a.fim > b.fim ? a.fim : b.fim;
-  const valido = a.inicio <= a.fim && b.inicio <= b.fim;
+  const todosPer = [a, ...bs];
+  const ini = todosPer.reduce((m, p) => (p.inicio < m ? p.inicio : m), a.inicio);
+  const fim = todosPer.reduce((m, p) => (p.fim > m ? p.fim : m), a.fim);
+  const valido = todosPer.every((p) => p.inicio && p.fim && p.inicio <= p.fim);
   const q = useQuery({
     queryKey: ["passageiros", ini, fim],
     queryFn: () => fetchPassageiros(ini, fim),
@@ -706,128 +733,154 @@ function Comparativo({ ultimoFim, filtros, linhaMap, feriados, onLinhas, cols }:
 
   const dados = useMemo(() => {
     const todos = aplicarFiltros(q.data ?? [], { ...filtros, tiposDia: [] }, linhaMap, feriados);
-    const doTipo = (tipos: string[]) => {
-      const t = tipos.length ? tipos : filtros.tiposDia;
-      return (r: PassageiroDia) => !t.length || t.includes(tipoDia(r.data, r.linha, feriados));
+    const recorte = (p: Periodo) => {
+      const t = p.tipos.length ? p.tipos : filtros.tiposDia;
+      const rs = todos.filter((r) => r.data >= p.inicio && r.data <= p.fim && (!t.length || t.includes(tipoDia(r.data, r.linha, feriados))));
+      // Média por dia: divide pelos dias com dado no período (todas as
+      // linhas filtradas) — uma linha que não roda domingo continua
+      // dividindo pelos 7 dias da semana, igual ao total.
+      return { rows: rs, dias: new Set(rs.map((r) => r.data)).size || 1, t: somar(rs) };
     };
-    const okA = doTipo(tiposA), okB = doTipo(tiposB);
-    const rA = todos.filter((r) => r.data >= a.inicio && r.data <= a.fim && okA(r));
-    const rB = todos.filter((r) => r.data >= b.inicio && r.data <= b.fim && okB(r));
-    // Média por dia: divide pelos dias com dado no período (todas as linhas
-    // filtradas) — uma linha que não roda domingo continua dividindo pelos
-    // 7 dias da semana, igual ao total.
-    const diasA = new Set(rA.map((r) => r.data)).size || 1;
-    const diasB = new Set(rB.map((r) => r.data)).size || 1;
-    return { rA, rB, diasA, diasB, tA: somar(rA), tB: somar(rB) };
-  }, [q.data, filtros, linhaMap, feriados, a, b, tiposA, tiposB]);
+    return { A: recorte(a), Bs: bs.map(recorte) };
+  }, [q.data, filtros, linhaMap, feriados, a, bs]);
 
   const v = (t: Totais, k: ColKey, dias: number) => {
     const x = valor(t, k);
     return x != null && base === "media" && COL[k].soma ? x / dias : x;
   };
 
-  const unidades = useMemo(() => unidadePorItem([...dados.rA, ...dados.rB], dim, linhaMap), [dados, dim, linhaMap]);
+  const todasRows = useMemo(() => [...dados.A.rows, ...dados.Bs.flatMap((x) => x.rows)], [dados]);
+  const unidades = useMemo(() => unidadePorItem(todasRows, dim, linhaMap), [todasRows, dim, linhaMap]);
   const porDim = useMemo(() => {
-    const gA = agrupar(dados.rA, (r) => dimValor(r, dim, linhaMap));
-    const gB = agrupar(dados.rB, (r) => dimValor(r, dim, linhaMap));
-    const nomes = Array.from(new Set([...gA.keys(), ...gB.keys()]));
-    const itens = nomes.map((nome) => ({ nome, tA: somar(gA.get(nome) ?? []), tB: somar(gB.get(nome) ?? []) }));
-    return ordenarItens(itens, ordem, (d) => valor(d.tB, metrica) ?? 0, unidades, dim, linhaMap);
+    const chave = (r: PassageiroDia) => dimValor(r, dim, linhaMap);
+    const gA = agrupar(dados.A.rows, chave);
+    const gBs = dados.Bs.map((x) => agrupar(x.rows, chave));
+    const nomes = Array.from(new Set([...gA.keys(), ...gBs.flatMap((g) => [...g.keys()])]));
+    const itens: ItemComparacao[] = nomes.map((nome) => ({ nome, tA: somar(gA.get(nome) ?? []), tBs: gBs.map((g) => somar(g.get(nome) ?? [])) }));
+    return ordenarItens(itens, ordem, (d) => valor(d.tBs[0], metrica) ?? 0, unidades, dim, linhaMap);
   }, [dados, dim, linhaMap, metrica, ordem, unidades]);
   const subtotais = useMemo(() => {
     const un = (r: PassageiroDia) => unidades.get(dimValor(r, dim, linhaMap)) ?? SEM_UNIDADE;
-    const gA = agrupar(dados.rA, un), gB = agrupar(dados.rB, un);
-    return (u: string) => ({ nome: `Total ${u}`, tA: somar(gA.get(u) ?? []), tB: somar(gB.get(u) ?? []) });
+    const gA = agrupar(dados.A.rows, un), gBs = dados.Bs.map((x) => agrupar(x.rows, un));
+    return (u: string): ItemComparacao => ({ nome: `Total ${u}`, tA: somar(gA.get(u) ?? []), tBs: gBs.map((g) => somar(g.get(u) ?? [])) });
   }, [dados, unidades, dim, linhaMap]);
+  const totalItem: ItemComparacao = { nome: "Total", tA: dados.A.t, tBs: dados.Bs.map((x) => x.t) };
   const blocos = ordem === "unidade" ? blocosPorUnidade(porDim, unidades) : [{ unidade: "", itens: porDim }];
 
   // Dia a dia alinhado: 1º dia (com dado, do tipo escolhido) de A com o 1º
-  // de B, e assim por diante — com A = Domingo e B = Dias úteis, o 1º
+  // de cada B, e assim por diante — com A = Domingo e B = Dias úteis, o 1º
   // domingo fica ao lado do 1º dia útil.
   const diaADia = useMemo(() => {
-    const porDiaA = agrupar(dados.rA, (r) => r.data);
-    const porDiaB = agrupar(dados.rB, (r) => r.data);
-    const diasA = Array.from(porDiaA.keys()).sort(), diasB = Array.from(porDiaB.keys()).sort();
+    const series = [dados.A, ...dados.Bs].map((x) => {
+      const g = agrupar(x.rows, (r) => r.data);
+      return { g, dias: Array.from(g.keys()).sort() };
+    });
     const rot = (d: string | undefined) => (d ? `${fmtPeriodoCurto(d, d)} ${DIAS_SEMANA[diaSemana(d)]}` : "");
-    return Array.from({ length: Math.max(diasA.length, diasB.length) }, (_, i) => ({
-      rotulo: `Dia ${i + 1}`,
-      dataA: rot(diasA[i]),
-      dataB: rot(diasB[i]),
-      A: diasA[i] ? valor(somar(porDiaA.get(diasA[i])!), metrica) : null,
-      B: diasB[i] ? valor(somar(porDiaB.get(diasB[i])!), metrica) : null,
-    }));
+    const n = Math.max(...series.map((x) => x.dias.length));
+    return Array.from({ length: n }, (_, i) => {
+      const o: Record<string, string | number | null> = { rotulo: `Dia ${i + 1}` };
+      series.forEach((x, k) => {
+        const d = x.dias[i];
+        o[`data${k}`] = rot(d);
+        o[`v${k}`] = d ? valor(somar(x.g.get(d)!), metrica) : null;
+      });
+      return o;
+    });
   }, [dados, metrica]);
 
-  // Rótulo do período + tipo de dia próprio, abreviado (ex.: "01 a 31/08/26 Dom").
-  const ABREV: Record<string, string> = { "Dias úteis": "Úteis", Sábado: "Sáb", Domingo: "Dom", Feriado: "Fer" };
-  const comTipo = (per: string, tipos: string[]) => (tipos.length ? `${per} ${tipos.map((t) => ABREV[t] ?? t).join("+")}` : per);
-  const perA = comTipo(fmtPeriodoCurto(a.inicio, a.fim), tiposA);
-  const perB = comTipo(fmtPeriodoCurto(b.inicio, b.fim), tiposB);
+  // Rótulo do período + tipo de dia próprio, abreviado (ex.: "01 a 31/08/26
+  // Dom"); dia único ganha o dia da semana (ex.: "08/03/26 Seg").
+  const rotPer = (p: Periodo) => {
+    const base0 = fmtPeriodoCurto(p.inicio, p.fim);
+    if (p.tipos.length) return `${base0} ${p.tipos.map((t) => ABREV_TIPO[t] ?? t).join("+")}`;
+    return p.inicio === p.fim ? `${base0} ${DIAS_SEMANA[diaSemana(p.inicio)]}` : base0;
+  };
+  const nomeB = (i: number) => (bs.length > 1 ? `B${i + 1}` : "B");
+  const perA = rotPer(a);
+  const perBs = bs.map(rotPer);
   const rotA = `A = ${perA}`;
-  const rotB = `B = ${perB}`;
+  const rotBs = perBs.map((pb, i) => `${nomeB(i)} = ${pb}`);
   const nomeDim = DIMENSOES.find((d) => d.key === dim)!.label;
   const valoresAB = (it: ItemComparacao, nome = it.nome): ValoresAB => ({
     nome,
-    a: Object.fromEntries(cols.map((c) => [c.key, v(it.tA, c.key, dados.diasA)])),
-    b: Object.fromEntries(cols.map((c) => [c.key, v(it.tB, c.key, dados.diasB)])),
+    a: Object.fromEntries(cols.map((c) => [c.key, v(it.tA, c.key, dados.A.dias)])),
+    bs: it.tBs.map((tb, i) => Object.fromEntries(cols.map((c) => [c.key, v(tb, c.key, dados.Bs[i].dias)]))),
   });
+  const diasTxt = `Dias com dado: A ${dados.A.dias}, ${dados.Bs.map((x, i) => `${nomeB(i)} ${x.dias}`).join(", ")}`;
 
   // Excel/PDF: sempre "por Unidade" — igual ao Relatório Comparativo.
   function relatorio(): Relatorio {
     const itens = ordenarItens(porDim, "unidade", () => 0, unidades, dim, linhaMap);
     const blocosU = blocosPorUnidade(itens, unidades);
     const nomesUn = Array.from(new Set(blocosU.map((bl) => bl.unidade))).sort(ordenarUnidades);
-    const totalGeral = valoresAB({ nome: "", tA: dados.tA, tB: dados.tB }, "TOTAL GERAL");
     return {
-      titulo: `COMPARATIVO DE PASSAGEIROS E RECEITA — A = ${perA} vs B = ${perB}`,
-      subtitulo: `${base === "media" ? "Média por dia" : "Totais"} · Dias com dado: A ${dados.diasA}, B ${dados.diasB}${descreverFiltros(filtros)} — ${porDim.length} ${nomeDim.toLowerCase()}(s) em ${blocosU.length} unidade(s) — Gerado em ${new Date().toLocaleString("pt-BR")}`,
+      titulo: `COMPARATIVO DE PASSAGEIROS E RECEITA — ${rotA} vs ${rotBs.join(" · ")}`,
+      subtitulo: `${base === "media" ? "Média por dia" : "Totais"} · ${diasTxt}${descreverFiltros(filtros)} — ${porDim.length} ${nomeDim.toLowerCase()}(s) em ${blocosU.length} unidade(s) — Gerado em ${new Date().toLocaleString("pt-BR")}`,
       secoes: [
         ...blocosU.map((bl) => secaoComparativa(
-          `UNIDADE ${bl.unidade.toUpperCase()}`, nomeDim, cols, perA, perB,
+          `UNIDADE ${bl.unidade.toUpperCase()}`, nomeDim, cols, perA, perBs,
           bl.itens.map((it) => valoresAB(it)), valoresAB(subtotais(bl.unidade), "TOTAL"),
         )),
-        secaoComparativa("RESUMO POR UNIDADE", "Unidade", cols, perA, perB, nomesUn.map((u) => valoresAB(subtotais(u), u)), totalGeral),
+        secaoComparativa("RESUMO POR UNIDADE", "Unidade", cols, perA, perBs, nomesUn.map((u) => valoresAB(subtotais(u), u)), valoresAB(totalItem, "TOTAL GERAL")),
       ],
     };
   }
 
   function abasExtras(): { nome: string; rel: Relatorio }[] {
     const c = COL[metrica];
-    const corpo = diaADia.map((d) => ({ d, x: [d.rotulo, d.dataA, xlsxVal(d.A, c.key), d.dataB, xlsxVal(d.B, c.key)] as Celula[] }));
+    const nomes = ["A", ...bs.map((_, i) => nomeB(i))];
+    const pers = [perA, ...perBs];
+    const totais = [dados.A.t, ...dados.Bs.map((x) => x.t)];
     return [{
       nome: "Dia a dia",
       rel: {
-        titulo: `${c.label.toUpperCase()} DIA A DIA — A = ${perA} vs B = ${perB}`,
-        subtitulo: `1º dia de A com 1º dia de B${descreverFiltros(filtros)} — Gerado em ${new Date().toLocaleString("pt-BR")}`,
+        titulo: `${c.label.toUpperCase()} DIA A DIA — ${rotA} vs ${rotBs.join(" · ")}`,
+        subtitulo: `1º dia de A com o 1º dia de cada B${descreverFiltros(filtros)} — Gerado em ${new Date().toLocaleString("pt-BR")}`,
         secoes: [{
           nome: `${c.label.toUpperCase()} DIA A DIA`,
-          cabecalho: ["Dia", "Data A", `A = ${perA}`, "Data B", `B = ${perB}`],
-          corpo: corpo.map((r) => r.x),
-          total: ["TOTAL", "", xlsxVal(valor(dados.tA, c.key), c.key), "", xlsxVal(valor(dados.tB, c.key), c.key)],
-          corpoTxt: corpo.map(({ d }) => [d.rotulo, d.dataA, c.fmt(d.A), d.dataB, c.fmt(d.B)]),
-          totalTxt: ["TOTAL", "", c.fmt(valor(dados.tA, c.key)), "", c.fmt(valor(dados.tB, c.key))],
-          formatos: [undefined, undefined, XLSX_FMT[c.key], undefined, XLSX_FMT[c.key]],
+          cabecalho: ["Dia", ...nomes.flatMap((n, k) => [`Data ${n}`, `${n} = ${pers[k]}`])],
+          corpo: diaADia.map((d) => [d.rotulo as string, ...nomes.flatMap((_, k) => [d[`data${k}`] as string, xlsxVal(d[`v${k}`] as number | null, c.key)])]),
+          total: ["TOTAL", ...totais.flatMap((t) => ["", xlsxVal(valor(t, c.key), c.key)])],
+          corpoTxt: diaADia.map((d) => [d.rotulo as string, ...nomes.flatMap((_, k) => [d[`data${k}`] as string, c.fmt(d[`v${k}`] as number | null)])]),
+          totalTxt: ["TOTAL", ...totais.flatMap((t) => ["", c.fmt(valor(t, c.key))])],
+          formatos: [undefined, ...nomes.flatMap(() => [undefined, XLSX_FMT[c.key]])],
           grupoLargura: "dia",
         }],
       },
     }];
   }
 
+  const diasDiferentes = dados.Bs.some((x) => x.dias !== dados.A.dias);
+  const placeholderTipo = filtros.tiposDia.length ? "Igual ao filtro" : "Todos";
+
   return (
     <div className="space-y-4 pt-2">
       <Card className="shadow-[var(--shadow-card)]">
         <CardContent className="p-4 space-y-3">
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-6 items-end">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-[repeat(3,minmax(0,1fr))_auto] items-end">
             <Campo rotulo="Período A — de"><Input type="date" value={a.inicio} onChange={(e) => setA((s) => ({ ...s, inicio: e.target.value }))} /></Campo>
             <Campo rotulo="Período A — até"><Input type="date" value={a.fim} onChange={(e) => setA((s) => ({ ...s, fim: e.target.value }))} /></Campo>
-            <MultiSelect label="Tipo de dia A" values={tiposA} onChange={setTiposA} options={[...TIPOS_DIA]} placeholder={filtros.tiposDia.length ? "Igual ao filtro" : "Todos"} />
-            <Campo rotulo="Período B — de"><Input type="date" value={b.inicio} onChange={(e) => setB((s) => ({ ...s, inicio: e.target.value }))} /></Campo>
-            <Campo rotulo="Período B — até"><Input type="date" value={b.fim} onChange={(e) => setB((s) => ({ ...s, fim: e.target.value }))} /></Campo>
-            <MultiSelect label="Tipo de dia B" values={tiposB} onChange={setTiposB} options={[...TIPOS_DIA]} placeholder={filtros.tiposDia.length ? "Igual ao filtro" : "Todos"} />
+            <MultiSelect label="Tipo de dia A" values={a.tipos} onChange={(t) => setA((s) => ({ ...s, tipos: t }))} options={[...TIPOS_DIA]} placeholder={placeholderTipo} />
+            <div className="w-9" />
+            {bs.map((pb, i) => (
+              <Fragment key={i}>
+                <Campo rotulo={`Período ${nomeB(i)} — de`}><Input type="date" value={pb.inicio} onChange={(e) => setBi(i, { inicio: e.target.value })} /></Campo>
+                <Campo rotulo={`Período ${nomeB(i)} — até`}><Input type="date" value={pb.fim} onChange={(e) => setBi(i, { fim: e.target.value })} /></Campo>
+                <MultiSelect label={`Tipo de dia ${nomeB(i)}`} values={pb.tipos} onChange={(t) => setBi(i, { tipos: t })} options={[...TIPOS_DIA]} placeholder={placeholderTipo} />
+                {bs.length > 1 ? (
+                  <Button variant="ghost" size="icon" title={`Remover ${nomeB(i)}`} onClick={() => setBs(bs.filter((_, k) => k !== i))}>
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
+                ) : <div className="w-9" />}
+              </Fragment>
+            ))}
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex flex-wrap gap-2">
-              <span className="text-xs text-muted-foreground self-center">A em relação a B:</span>
+              <Button size="sm" variant="outline" onClick={adicionarB} disabled={bs.length >= MAX_B}>
+                <Plus className="h-4 w-4 mr-1" /> Adicionar comparação ({`B${bs.length + 1}`})
+              </Button>
+              <span className="text-xs text-muted-foreground self-center ml-2">A em relação a {nomeB(0)}:</span>
               <Button size="sm" variant="outline" onClick={() => atalho("semana")}>Semana anterior</Button>
               <Button size="sm" variant="outline" onClick={() => atalho("mesmo_mes")}>Mesmos dias do mês anterior</Button>
               <Button size="sm" variant="outline" onClick={() => atalho("mes")}>Mês x mês anterior</Button>
@@ -858,30 +911,39 @@ function Comparativo({ ultimoFim, filtros, linhaMap, feriados, onLinhas, cols }:
               </label>
               <BotoesExportar
                 relatorio={relatorio} abasExtras={abasExtras} disabled={!porDim.length} paisagem
-                arquivo={`passageiros_comparativo_${a.inicio}_x_${b.inicio}`}
-                onExport={(formato, o) => void logAudit({ action: "export", entity: "passageiros", details: { comparativo: true, formato, orientacao: o, a, b, base, dim } })}
+                arquivo={`passageiros_comparativo_${a.inicio}_x_${b.inicio}${bs.length > 1 ? `_e_mais_${bs.length - 1}` : ""}`}
+                onExport={(formato, o) => void logAudit({ action: "export", entity: "passageiros", details: { comparativo: true, formato, orientacao: o, a, bs, base, dim } })}
               />
             </div>
           </div>
-          {dados.diasA !== dados.diasB && base === "total" && (
-            <p className="text-xs text-warning">Os períodos têm quantidade de dias com dado diferente (A: {dados.diasA}, B: {dados.diasB}) — use "Média por dia" para comparar de forma justa.</p>
+          {diasDiferentes && base === "total" && (
+            <p className="text-xs text-warning">Os períodos têm quantidade de dias com dado diferente ({diasTxt}) — use "Média por dia" para comparar de forma justa.</p>
           )}
         </CardContent>
       </Card>
 
-      {!valido ? <p className="text-sm text-destructive">Data inicial depois da final em um dos períodos.</p>
+      {!valido ? <p className="text-sm text-destructive">Data inicial depois da final (ou vazia) em um dos períodos.</p>
         : q.isLoading ? <Carregando /> : q.error ? <Erro e={q.error} /> : (
         <>
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
             {(["transportados", "pagantes", "receita", "viagens", "ipk"] as ColKey[]).map((k) => {
-              const va = v(dados.tA, k, dados.diasA), vb = v(dados.tB, k, dados.diasB);
+              const va = v(dados.A.t, k, dados.A.dias);
               return (
                 <Card key={k} className="shadow-[var(--shadow-card)]">
-                  <CardContent className="p-4">
+                  <CardContent className="p-4 space-y-0.5">
                     <div className="text-xs text-muted-foreground">{COL[k].label}{base === "media" && COL[k].soma ? " / dia" : ""}</div>
-                    <div className="mt-1 text-xl font-bold tabular-nums">{COL[k].fmt(vb)}</div>
-                    <div className="text-[11px] text-muted-foreground">{rotB}</div>
-                    <div className="text-xs text-muted-foreground tabular-nums">{rotA}: {COL[k].fmt(va)} · <Delta v={variacao(va, vb)} /></div>
+                    {dados.Bs.length === 1 && <div className="mt-1 text-xl font-bold tabular-nums">{COL[k].fmt(v(dados.Bs[0].t, k, dados.Bs[0].dias))}</div>}
+                    <div className="text-xs text-muted-foreground tabular-nums">
+                      <span style={{ color: CORES[1] }}>{rotA}</span>: {COL[k].fmt(va)}
+                    </div>
+                    {dados.Bs.map((x, i) => {
+                      const vb = v(x.t, k, x.dias);
+                      return (
+                        <div key={i} className="text-xs tabular-nums">
+                          <span style={{ color: corB(i) }}>{rotBs[i]}</span>: <span className="font-semibold">{COL[k].fmt(vb)}</span> · <Delta v={variacao(va, vb)} />
+                        </div>
+                      );
+                    })}
                   </CardContent>
                 </Card>
               );
@@ -889,7 +951,7 @@ function Comparativo({ ultimoFim, filtros, linhaMap, feriados, onLinhas, cols }:
           </div>
 
           <Card className="shadow-[var(--shadow-card)]">
-            <CardHeader className="pb-2"><CardTitle className="text-sm">{COL[metrica].label} dia a dia — A x B (1º dia de A com 1º dia de B)</CardTitle></CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">{COL[metrica].label} dia a dia — 1º dia de A com o 1º dia de {bs.length > 1 ? "cada B" : "B"}</CardTitle></CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={280}>
                 <LineChart data={diaADia} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
@@ -898,11 +960,18 @@ function Comparativo({ ultimoFim, filtros, linhaMap, feriados, onLinhas, cols }:
                   <YAxis tick={{ fontSize: 11 }} tickFormatter={(x) => fmtNum(x)} width={70} />
                   <Tooltip
                     formatter={(x: number) => COL[metrica].fmt(x)}
-                    labelFormatter={(_, p) => { const d = p?.[0]?.payload; return d ? `${d.rotulo} — A: ${d.dataA || "—"} · B: ${d.dataB || "—"}` : ""; }}
+                    labelFormatter={(_, p) => {
+                      const d = p?.[0]?.payload;
+                      if (!d) return "";
+                      const nomes = ["A", ...bs.map((_, i) => nomeB(i))];
+                      return `${d.rotulo} — ${nomes.map((n, k) => `${n}: ${d[`data${k}`] || "—"}`).join(" · ")}`;
+                    }}
                   />
                   <Legend />
-                  <Line type="monotone" dataKey="A" name={rotA} stroke={CORES[1]} strokeWidth={2} dot={false} connectNulls={false} />
-                  <Line type="monotone" dataKey="B" name={rotB} stroke={CORES[0]} strokeWidth={2} dot={false} connectNulls={false} />
+                  <Line type="monotone" dataKey="v0" name={rotA} stroke={CORES[1]} strokeWidth={2} dot={bs.some((x) => x.inicio === x.fim)} connectNulls={false} />
+                  {bs.map((_, i) => (
+                    <Line key={i} type="monotone" dataKey={`v${i + 1}`} name={rotBs[i]} stroke={corB(i)} strokeWidth={2} dot={bs[i].inicio === bs[i].fim} connectNulls={false} />
+                  ))}
                 </LineChart>
               </ResponsiveContainer>
             </CardContent>
@@ -913,8 +982,9 @@ function Comparativo({ ultimoFim, filtros, linhaMap, feriados, onLinhas, cols }:
               <CardTitle className="text-sm">Por {nomeDim} — {base === "media" ? "média por dia" : "totais"}</CardTitle>
               <p className="text-xs text-muted-foreground">
                 <span className="font-semibold" style={{ color: CORES[1] }}>{rotA}</span>
-                {" · "}
-                <span className="font-semibold" style={{ color: CORES[0] }}>{rotB}</span>
+                {rotBs.map((r, i) => (
+                  <Fragment key={i}>{" · "}<span className="font-semibold" style={{ color: corB(i) }}>{r}</span></Fragment>
+                ))}
               </p>
             </CardHeader>
             <CardContent className="overflow-x-auto">
@@ -922,25 +992,25 @@ function Comparativo({ ultimoFim, filtros, linhaMap, feriados, onLinhas, cols }:
                 <TableHeader>
                   <TableRow>
                     <TableHead rowSpan={2}>{nomeDim}</TableHead>
-                    {cols.map((c) => <TableHead key={c.key} colSpan={showPct ? 3 : 2} className="text-center whitespace-nowrap border-l">{c.curto}</TableHead>)}
+                    {cols.map((c) => <TableHead key={c.key} colSpan={1 + bs.length * (showPct ? 2 : 1)} className="text-center whitespace-nowrap border-l">{c.curto}</TableHead>)}
                   </TableRow>
                   <TableRow>
                     {cols.map((c) => (
-                      <SubCab key={c.key} rotA={rotA} rotB={rotB} showPct={showPct} />
+                      <SubCab key={c.key} rotA={rotA} rotBs={rotBs} showPct={showPct} />
                     ))}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {blocos.map((bl) => (
                     <Fragment key={bl.unidade || "_"}>
-                      {bl.unidade && <CabUnidade unidade={bl.unidade} span={1 + cols.length * (showPct ? 3 : 2)} />}
+                      {bl.unidade && <CabUnidade unidade={bl.unidade} span={1 + cols.length * (1 + bs.length * (showPct ? 2 : 1))} />}
                       {[...bl.itens, ...(bl.unidade ? [subtotais(bl.unidade)] : [])].map((d) => (
-                        <LinhaComparacao key={d.nome} d={d} cols={cols} v={v} diasA={dados.diasA} diasB={dados.diasB} showPct={showPct}
+                        <LinhaComparacao key={d.nome} d={d} cols={cols} v={v} diasA={dados.A.dias} diasBs={dados.Bs.map((x) => x.dias)} showPct={showPct}
                           className={bl.unidade && d.nome === `Total ${bl.unidade}` ? "font-semibold bg-muted/30" : undefined} />
                       ))}
                     </Fragment>
                   ))}
-                  <LinhaComparacao d={{ nome: "Total", tA: dados.tA, tB: dados.tB }} cols={cols} v={v} diasA={dados.diasA} diasB={dados.diasB} showPct={showPct} className="font-semibold bg-muted/50" />
+                  <LinhaComparacao d={totalItem} cols={cols} v={v} diasA={dados.A.dias} diasBs={dados.Bs.map((x) => x.dias)} showPct={showPct} className="font-semibold bg-muted/50" />
                 </TableBody>
               </Table>
             </CardContent>
@@ -962,32 +1032,43 @@ function addMeses(data: string, n: number): string {
 // Pedaços de UI
 // ---------------------------------------------------------------------------
 
-function SubCab({ rotA, rotB, showPct }: { rotA: string; rotB: string; showPct: boolean }) {
+function SubCab({ rotA, rotBs, showPct }: { rotA: string; rotBs: string[]; showPct: boolean }) {
   return (
     <>
       <TableHead className="text-right border-l text-xs whitespace-nowrap" style={{ color: CORES[1] }}>{rotA}</TableHead>
-      <TableHead className="text-right text-xs whitespace-nowrap" style={{ color: CORES[0] }}>{rotB}</TableHead>
-      {showPct && <TableHead className="text-right text-xs">Δ%</TableHead>}
+      {rotBs.map((r, i) => (
+        <Fragment key={i}>
+          <TableHead className="text-right text-xs whitespace-nowrap" style={{ color: corB(i) }}>{r}</TableHead>
+          {showPct && <TableHead className="text-right text-xs">Δ%</TableHead>}
+        </Fragment>
+      ))}
     </>
   );
 }
 
-type ItemComparacao = { nome: string; tA: Totais; tB: Totais };
+type ItemComparacao = { nome: string; tA: Totais; tBs: Totais[] };
 
-function LinhaComparacao({ d, cols, v, diasA, diasB, showPct, className }: {
+function LinhaComparacao({ d, cols, v, diasA, diasBs, showPct, className }: {
   d: ItemComparacao; cols: Col[]; v: (t: Totais, k: ColKey, dias: number) => number | null;
-  diasA: number; diasB: number; showPct: boolean; className?: string;
+  diasA: number; diasBs: number[]; showPct: boolean; className?: string;
 }) {
   return (
     <TableRow className={className}>
       <TableCell className="whitespace-nowrap font-medium">{d.nome}</TableCell>
       {cols.map((c) => {
-        const va = v(d.tA, c.key, diasA), vb = v(d.tB, c.key, diasB);
+        const va = v(d.tA, c.key, diasA);
         return (
           <Fragment key={c.key}>
             <TableCell className="text-right tabular-nums border-l text-muted-foreground">{c.fmt(va)}</TableCell>
-            <TableCell className="text-right tabular-nums">{c.fmt(vb)}</TableCell>
-            {showPct && <TableCell className="text-right"><Delta v={variacao(va, vb)} /></TableCell>}
+            {d.tBs.map((tb, i) => {
+              const vb = v(tb, c.key, diasBs[i]);
+              return (
+                <Fragment key={i}>
+                  <TableCell className="text-right tabular-nums">{c.fmt(vb)}</TableCell>
+                  {showPct && <TableCell className="text-right"><Delta v={variacao(va, vb)} /></TableCell>}
+                </Fragment>
+              );
+            })}
           </Fragment>
         );
       })}
