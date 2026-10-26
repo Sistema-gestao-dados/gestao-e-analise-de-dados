@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchLinhas, type Linha } from "@/lib/data";
 import { fetchCalendarioEventos } from "@/lib/calendario";
 import {
-  fetchPassageiros, fetchMesesImportados, somar, indicadores, periodoDe, diaSemana, addDias, difDias,
+  fetchPassageiros, fetchMesesImportados, somar, indicadores, periodoDe, diaSemana, addDias,
   variacao, fmtNum, fmtReais, buildFeriados, tipoDia, TIPOS_DIA, type FeriadosMap, type PassageiroDia, type Granularidade, type Totais,
 } from "@/lib/passageiros";
 import { useAuditView } from "@/lib/use-audit-view";
@@ -672,6 +672,10 @@ function Comparativo({ ultimoFim, filtros, linhaMap, feriados, onLinhas, cols }:
   const [metrica, setMetrica] = useState<ColKey>("transportados");
   const [ordem, setOrdem] = usePersistentState<Ordem>("passageiros.comp.ordem", "valor");
   const [showPct, setShowPct] = usePersistentState("passageiros.comp.showPct", true);
+  // Tipo de dia próprio de cada período (ex.: A = Domingo, B = Dias úteis).
+  // Vazio = segue o "Tipo de dia" dos filtros de cima.
+  const [tiposA, setTiposA] = useState<string[]>([]);
+  const [tiposB, setTiposB] = useState<string[]>([]);
 
   function atalho(tipo: "semana" | "mes" | "mesmo_mes") {
     if (tipo === "semana") {
@@ -701,16 +705,21 @@ function Comparativo({ ultimoFim, filtros, linhaMap, feriados, onLinhas, cols }:
   useRegistrarLinhas(q.data, onLinhas);
 
   const dados = useMemo(() => {
-    const todos = aplicarFiltros(q.data ?? [], filtros, linhaMap, feriados);
-    const rA = todos.filter((r) => r.data >= a.inicio && r.data <= a.fim);
-    const rB = todos.filter((r) => r.data >= b.inicio && r.data <= b.fim);
+    const todos = aplicarFiltros(q.data ?? [], { ...filtros, tiposDia: [] }, linhaMap, feriados);
+    const doTipo = (tipos: string[]) => {
+      const t = tipos.length ? tipos : filtros.tiposDia;
+      return (r: PassageiroDia) => !t.length || t.includes(tipoDia(r.data, r.linha, feriados));
+    };
+    const okA = doTipo(tiposA), okB = doTipo(tiposB);
+    const rA = todos.filter((r) => r.data >= a.inicio && r.data <= a.fim && okA(r));
+    const rB = todos.filter((r) => r.data >= b.inicio && r.data <= b.fim && okB(r));
     // Média por dia: divide pelos dias com dado no período (todas as linhas
     // filtradas) — uma linha que não roda domingo continua dividindo pelos
     // 7 dias da semana, igual ao total.
     const diasA = new Set(rA.map((r) => r.data)).size || 1;
     const diasB = new Set(rB.map((r) => r.data)).size || 1;
     return { rA, rB, diasA, diasB, tA: somar(rA), tB: somar(rB) };
-  }, [q.data, filtros, linhaMap, feriados, a, b]);
+  }, [q.data, filtros, linhaMap, feriados, a, b, tiposA, tiposB]);
 
   const v = (t: Totais, k: ColKey, dias: number) => {
     const x = valor(t, k);
@@ -732,30 +741,31 @@ function Comparativo({ ultimoFim, filtros, linhaMap, feriados, onLinhas, cols }:
   }, [dados, unidades, dim, linhaMap]);
   const blocos = ordem === "unidade" ? blocosPorUnidade(porDim, unidades) : [{ unidade: "", itens: porDim }];
 
-  // Dia a dia alinhado: 1º dia de A com 1º dia de B, e assim por diante.
+  // Dia a dia alinhado: 1º dia (com dado, do tipo escolhido) de A com o 1º
+  // de B, e assim por diante — com A = Domingo e B = Dias úteis, o 1º
+  // domingo fica ao lado do 1º dia útil.
   const diaADia = useMemo(() => {
     const porDiaA = agrupar(dados.rA, (r) => r.data);
     const porDiaB = agrupar(dados.rB, (r) => r.data);
-    const n = Math.max(difDias(a.inicio, a.fim), difDias(b.inicio, b.fim));
-    return Array.from({ length: Math.min(n, 366) }, (_, i) => {
-      const dA = addDias(a.inicio, i), dB = addDias(b.inicio, i);
-      const tA = porDiaA.get(dA), tB = porDiaB.get(dB);
-      return {
-        rotulo: `Dia ${i + 1}`,
-        dataA: dA <= a.fim ? `${fmtPeriodoCurto(dA, dA)} ${DIAS_SEMANA[diaSemana(dA)]}` : "",
-        dataB: dB <= b.fim ? `${fmtPeriodoCurto(dB, dB)} ${DIAS_SEMANA[diaSemana(dB)]}` : "",
-        A: tA && dA <= a.fim ? valor(somar(tA), metrica) : null,
-        B: tB && dB <= b.fim ? valor(somar(tB), metrica) : null,
-      };
-    });
-  }, [dados, a, b, metrica]);
+    const diasA = Array.from(porDiaA.keys()).sort(), diasB = Array.from(porDiaB.keys()).sort();
+    const rot = (d: string | undefined) => (d ? `${fmtPeriodoCurto(d, d)} ${DIAS_SEMANA[diaSemana(d)]}` : "");
+    return Array.from({ length: Math.max(diasA.length, diasB.length) }, (_, i) => ({
+      rotulo: `Dia ${i + 1}`,
+      dataA: rot(diasA[i]),
+      dataB: rot(diasB[i]),
+      A: diasA[i] ? valor(somar(porDiaA.get(diasA[i])!), metrica) : null,
+      B: diasB[i] ? valor(somar(porDiaB.get(diasB[i])!), metrica) : null,
+    }));
+  }, [dados, metrica]);
 
-  const rotA = `A = ${fmtPeriodoCurto(a.inicio, a.fim)}`;
-  const rotB = `B = ${fmtPeriodoCurto(b.inicio, b.fim)}`;
+  // Rótulo do período + tipo de dia próprio, abreviado (ex.: "01 a 31/08/26 Dom").
+  const ABREV: Record<string, string> = { "Dias úteis": "Úteis", Sábado: "Sáb", Domingo: "Dom", Feriado: "Fer" };
+  const comTipo = (per: string, tipos: string[]) => (tipos.length ? `${per} ${tipos.map((t) => ABREV[t] ?? t).join("+")}` : per);
+  const perA = comTipo(fmtPeriodoCurto(a.inicio, a.fim), tiposA);
+  const perB = comTipo(fmtPeriodoCurto(b.inicio, b.fim), tiposB);
+  const rotA = `A = ${perA}`;
+  const rotB = `B = ${perB}`;
   const nomeDim = DIMENSOES.find((d) => d.key === dim)!.label;
-
-  const perA = fmtPeriodoCurto(a.inicio, a.fim);
-  const perB = fmtPeriodoCurto(b.inicio, b.fim);
   const valoresAB = (it: ItemComparacao, nome = it.nome): ValoresAB => ({
     nome,
     a: Object.fromEntries(cols.map((c) => [c.key, v(it.tA, c.key, dados.diasA)])),
@@ -807,11 +817,13 @@ function Comparativo({ ultimoFim, filtros, linhaMap, feriados, onLinhas, cols }:
     <div className="space-y-4 pt-2">
       <Card className="shadow-[var(--shadow-card)]">
         <CardContent className="p-4 space-y-3">
-          <div className="grid grid-cols-2 gap-3 md:grid-cols-4 items-end">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-6 items-end">
             <Campo rotulo="Período A — de"><Input type="date" value={a.inicio} onChange={(e) => setA((s) => ({ ...s, inicio: e.target.value }))} /></Campo>
             <Campo rotulo="Período A — até"><Input type="date" value={a.fim} onChange={(e) => setA((s) => ({ ...s, fim: e.target.value }))} /></Campo>
+            <MultiSelect label="Tipo de dia A" values={tiposA} onChange={setTiposA} options={[...TIPOS_DIA]} placeholder={filtros.tiposDia.length ? "Igual ao filtro" : "Todos"} />
             <Campo rotulo="Período B — de"><Input type="date" value={b.inicio} onChange={(e) => setB((s) => ({ ...s, inicio: e.target.value }))} /></Campo>
             <Campo rotulo="Período B — até"><Input type="date" value={b.fim} onChange={(e) => setB((s) => ({ ...s, fim: e.target.value }))} /></Campo>
+            <MultiSelect label="Tipo de dia B" values={tiposB} onChange={setTiposB} options={[...TIPOS_DIA]} placeholder={filtros.tiposDia.length ? "Igual ao filtro" : "Todos"} />
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <div className="flex flex-wrap gap-2">
@@ -877,7 +889,7 @@ function Comparativo({ ultimoFim, filtros, linhaMap, feriados, onLinhas, cols }:
           </div>
 
           <Card className="shadow-[var(--shadow-card)]">
-            <CardHeader className="pb-2"><CardTitle className="text-sm">{COL[metrica].label} dia a dia — A x B (1º dia com 1º dia)</CardTitle></CardHeader>
+            <CardHeader className="pb-2"><CardTitle className="text-sm">{COL[metrica].label} dia a dia — A x B (1º dia de A com 1º dia de B)</CardTitle></CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={280}>
                 <LineChart data={diaADia} margin={{ top: 8, right: 8, left: 8, bottom: 4 }}>
