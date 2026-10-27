@@ -2,13 +2,13 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { insertHistorico, ensureDiaTipo, fetchHistorico, type HistoricoInput } from "@/lib/historico";
+import { insertHistorico, ensureDiaTipo, fetchHistorico, type Historico, type HistoricoInput } from "@/lib/historico";
 import { logAudit } from "@/lib/audit";
 import { useAuditView } from "@/lib/use-audit-view";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Upload, FileUp, Loader2, ArrowRight, ArrowLeft } from "lucide-react";
+import { Upload, FileUp, Loader2, ArrowRight, ArrowLeft, Download } from "lucide-react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/importacao-historico")({
@@ -84,6 +84,40 @@ function parseVersao(v: string | undefined): number | null {
   return Number(m[1]);
 }
 
+/** "2026-09-01" -> "01/09/2026" (formato que parseDate lê de volta). */
+function fmtDataBR(v: string | null): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(v ?? "");
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : "";
+}
+
+function csvCelula(v: string): string {
+  return /[;"\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+}
+
+/** CSV com TODOS os registros do histórico, nas mesmas colunas e formato
+ *  aceitos pela importação — dá pra abrir no Excel, corrigir e reimportar
+ *  (os registros iguais aos do banco são ignorados na volta). */
+function montarCsvHistorico(rows: Historico[]): string {
+  const cab = ["Linha", "Versão", "Dia tipo", "Referência", "Data de solicitação", "Vigência", "Encerramento", "Alteração", "Ativo"];
+  const ordenadas = [...rows].sort((a, b) =>
+    a.linha.localeCompare(b.linha, "pt-BR", { numeric: true })
+    || (a.dia_tipo ?? "").localeCompare(b.dia_tipo ?? "", "pt-BR")
+    || (a.vigencia ?? "").localeCompare(b.vigencia ?? ""));
+  const linhas = ordenadas.map((h) => [
+    h.linha,
+    h.versao == null ? "" : String(h.versao),
+    h.dia_tipo ?? "",
+    h.referencia ?? "",
+    fmtDataBR(h.data_solicitacao),
+    fmtDataBR(h.vigencia),
+    fmtDataBR(h.encerramento),
+    h.alteracao ?? "",
+    h.ativo === false ? "N" : "S",
+  ].map(csvCelula).join(";"));
+  // BOM: sem ele o Excel abre os acentos quebrados.
+  return "\uFEFF" + [cab.join(";"), ...linhas].join("\r\n") + "\r\n";
+}
+
 function ImportacaoHistoricoPage() {
   useAuditView("importacao_historico");
   const qc = useQueryClient();
@@ -91,7 +125,30 @@ function ImportacaoHistoricoPage() {
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<string[]>([]);
 
+  const [exportando, setExportando] = useState(false);
+
   function addLog(l: string) { setLog((p) => [...p, l]); }
+
+  async function exportar() {
+    setExportando(true);
+    try {
+      const rows = await fetchHistorico();
+      if (!rows.length) { toast.message("Nenhum registro no histórico pra exportar."); return; }
+      const blob = new Blob([montarCsvHistorico(rows)], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `historico-reprogramacao-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+      void logAudit({ action: "export", entity: "historico_reprogramacao", details: { registros: rows.length } });
+      toast.success(`${rows.length} registro(s) exportado(s)`);
+    } catch (e) {
+      toast.error("Erro ao exportar", { description: (e as Error).message });
+    } finally {
+      setExportando(false);
+    }
+  }
 
   async function importar() {
     if (!file) return;
@@ -197,7 +254,13 @@ function ImportacaoHistoricoPage() {
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">Importação — Histórico de Reprogramação</h1>
           <p className="text-sm text-muted-foreground">CSV com uma reprogramação por linha. A Linha precisa já existir no Cadastro de Linhas.</p>
         </div>
-        <Button variant="outline" size="sm" asChild><Link to="/historico-consultar">Ver Histórico <ArrowRight className="h-4 w-4 ml-1" /></Link></Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={exportar} disabled={exportando}>
+            {exportando ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Download className="h-4 w-4 mr-1" />}
+            Exportar todos (CSV)
+          </Button>
+          <Button variant="outline" size="sm" asChild><Link to="/historico-consultar">Ver Histórico <ArrowRight className="h-4 w-4 ml-1" /></Link></Button>
+        </div>
       </div>
 
       <Card className="shadow-[var(--shadow-card)]">
