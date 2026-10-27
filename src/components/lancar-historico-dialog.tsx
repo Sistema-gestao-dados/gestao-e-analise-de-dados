@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import { fetchHistorico, ensureDiaTipo, numeroVersao, diaTipoBase, type HistoricoInput } from "@/lib/historico";
+import { fetchHistorico, fetchHistoricoDiaTipos, ensureDiaTipo, numeroVersao, diaTipoBase, type HistoricoInput } from "@/lib/historico";
 import {
   montarRegistros, textoFinal, OPCOES_PADRAO, type LinhaLancamento, type OpcoesTexto,
 } from "@/lib/historico-lancamento";
@@ -27,6 +27,7 @@ import { History, Loader2, RotateCcw } from "lucide-react";
 type Edicao = Partial<{ selecionado: boolean; linha: string; diaTipo: string; versao: string; texto: string }>;
 
 const norm = (s: string | null | undefined) => (s ?? "").trim().toUpperCase();
+const DIA_NOVO = "__novo__";
 
 export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
   linhas: LinhaLancamento[];
@@ -47,9 +48,16 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
   const [dataSolicitacao, setDataSolicitacao] = useState("");
   const [referencia, setReferencia] = useState("");
   const [descricao, setDescricao] = useState("");
+  // Dia tipo do Histórico (vocabulário próprio, tabela historico_dia_tipos)
+  // — escolhido pelo usuário, não copiado do dia tipo das viagens. Vale pra
+  // todas as linhas; cada linha pode trocar o seu.
+  const [diaGeral, setDiaGeral] = useState("");
+  const [diaGeralNovo, setDiaGeralNovo] = useState("");
   const [edicoes, setEdicoes] = useState<Map<string, Edicao>>(new Map());
 
   const historicoQ = useQuery({ queryKey: ["historico-reprogramacao"], queryFn: fetchHistorico, enabled: aberto });
+  const diaTiposQ = useQuery({ queryKey: ["historico-dia-tipos"], queryFn: fetchHistoricoDiaTipos, enabled: aberto });
+  const diaTipoGeral = diaGeral === DIA_NOVO ? diaGeralNovo.trim() : diaGeral;
 
   const registros = useMemo(() => montarRegistros(linhas, opcoes, modo), [linhas, opcoes, modo]);
 
@@ -67,7 +75,7 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
     const e = edicoes.get(r.chave) ?? {};
     const versaoGerada = numeroVersao(r.versaoTexto);
     const linha = e.linha ?? r.linha;
-    const diaTipo = e.diaTipo ?? r.diaTipo;
+    const diaTipo = e.diaTipo ?? diaTipoGeral;
     const versao = e.versao ?? (versaoGerada == null ? "" : String(versaoGerada));
     const nVersao = /^\d+$/.test(versao.trim()) ? Number(versao.trim()) : null;
     const existe = jaExiste(linha, nVersao, diaTipo);
@@ -82,6 +90,11 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
     };
   });
   const selecionadas = linhasTela.filter((x) => x.selecionado);
+  // Opções por linha: lista do Histórico + o dia tipo novo digitado no topo.
+  const opcoesDia = useMemo(
+    () => Array.from(new Set([...(diaTiposQ.data ?? []), ...(diaTipoGeral ? [diaTipoGeral] : [])])).sort((a, b) => a.localeCompare(b, "pt-BR")),
+    [diaTiposQ.data, diaTipoGeral],
+  );
 
   function editar(chave: string, e: Edicao) {
     setEdicoes((prev) => {
@@ -109,6 +122,8 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
   async function salvar() {
     if (!vigencia) { toast.error("Informe a Vigência."); return; }
     if (!selecionadas.length) { toast.error("Marque pelo menos uma linha."); return; }
+    const semDia = selecionadas.filter((x) => !x.diaTipo.trim());
+    if (semDia.length) { toast.error(`Escolha o Dia tipo — falta em: ${semDia.map((x) => x.linha).join(", ")}`); return; }
     const semVersao = selecionadas.filter((x) => x.nVersao == null || !x.linha.trim());
     if (semVersao.length) {
       toast.error(`Linha e nº da versão são obrigatórios — confira: ${semVersao.map((x) => x.linha || "(sem linha)").join(", ")}`);
@@ -196,7 +211,20 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex flex-col gap-1 md:col-span-4">
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Dia tipo *</label>
+              <Select value={diaGeral} onValueChange={setDiaGeral}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="Escolha..." /></SelectTrigger>
+                <SelectContent>
+                  {(diaTiposQ.data ?? []).map((d) => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+                  <SelectItem value={DIA_NOVO}>+ Novo dia tipo...</SelectItem>
+                </SelectContent>
+              </Select>
+              {diaGeral === DIA_NOVO && (
+                <Input value={diaGeralNovo} onChange={(e) => setDiaGeralNovo(e.target.value)} placeholder="Nome do novo dia tipo" className="h-8 text-xs" autoFocus />
+              )}
+            </div>
+            <div className="flex flex-col gap-1 md:col-span-3">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Descrição geral (vai no início de todas)</label>
               <Input value={descricao} onChange={(e) => setDescricao(e.target.value)} placeholder="Ex.: Programação de férias julho de 2026." className="h-8 text-xs" />
             </div>
@@ -245,7 +273,13 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
                 </div>
                 <div className="flex flex-col gap-1">
                   <span className="text-[10px] text-muted-foreground">Dia tipo</span>
-                  <Input value={x.diaTipo} onChange={(e) => editar(x.r.chave, { diaTipo: e.target.value })} className="h-7 text-xs" />
+                  <Select value={x.diaTipo} onValueChange={(v) => editar(x.r.chave, { diaTipo: v })}>
+                    <SelectTrigger className="h-7 text-xs"><SelectValue placeholder="Escolha..." /></SelectTrigger>
+                    <SelectContent>
+                      {opcoesDia.map((d) => <SelectItem key={d} value={d}>{d}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  {x.r.diaTipo && <span className="text-[10px] text-muted-foreground truncate" title="Dia tipo das viagens da Proposta">viagens: {x.r.diaTipo}</span>}
                 </div>
                 <div className="flex flex-col gap-1">
                   <span className="text-[10px] text-muted-foreground" title={x.r.versaoTexto}>Nº versão</span>
