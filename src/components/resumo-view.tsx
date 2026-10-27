@@ -7,7 +7,7 @@ import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
 import {
   buildServiceUnits, aggregateByGroup, aggregateByLinha, dominantLinha, detectTUIncompletos, validarConsistenciaFrota,
   type ViagemLite, type AggRow, type ServiceUnit, type CriterioLinha,
-  chaveUnidade,
+  chaveUnidade, ehPartida, ehViagemComercial,
 } from "@/lib/resumo";
 import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
 import { jornadasCompletas, chaveUnidadeJornada, type JornadaServico, linhasParaJornada } from "@/lib/jornada";
@@ -254,7 +254,7 @@ export function ResumoView({ mode }: { mode: Mode }) {
     const tally = new Map<string, Map<string, number>>();
     for (const v of filtered) {
       const trechoKey = `${normKey(v.origem)}|${normKey(v.destino)}`;
-      const ehComercialIda = (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL"
+      const ehComercialIda = ehViagemComercial(v)
         && (v.sentido ?? "").trim().toUpperCase() === "IDA";
       const peso = ehComercialIda ? 1000 : 1; // garante prioridade sem descartar o resto
       const m = tally.get(v.linha) ?? new Map<string, number>();
@@ -578,7 +578,7 @@ const totals = useMemo(() => {
     for (const v of filtered) {
       const e = resolveEmpresaViagem(v, linhaMap, empresaOverrideMap) || "Sem empresa";
       if (!m.has(e)) m.set(e, { partidas: 0, km: 0, servicos: new Set(), dir: 0, tu: 0, veiculos: new Set() });
-      if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(e)!.partidas += 1;
+      if (ehPartida(v)) m.get(e)!.partidas += 1;
       m.get(e)!.km += kmFn(v);
     }
     const custoMap = custoPorChave((j) => empresaPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.empresa || "Sem empresa");
@@ -602,7 +602,7 @@ const totals = useMemo(() => {
     for (const v of filtered) {
       const un = resolveUnidadeViagem(v, linhaMap, empresaOverrideMap) || "Sem unidade";
       if (!m.has(un)) m.set(un, { partidas: 0, km: 0, servicos: new Set(), dir: 0, tu: 0, veiculos: new Set() });
-      if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(un)!.partidas += 1;
+      if (ehPartida(v)) m.get(un)!.partidas += 1;
       m.get(un)!.km += kmFn(v);
     }
     const custoMap = custoPorChave((j) => unidadePorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.unidade || "Sem unidade");
@@ -632,7 +632,7 @@ const totals = useMemo(() => {
     for (const v of filtered) {
       const grupo = resolveGrupoViagem(v, linhaMap, empresaOverrideMap) || "Sem grupo";
       if (!m.has(grupo)) m.set(grupo, { partidas: 0, km: 0, servicos: new Set(), dir: 0, tu: 0, veiculos: new Set() });
-      if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(grupo)!.partidas += 1;
+      if (ehPartida(v)) m.get(grupo)!.partidas += 1;
       m.get(grupo)!.km += kmFn(v);
     }
     const custoMap = custoPorChave((j) => grupoPorServico.get(j.vehicleKey) || linhaMap.get(j.linha)?.ordem || "Sem grupo");

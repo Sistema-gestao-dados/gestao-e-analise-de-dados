@@ -28,7 +28,9 @@ Armazenado em `viagens.tipo_servico` (text, valores `"TU"`/`"DIR"`).
   (já somando prestação de contas) e início do 2º (já subtraindo
   antecipação). Mínimo exigido 180 min (3h), crítico abaixo de 120 min (2h).
 - Na importação EasyBus, o grupo/turno vira TU automaticamente se alguma
-  viagem tiver "Intra-jorn" no meio; senão vira DIR.
+  viagem tiver "Intra-jorn" no meio; senão vira DIR. O TU sempre começa no
+  T1 (mesmo que o bloco do arquivo seja "11.2"), cada "Intra-jorn" abre o
+  turno seguinte, e a ordem das viagens respeita a virada de meia-noite.
 - Nos resumos, TU é um bucket próprio (`"TU"`), chave
   `versao||dia||servico||TU` — uma unidade de serviço só.
 
@@ -43,6 +45,16 @@ Armazenado em `viagens.tipo_servico` (text, valores `"TU"`/`"DIR"`).
   Comparativo).
 - Flags relacionadas em `classificacao_operacional`: `tem_direto`, `tem_tu`,
   `tem_rendicao`, `tem_aproveitamento`.
+
+## Partida e viagem comercial
+
+**Deslocamento nunca é partida.** Viagem comercial = Movimento "Comercial"
+**e** Categoria diferente de "Deslocamento" (o TXT do GPS pode trazer
+Movimento 10/Comercial com Categoria 0/Deslocamento — isso é deslocamento).
+Partida = viagem comercial com horário de partida. Regra única em
+`ehViagemComercial()`/`ehPartida()` (`src/lib/resumo.ts`), usada na contagem
+de partidas de todas as telas, na linha dominante do serviço e na origem da
+frota — não repetir o teste "à mão".
 
 Chave de agrupamento de serviço em ambos os casos: `versao||tipo||servico`
 (isola `DIR#N` de `TU#N`), e na Jornada inclui também o dia tipo:
@@ -138,9 +150,11 @@ Onde é armazenado:
 - `dia_tipo_heranca` (`tipo_dia` PK, `tipo_dia_pai`) — registra de qual dia
   tipo "pai" (Dias úteis/Sábado/Domingo) um dia tipo novo (ex. "Feriado SG
   22-09-26") herdou o comportamento (grupos de linha), definido no wizard
-  `DiaTipoMapper`. Usado no Relatório Comparativo para decidir se uma linha
-  "sem dado" no dia novo deve repetir os dados do pai — olhando o **grupo de
-  linha inteiro**, não a linha isolada.
+  `DiaTipoMapper`. O Relatório Comparativo **não** usa mais essa tabela pra
+  "repetir" linha sem dado: repete a partir do dia tipo da **Proposta 1
+  (Atual)** como está nos filtros (com "Dia tipo por categoria", o dia de
+  cada linha), olhando o **grupo de linha inteiro**, e ordena por Grupo de
+  Linha sempre pelo cadastro do dia da Proposta 1.
 - `historico_reprogramacao.dia_tipo` + tabela auxiliar `historico_dia_tipos`
   — vocabulário livre e independente, usado só no módulo Histórico
   (`/historico-*`) para registrar/filtrar reprogramações por dia tipo.

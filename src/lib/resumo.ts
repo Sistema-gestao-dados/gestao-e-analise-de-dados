@@ -92,6 +92,21 @@ export function normalizarTurno(t: string | null | undefined): string {
   return /^\d+$/.test(s) ? String(Number(s)) : s;
 }
 
+/** Viagem comercial de verdade: Movimento "Comercial" e Categoria que NÃO
+ *  seja "Deslocamento". O TXT do GPS pode trazer Movimento 10 (Comercial)
+ *  com Categoria 0 (Deslocamento) — isso é deslocamento, não viagem. */
+export function ehViagemComercial(v: { tipo_movimento?: string | null; categoria_movimento?: string | null }): boolean {
+  return (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL"
+    && (v.categoria_movimento ?? "").trim().toUpperCase() !== "DESLOCAMENTO";
+}
+
+/** Partida = viagem comercial (ver ehViagemComercial) com horário de
+ *  partida. Deslocamento nunca é partida. Regra ÚNICA pra contagem de
+ *  partidas, linha dominante do serviço e origem da frota. */
+export function ehPartida(v: { tipo_movimento?: string | null; categoria_movimento?: string | null; partida?: string | null }): boolean {
+  return ehViagemComercial(v) && Boolean(v.partida?.trim());
+}
+
 function unitKey(v: ViagemLite): { key: string; bucket: Bucket } | null {
   const ts = (v.tipo_servico ?? "").toUpperCase();
   const sv = v.servico ?? "";
@@ -183,7 +198,7 @@ export function buildServiceUnits(
       units.set(k.key, u);
     }
     u.viagensIds.push(v.id);
-    const isPartida = (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && Boolean(v.partida);
+    const isPartida = ehPartida(v);
     if (isPartida) {
       u.partidasCount += 1;
       u.partidasPorLinha.set(v.linha, (u.partidasPorLinha.get(v.linha) ?? 0) + 1);
@@ -394,11 +409,7 @@ export function vehicleOrigemLinha(
   for (const [vk, trips] of porVeiculo) {
     // Só PARTIDAS comerciais efetivas entram na contagem de predominância —
     // viagens sem horário de partida não representam partida programada.
-    const comerciais = trips.filter((v) =>
-      (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL"
-      && (v.categoria_movimento ?? "").trim().toUpperCase() !== "DESLOCAMENTO"
-      && Boolean(v.partida)
-    );
+    const comerciais = trips.filter(ehPartida);
     if (!comerciais.length) continue;
 
     if (criterio === "primeira_partida") {
@@ -531,7 +542,10 @@ export function aggregateByLinha(
 /**
  * Indicadores de Aproveitamento por linha, exigidos pela regra de Frota:
  *   - recebido: veículos ORIUNDOS de outra linha que rodaram nesta.
- *   - cedido: veículos DESTA linha que rodaram em outras.
+ *   - cedido: cessões DESTA linha pra outras — conta 1 por (veículo, outra
+ *     linha): um carro que rodou em 2 outras linhas conta 2. Assim a soma
+ *     de "cedido" bate com a soma de "recebido". Veículos (sem repetir) =
+ *     "compartilhados".
  *   - exclusivos: veículos que só rodaram na própria linha de origem.
  *   - compartilhados: veículos da linha que fizeram aproveitamento em outra.
  */

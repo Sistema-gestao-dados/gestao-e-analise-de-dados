@@ -19,6 +19,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { MultiSelect } from "@/components/multi-select";
+import type { CriterioLinha } from "@/lib/resumo";
 import { useAuditView } from "@/lib/use-audit-view";
 import { useAcessoDados, cadastroParaOpcoes } from "@/lib/acesso";
 import { AlertTriangle, AlertCircle, CheckCircle2, Timer, ArrowLeft } from "lucide-react";
@@ -74,11 +75,15 @@ function IntraJornadaPage() {
   const [fGrupoOrdem, setFGrupoOrdem] = usePersistentState("intra.fGrupoOrdem", "__all");
   const [fClasse, setFClasse] = usePersistentState("intra.fClasse", "__all");
   const [fJanela, setFJanela] = usePersistentState<"__all" | "fora">("intra.fJanela", "__all");
+  // Regra que decide a LINHA de cada jornada — a mesma opção do Resumo
+  // ("Regra de contagem de serviço"). Sem ela a linha aqui era sempre a
+  // predominante e podia não bater com o Resumo em "Primeira partida".
+  const [fCriterio, setFCriterio] = usePersistentState<CriterioLinha>("intra.fCriterio", "predominancia");
   const [mostrarCusto, setMostrarCusto] = usePersistentState("intra.mostrarCusto", false);
   const [pageSize, setPageSize] = usePersistentState("intra.pageSize", 50);
   const [page, setPage] = useState(0);
   const [somenteAtivos, setSomenteAtivos] = usePersistentState("intra.somenteAtivos", false);
-  type Snap = { dia: string; versao: string; linha: string[]; unidade: string; grupoOrdem: string };
+  type Snap = { dia: string; versao: string; linha: string[]; unidade: string; grupoOrdem: string; criterio?: CriterioLinha };
   const [applied, setApplied] = useState<Snap | null>({ dia: "__all", versao: "__all", linha: [], unidade: "__all", grupoOrdem: "__all" });
 
   const viagensQ = useQuery({ queryKey: ["viagens-all"], queryFn: fetchAllViagens });
@@ -139,7 +144,7 @@ function IntraJornadaPage() {
   const { params: custoParams } = useParametrosCusto();
   const intras = useMemo(() => {
     if (!applied) return [];
-    const jornadas = buildJornadas(filtered, linhasParaJornada(linhas, custoParams?.somarAntecPrest)).filter((j) => j.tipoServico === "TU" && !j.incompleto && passaFiltroJornada(j));
+    const jornadas = buildJornadas(filtered, linhasParaJornada(linhas, custoParams?.somarAntecPrest), applied.criterio).filter((j) => j.tipoServico === "TU" && !j.incompleto && passaFiltroJornada(j));
     return jornadas
       .map((j) => ({ jornada: j, intraMin: intraJornadaMin(j) }))
       .filter((x): x is { jornada: JornadaServico; intraMin: number } => x.intraMin != null)
@@ -205,7 +210,7 @@ function IntraJornadaPage() {
   );
 
   function aplicarFiltros() {
-    setApplied({ dia: fDia, versao: fVersao, linha: fLinha, unidade: fUnidade, grupoOrdem: fGrupoOrdem });
+    setApplied({ dia: fDia, versao: fVersao, linha: fLinha, unidade: fUnidade, grupoOrdem: fGrupoOrdem, criterio: fCriterio });
   }
 
   const loading = viagensQ.isLoading || linhasQ.isLoading;
@@ -228,6 +233,16 @@ function IntraJornadaPage() {
             Somente projeto ativo
           </label>
           <FiltroSelect label="Dia Tipo" value={fDia} onChange={setFDia} options={opts.dia} />
+          <div className="flex flex-col gap-1 min-w-[230px]">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Regra da linha do serviço</label>
+            <Select value={fCriterio} onValueChange={(v) => setFCriterio(v as CriterioLinha)}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="predominancia">Predominância (mais partidas na linha)</SelectItem>
+                <SelectItem value="primeira_partida">Primeira partida do serviço</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <FiltroSelect label="Versão" value={fVersao} onChange={setFVersao} options={opts.versao} />
           <MultiSelect label="Linha" values={fLinha} onChange={setFLinha} options={opts.linha} className="w-56" />
           <FiltroSelect label="Unidade" value={fUnidade} onChange={setFUnidade} options={opts.unidade} />

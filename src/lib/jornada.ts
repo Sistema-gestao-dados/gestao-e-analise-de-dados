@@ -22,7 +22,7 @@
 
 import type { Linha } from "@/lib/data";
 import type { ViagemLite, ServiceUnit, CriterioLinha } from "@/lib/resumo";
-import { dominantLinha, chaveUnidadeViagem, ajustarVirada, normalizarTurno } from "@/lib/resumo";
+import { dominantLinha, chaveUnidadeViagem, ajustarVirada, normalizarTurno, ehPartida } from "@/lib/resumo";
 
 export const LIMITE_DIR_MIN = 420;    // 7h — motorista DIR
 export const LIMITE_TU_MIN = 504;     // 8h24 — motorista TU
@@ -85,8 +85,8 @@ export type JornadaServico = {
   minutosTotal: number;
   limiteMin: number;
   horasExtras: number;
-  acimaDe7h: boolean;
   acimaDe9h: boolean;
+  acimaDe10h: boolean;
   incompleto: boolean;
   semCadastroLinha: boolean;
 };
@@ -217,7 +217,7 @@ function linhaDominanteDe(viagens: ViagemLite[], criterio: CriterioLinha): strin
   const brutas: { linha: string; min: number }[] = [];
   for (const v of viagens) {
     viagensPorLinha.set(v.linha, (viagensPorLinha.get(v.linha) ?? 0) + 1);
-    const isPartida = (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && Boolean(v.partida);
+    const isPartida = ehPartida(v);
     if (isPartida) {
       partidasPorLinha.set(v.linha, (partidasPorLinha.get(v.linha) ?? 0) + 1);
       const min = parseHHMM(v.partida);
@@ -341,8 +341,8 @@ export function buildJornadas(
         vehicleKey, bucket: "TU", turnos: t12,
         minutosTotal, limiteMin: lim,
         horasExtras: Math.max(0, minutosTotal - lim),
-        acimaDe7h: minutosTotal > ALERTA_MIN,
-        acimaDe9h: minutosTotal > CRITICO_MIN,
+        acimaDe9h: minutosTotal > ALERTA_MIN,
+        acimaDe10h: minutosTotal > CRITICO_MIN,
         incompleto,
         semCadastroLinha: !linhaMap.has(linhaTU),
       });
@@ -355,8 +355,8 @@ export function buildJornadas(
           vehicleKey, bucket, turnos: [tj],
           minutosTotal: tj.minutos, limiteMin: lim,
           horasExtras: Math.max(0, tj.minutos - lim),
-          acimaDe7h: tj.minutos > ALERTA_MIN,
-          acimaDe9h: tj.minutos > CRITICO_MIN,
+          acimaDe9h: tj.minutos > ALERTA_MIN,
+          acimaDe10h: tj.minutos > CRITICO_MIN,
           incompleto: false,
           semCadastroLinha: !linhaMap.has(tj.linha),
         });
@@ -373,8 +373,8 @@ export function jornadaTotais(js: JornadaServico[]) {
     totalJornadas: validas.length,
     minutosTotal: validas.reduce((s, j) => s + j.minutosTotal, 0),
     horasExtrasTotal: validas.reduce((s, j) => s + j.horasExtras, 0),
-    acimaDe7h: validas.filter((j) => j.acimaDe7h && !j.acimaDe9h).length,
-    acimaDe9h: validas.filter((j) => j.acimaDe9h).length,
+    acimaDe9h: validas.filter((j) => j.acimaDe9h && !j.acimaDe10h).length,
+    acimaDe10h: validas.filter((j) => j.acimaDe10h).length,
     incompletas: js.length - validas.length,
     semCadastroLinha: js.filter((j) => j.semCadastroLinha).length,
   };

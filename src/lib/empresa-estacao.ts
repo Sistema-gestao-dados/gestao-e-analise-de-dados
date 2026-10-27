@@ -101,7 +101,11 @@ function buildPorServicoGenerico(
   const out = new Map<string, string>();
   for (const [key, m] of tally) {
     let best: string | null = null, bestN = -1;
-    for (const [val, n] of m) if (n > bestN) { best = val; bestN = n; }
+    // Empate: menor valor em ordem alfabética — antes ficava o 1º visto, e
+    // o resultado mudava conforme a ordem em que as viagens chegavam.
+    for (const [val, n] of m) {
+      if (n > bestN || (n === bestN && best != null && val.localeCompare(best, "pt-BR") < 0)) { best = val; bestN = n; }
+    }
     if (best) out.set(key, best);
   }
   return out;

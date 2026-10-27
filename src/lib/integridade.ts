@@ -2,10 +2,10 @@
 // inconsistências que, se não corrigidas, distorcem os relatórios (KM,
 // jornada, frota, partidas). Não altera nada, só diagnostica.
 
-import type { ViagemLite } from "./resumo";
-import type { Linha, ParametroMulti } from "./data";
+import { ehViagemComercial, type ViagemLite } from "./resumo";
+import type { Linha, ParametroKm, ParametroMulti } from "./data";
 import type { KmMaps } from "./km";
-import { viagemKmResult } from "./km";
+import { viagemKmResult, normKey } from "./km";
 import { buildJornadas } from "./jornada";
 import type { Importacao } from "./data";
 
@@ -31,8 +31,9 @@ export function runVerificacaoIntegridade(args: {
   kmMaps: KmMaps;
   importacoes: Importacao[];
   multi?: ParametroMulti[];
+  km?: ParametroKm[];
 }): AlertaIntegridade[] {
-  const { viagens, linhas, kmMaps, importacoes, multi } = args;
+  const { viagens, linhas, kmMaps, importacoes, multi, km } = args;
   const linhaMap = new Map(linhas.map((l) => [l.linha, l]));
   const alertas: AlertaIntegridade[] = [];
   const amostra = (items: string[]) => items.slice(0, 20);
@@ -96,7 +97,7 @@ export function runVerificacaoIntegridade(args: {
   // 3) Viagens comerciais sem serviço ou turno
   {
     const semServicoTurno = viagens.filter((v) =>
-      (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && (!v.servico?.trim() || !v.turno?.trim()),
+      ehViagemComercial(v) && (!v.servico?.trim() || !v.turno?.trim()),
     );
     if (semServicoTurno.length > 0) {
       alertas.push({
@@ -113,7 +114,7 @@ export function runVerificacaoIntegridade(args: {
 
   // 4) Viagens comerciais sem horário de partida
   {
-    const semPartida = viagens.filter((v) => (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && !v.partida?.trim());
+    const semPartida = viagens.filter((v) => ehViagemComercial(v) && !v.partida?.trim());
     if (semPartida.length > 0) {
       alertas.push({
         id: "sem_partida",
@@ -146,6 +147,30 @@ export function runVerificacaoIntegridade(args: {
         descricao: "Essas viagens são contadas com 0 km no total de quilometragem, subestimando o resultado de todos os relatórios.",
         quantidade: total,
         amostra: amostra(Array.from(semKm, ([trecho, n]) => `${trecho} — ${n} viagem(ns)`)),
+      });
+    }
+  }
+
+  // 5b) Trecho de KM cadastrado mais de uma vez (mesma linha/origem/destino,
+  // sem diferenciar acento/maiúscula) — o cálculo usa só um deles (o último
+  // lido), então um valor diferente no outro fica escondido.
+  if (km) {
+    const porTrecho = new Map<string, ParametroKm[]>();
+    for (const k of km) {
+      const key = `${normKey(k.linha)}|${normKey(k.origem)}|${normKey(k.destino)}`;
+      if (!porTrecho.has(key)) porTrecho.set(key, []);
+      porTrecho.get(key)!.push(k);
+    }
+    const dup = Array.from(porTrecho.values()).filter((arr) => arr.length > 1);
+    if (dup.length > 0) {
+      alertas.push({
+        id: "km_duplicado",
+        categoria: "Cadastro",
+        severidade: dup.some((arr) => new Set(arr.map((k) => Number(k.km))).size > 1) ? "critico" : "atencao",
+        titulo: "Trecho de KM cadastrado mais de uma vez",
+        descricao: "O mesmo trecho (linha + origem + destino) aparece repetido no Cadastro de KM. O cálculo usa só um dos valores — se eles forem diferentes, o KM dos relatórios pode estar errado. Deixe um cadastro só por trecho em /cadastro-km.",
+        quantidade: dup.length,
+        amostra: amostra(dup.map((arr) => `Linha ${arr[0].linha} — ${arr[0].origem} → ${arr[0].destino}: ${arr.map((k) => `${k.km} km`).join(" / ")}`)),
       });
     }
   }

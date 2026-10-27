@@ -125,8 +125,8 @@ export type ResumoLinha = {
  * independente de sentido).
  *
  * Pico = banda(s) de MENOR intervalo entre as partidas de Ida (maior
- * frequência = horário de pico); se houver mais de uma banda empatada no
- * mínimo (ex.: pico da manhã + pico da tarde), tira a média delas.
+ * frequência = horário de pico). Pico da manhã e da tarde empatados no
+ * mínimo têm o mesmo intervalo, então o valor é esse mínimo.
  * Fora Pico (entrepico) = a próxima faixa de frequência acima do pico (o
  * 2º menor intervalo distinto entre as bandas) — não "a banda que dura
  * mais tempo", que podia pegar a redução do fim da noite (que tende a ter
@@ -165,16 +165,11 @@ export function calcularResumoLinha(
   let intervaloForaPico: number | null = null;
   if (bandas.length > 0) {
     const minIntervalo = Math.min(...bandas.map((b) => b.intervalo));
-    const bandasPico = bandas.filter((b) => b.intervalo === minIntervalo);
-    intervaloPico = Math.ceil(bandasPico.reduce((s, b) => s + b.intervalo, 0) / bandasPico.length);
+    intervaloPico = minIntervalo;
 
     const valoresAcimaDoPico = bandas.map((b) => b.intervalo).filter((v) => v > minIntervalo);
     if (valoresAcimaDoPico.length > 0) {
-      const segundoMenor = Math.min(...valoresAcimaDoPico);
-      const bandasForaPico = bandas.filter((b) => b.intervalo === segundoMenor);
-      intervaloForaPico = Math.ceil(
-        bandasForaPico.reduce((s, b) => s + b.intervalo, 0) / bandasForaPico.length,
-      );
+      intervaloForaPico = Math.min(...valoresAcimaDoPico);
     }
   }
 

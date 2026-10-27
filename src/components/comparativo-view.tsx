@@ -11,7 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 import { fetchLinhas, fetchKm, fetchMulti, fetchEmpresaEstacao, type Linha, type ParametroMulti } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import {
-  buildServiceUnits, aggregateByLinha, aggregateByGroup, dominantLinha, chaveUnidadeViagem,
+  buildServiceUnits, aggregateByLinha, aggregateByGroup, dominantLinha, chaveUnidadeViagem, ehPartida,
   type ViagemLite, type AggRow, type CriterioLinha, type ServiceUnit,
 } from "@/lib/resumo";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
@@ -690,7 +690,7 @@ export function ComparativoView() {
     for (const v of viagens) {
       const k = chaveViagem(v);
       if (!m.has(k)) m.set(k, { partidas: 0, km: 0, servicos: new Set(), dir: 0, tu: 0, veiculos: new Set() });
-      if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(k)!.partidas += 1;
+      if (ehPartida(v)) m.get(k)!.partidas += 1;
       m.get(k)!.km += kmFn(v);
     }
     const custoPorChave = new Map<string, number>();

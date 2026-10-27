@@ -4,7 +4,7 @@ import { useMemo, useCallback } from "react";
 import { fetchLinhas, fetchKm, fetchMulti, fetchEmpresaEstacao } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import { buildKmMaps, viagemKm, viagemKmResult, fmtKm, fmtInt } from "@/lib/km";
-import { buildServiceUnits, dominantLinha, vehicleOrigemLinha, type ViagemLite } from "@/lib/resumo";
+import { buildServiceUnits, dominantLinha, vehicleOrigemLinha, ehPartida, type ViagemLite } from "@/lib/resumo";
 import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, resolveUnidadeViagem, buildEmpresaPorServico, buildGrupoPorServico, buildUnidadePorServico } from "@/lib/empresa-estacao";
 import { jornadasCompletas, type JornadaServico, linhasParaJornada } from "@/lib/jornada";
 import { fetchProjetosAtivos, filterViagensAtivas } from "@/lib/projeto-ativo";
@@ -391,7 +391,7 @@ function DashOperacional() {
     for (const v of filtered) {
       const k = chaveViagem(v as any);
       if (!m.has(k)) m.set(k, { partidas: 0, km: 0, servicos: new Set(), veiculos: new Set() });
-      if ((v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida) m.get(k)!.partidas += 1;
+      if (ehPartida(v)) m.get(k)!.partidas += 1;
       m.get(k)!.km += viagemKm(v, kmMaps);
     }
     const custoPorChave = new Map<string, number>();
@@ -460,7 +460,7 @@ function DashOperacional() {
       linhas: linhasUnicas.size,
       empresas: empresasUnicas.size,
       kmTot: kmTotal,
-      partidas: comerciais.filter((v) => (v.tipo_movimento ?? "").trim().toUpperCase() === "COMERCIAL" && v.partida).length,
+      partidas: comerciais.filter(ehPartida).length,
     };
   }, [comerciais, linhaMap, kmTotal, units, empresaOverrideMap]);
 
@@ -560,14 +560,14 @@ function DashOperacional() {
   const jornada9hDias = useMemo(() => {
     const s = new Set<string>();
     // TU incompleto fica fora (mesma regra dos totais da tela Jornada).
-    jornadasParaCusto.forEach((j) => { if (j.acimaDe9h && !j.incompleto) s.add(versaoParaDia.get(j.versao) || "Sem dia tipo"); });
+    jornadasParaCusto.forEach((j) => { if (j.acimaDe10h && !j.incompleto) s.add(versaoParaDia.get(j.versao) || "Sem dia tipo"); });
     return ordenarDias(s);
   }, [jornadasParaCusto, versaoParaDia]);
 
   const linhasJornada9h = useMemo(() => {
     const m = new Map<string, Record<string, number> & { __total: number }>();
     jornadasParaCusto.forEach((j) => {
-      if (!j.acimaDe9h || j.incompleto) return;
+      if (!j.acimaDe10h || j.incompleto) return;
       const dia = versaoParaDia.get(j.versao) || "Sem dia tipo";
       if (!m.has(j.linha)) m.set(j.linha, { __total: 0 } as any);
       const row = m.get(j.linha)!;

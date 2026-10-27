@@ -28,6 +28,7 @@ import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { PdfPreviewDialog, type PdfOrientation } from "@/components/pdf-preview-dialog";
+import type { CriterioLinha } from "@/lib/resumo";
 import { usePersistentState } from "@/hooks/use-persistent-state";
 
 export const Route = createFileRoute("/jornada")({
@@ -77,11 +78,15 @@ function JornadaPage() {
   const [fGrupoOrdem, setFGrupoOrdem] = usePersistentState("jornada.fGrupoOrdem", "__all");
   // "Jornada acima de" (HH:MM digitado) — vazio = sem esse filtro.
   const [fAcimaDe, setFAcimaDe] = usePersistentState("jornada.fAcimaDe", "");
+  // Regra que decide a LINHA de cada jornada — a mesma opção do Resumo
+  // ("Regra de contagem de serviço"). Sem ela a linha aqui era sempre a
+  // predominante e podia não bater com o Resumo em "Primeira partida".
+  const [fCriterio, setFCriterio] = usePersistentState<CriterioLinha>("jornada.fCriterio", "predominancia");
   const [modal, setModal] = useState<null | "7" | "9" | "he" | "sem_param">(null);
   const [pageSize, setPageSize] = usePersistentState("jornada.pageSize", 50);
   const [page, setPage] = useState(0);
   const [somenteAtivos, setSomenteAtivos] = usePersistentState("jornada.somenteAtivos", false);
-  type Snap = { dia: string; versao: string; tipo: string; linha: string[]; unidade: string; grupoOrdem: string; acimaDe?: string };
+  type Snap = { dia: string; versao: string; tipo: string; linha: string[]; unidade: string; grupoOrdem: string; acimaDe?: string; criterio?: CriterioLinha };
   // Aplica filtros automaticamente ao abrir (usa cache se houver, sem recarregar)
   const [applied, setApplied] = useState<Snap | null>({ dia: "__all", versao: "__all", tipo: "__all", linha: [], unidade: "__all", grupoOrdem: "__all" });
 
@@ -142,7 +147,7 @@ function JornadaPage() {
   const { params: custoParams } = useParametrosCusto();
   const jornadas = useMemo(() => {
     if (!applied) return [];
-    let all = buildJornadas(filtered, linhasParaJornada(linhas, custoParams?.somarAntecPrest)).filter(passaFiltroJornada);
+    let all = buildJornadas(filtered, linhasParaJornada(linhas, custoParams?.somarAntecPrest), applied.criterio).filter(passaFiltroJornada);
     if (applied.tipo === "TU") all = all.filter((j) => j.tipoServico === "TU");
     else if (applied.tipo === "DIR") all = all.filter((j) => j.tipoServico === "DIR");
     // "Jornada acima de": só jornadas MAIORES que a hora digitada (TU
@@ -255,8 +260,8 @@ function JornadaPage() {
     // Mesma regra dos indicadores (jornadaTotais): TU incompleto não entra
     // nas listas de >9h / >10h / hora extra — senão a lista tinha mais itens
     // que o número do indicador que abriu ela.
-    if (modal === "7") return jornadas.filter((j) => !j.incompleto && j.acimaDe7h && !j.acimaDe9h);
-    if (modal === "9") return jornadas.filter((j) => !j.incompleto && j.acimaDe9h);
+    if (modal === "7") return jornadas.filter((j) => !j.incompleto && j.acimaDe9h && !j.acimaDe10h);
+    if (modal === "9") return jornadas.filter((j) => !j.incompleto && j.acimaDe10h);
     if (modal === "sem_param") return jornadas.filter((j) => j.semCadastroLinha);
     return jornadas.filter((j) => !j.incompleto && j.horasExtras > 0);
   }, [jornadas, modal]);
@@ -271,7 +276,7 @@ function JornadaPage() {
       Turnos: j.turnos.map((t) => `T${t.turno} ${t.primeiraPartida}->${t.ultimaChegada}`).join(" | "),
       "Jornada (h:mm)": fmtDur(j.minutosTotal),
       "Horas Extras": fmtDur(j.horasExtras),
-      Alerta: j.acimaDe9h ? ">10h" : j.acimaDe7h ? ">9h" : "OK",
+      Alerta: j.acimaDe10h ? ">10h" : j.acimaDe9h ? ">9h" : "OK",
     }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Jornada");
@@ -313,8 +318,8 @@ function JornadaPage() {
       "Fim": j.turnos.map((t) => `T${t.turno} ${String(Math.floor(((t.fimMin%1440)+1440)%1440/60)).padStart(2,"0")}:${String(((t.fimMin%1440)+1440)%1440%60).padStart(2,"0")}`).join(" | "),
       "Jornada (h:mm)": fmtDur(j.minutosTotal),
       "Horas Extras": fmtDur(j.horasExtras),
-      "> 9h": j.acimaDe7h ? "Sim" : "",
-      "> 10h": j.acimaDe9h ? "Sim" : "",
+      "> 9h": j.acimaDe9h ? "Sim" : "",
+      "> 10h": j.acimaDe10h ? "Sim" : "",
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
     XLSX.utils.book_append_sheet(wb, ws, "Jornada");
@@ -328,8 +333,8 @@ function JornadaPage() {
       ["Jornadas", totais.totalJornadas],
       ["Jornada total (h:mm)", fmtDur(totais.minutosTotal)],
       ["Horas extras (h:mm)", fmtDur(totais.horasExtrasTotal)],
-      ["Acima de 9h", totais.acimaDe7h],
-      ["Acima de 10h (crítico)", totais.acimaDe9h],
+      ["Acima de 9h", totais.acimaDe9h],
+      ["Acima de 10h (crítico)", totais.acimaDe10h],
     ];
     if (resumoAcima && acimaMinAplicado != null) {
       resumoAoa.push([], [`Jornadas acima de ${fmtDur(acimaMinAplicado)}`],
@@ -362,7 +367,7 @@ function JornadaPage() {
 
     const periodo = periodoTexto();
     const kpiTxt = `Jornadas ${totais.totalJornadas.toLocaleString("pt-BR")}  ·  Jornada total ${fmtDur(totais.minutosTotal)}  ·  ` +
-      `Horas extras ${fmtDur(totais.horasExtrasTotal)}  ·  Acima de 9h ${totais.acimaDe7h}  ·  Acima de 10h (crítico) ${totais.acimaDe9h}`;
+      `Horas extras ${fmtDur(totais.horasExtrasTotal)}  ·  Acima de 9h ${totais.acimaDe9h}  ·  Acima de 10h (crítico) ${totais.acimaDe10h}`;
 
     function drawHeader(d: InstanceType<typeof jsPDF>) {
       d.setTextColor(37, 99, 235); d.setFont("helvetica", "bold"); d.setFontSize(12);
@@ -383,7 +388,7 @@ function JornadaPage() {
       j.turnos.map((t) => `T${t.turno} ${t.primeiraPartida}→${t.ultimaChegada}`).join(" · "),
       fmtDur(j.minutosTotal),
       j.horasExtras > 0 ? fmtDur(j.horasExtras) : "—",
-      j.acimaDe9h ? ">10h" : j.acimaDe7h ? ">9h" : "OK",
+      j.acimaDe10h ? ">10h" : j.acimaDe9h ? ">9h" : "OK",
     ]);
     const footRow = ["TOTAL", "", "", `${jornadas.length} serviço(s)`, fmtDur(totais.minutosTotal), fmtDur(totais.horasExtrasTotal), ""];
     const headRow = ["Linha", "Tipo", "Serviço", "Turnos", "Jornada", "HE", "Alerta"];
@@ -558,7 +563,7 @@ function JornadaPage() {
         <div style={{ fontWeight: 700, fontSize: "14pt", color: "#2563eb" }}>JORNADA DE TRABALHO</div>
         <div style={{ fontSize: "8pt", color: "#555", marginBottom: "6pt" }}>
           Gerado em {new Date().toLocaleString("pt-BR")} — {jornadas.length} serviço(s) · Jornadas {totais.totalJornadas.toLocaleString("pt-BR")}
-          {" · "}Total {fmtDur(totais.minutosTotal)} · HE {fmtDur(totais.horasExtrasTotal)} · &gt;9h {totais.acimaDe7h} · &gt;10h {totais.acimaDe9h}
+          {" · "}Total {fmtDur(totais.minutosTotal)} · HE {fmtDur(totais.horasExtrasTotal)} · &gt;9h {totais.acimaDe9h} · &gt;10h {totais.acimaDe10h}
         </div>
         <table className="print-table">
           <thead>
@@ -573,7 +578,7 @@ function JornadaPage() {
                 <td style={{ textAlign: "left" }}>{j.turnos.map((t) => `T${t.turno} ${t.primeiraPartida}→${t.ultimaChegada}`).join(" · ")}</td>
                 <td style={{ fontWeight: 600 }}>{fmtDur(j.minutosTotal)}</td>
                 <td>{j.horasExtras > 0 ? fmtDur(j.horasExtras) : "—"}</td>
-                <td>{j.acimaDe9h ? ">10h" : j.acimaDe7h ? ">9h" : "OK"}</td>
+                <td>{j.acimaDe10h ? ">10h" : j.acimaDe9h ? ">9h" : "OK"}</td>
               </tr>
             ))}
           </tbody>
@@ -661,12 +666,22 @@ function JornadaPage() {
               )}
             </div>
           </div>
+          <div className="flex flex-col gap-1 min-w-[230px]">
+            <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Regra da linha do serviço</label>
+            <Select value={fCriterio} onValueChange={(v) => setFCriterio(v as CriterioLinha)}>
+              <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="predominancia">Predominância (mais partidas na linha)</SelectItem>
+                <SelectItem value="primeira_partida">Primeira partida do serviço</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           <label className="flex items-end gap-2 text-xs cursor-pointer select-none pb-1">
             <Checkbox checked={somenteAtivos} onCheckedChange={(v) => setSomenteAtivos(!!v)} />
             Somente projetos ativos
           </label>
           <div className="ml-auto flex gap-2">
-            <Button size="sm" onClick={() => setApplied({ dia: fDia, versao: fVersao, tipo: fTipo, linha: fLinha, unidade: fUnidade, grupoOrdem: fGrupoOrdem, acimaDe: fAcimaDe })} disabled={viagensQ.isLoading || linhasQ.isLoading}>
+            <Button size="sm" onClick={() => setApplied({ dia: fDia, versao: fVersao, tipo: fTipo, linha: fLinha, unidade: fUnidade, grupoOrdem: fGrupoOrdem, acimaDe: fAcimaDe, criterio: fCriterio })} disabled={viagensQ.isLoading || linhasQ.isLoading}>
               Consultar
             </Button>
             {applied && <Button variant="outline" size="sm" onClick={() => setApplied(null)}>Limpar</Button>}
@@ -691,8 +706,8 @@ function JornadaPage() {
         <Kpi label="Jornadas" value={totais.totalJornadas.toLocaleString("pt-BR")} icon={Users} />
         <Kpi label="Jornada total" value={fmtDur(totais.minutosTotal)} icon={Clock} tone="primary" />
         <Kpi label="Horas extras" value={fmtDur(totais.horasExtrasTotal)} icon={Timer} tone="warning" onClick={() => setModal("he")} />
-        <Kpi label="Acima de 9h" value={totais.acimaDe7h} icon={TrendingUp} tone="warning" onClick={() => setModal("7")} />
-        <Kpi label="Acima de 10h (crítico)" value={totais.acimaDe9h} icon={AlertTriangle} tone="danger" onClick={() => setModal("9")} />
+        <Kpi label="Acima de 9h" value={totais.acimaDe9h} icon={TrendingUp} tone="warning" onClick={() => setModal("7")} />
+        <Kpi label="Acima de 10h (crítico)" value={totais.acimaDe10h} icon={AlertTriangle} tone="danger" onClick={() => setModal("9")} />
       </div>
 
       {(totais.incompletas > 0 || totais.semCadastroLinha > 0) && (
@@ -738,8 +753,8 @@ function JornadaPage() {
                       <TableCell className="text-right tabular-nums">{fmtMoeda(custoServico(j, custoParams))}</TableCell>
                     )}
                     <TableCell className="text-center">
-                      {j.acimaDe9h ? <Badge variant="destructive">&gt;10h</Badge>
-                        : j.acimaDe7h ? <Badge className="bg-warning text-warning-foreground">&gt;9h</Badge>
+                      {j.acimaDe10h ? <Badge variant="destructive">&gt;10h</Badge>
+                        : j.acimaDe9h ? <Badge className="bg-warning text-warning-foreground">&gt;9h</Badge>
                         : <span className="text-muted-foreground text-xs">OK</span>}
                     </TableCell>
                   </TableRow>

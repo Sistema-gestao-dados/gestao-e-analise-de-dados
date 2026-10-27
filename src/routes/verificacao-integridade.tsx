@@ -46,8 +46,9 @@ function VerificacaoIntegridadePage() {
       kmMaps,
       importacoes: importacoesQ.data ?? [],
       multi: multiQ.data ?? [],
+      km: kmQ.data ?? [],
     });
-  }, [rodou, carregando, viagensQ.data, linhasQ.data, kmMaps, importacoesQ.data, multiQ.data]);
+  }, [rodou, carregando, viagensQ.data, linhasQ.data, kmMaps, kmQ.data, importacoesQ.data, multiQ.data]);
 
   function rodar() {
     setRodou(true);

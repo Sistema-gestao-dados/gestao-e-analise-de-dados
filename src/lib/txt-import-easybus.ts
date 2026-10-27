@@ -51,6 +51,7 @@
 // -> versão = "MB22 757MU 120826V32"
 
 import { fmtHora, tempoViagem } from "./txt-import";
+import { ajustarVirada } from "./resumo";
 import type { ViagemParsed, ParseResult } from "./txt-import";
 
 function extrairVersaoDoNomeArquivo(nome: string): string | null {
@@ -172,6 +173,9 @@ export function parseTxtEasyBus(
   }
 
   const rows: ViagemParsed[] = [];
+  // Grupos TU do mesmo serviço (versão+serviço), pra numerar os turnos em
+  // sequência a partir de 1 — ver abaixo.
+  const tuPorServico = new Map<string, Bruto[][]>();
   for (const itens of porGrupo.values()) {
     const isTU = itens.some((b) => b._intraJorn);
 
@@ -182,15 +186,35 @@ export function parseTxtEasyBus(
       }
       continue;
     }
+    const k = `${versao_programacao ?? ""}|${itens[0].servico ?? ""}`;
+    if (!tuPorServico.has(k)) tuPorServico.set(k, []);
+    tuPorServico.get(k)!.push(itens);
+  }
 
-    // Grupo TU: ordena por horário e incrementa o turno a cada intervalo
-    // de intra-jornada. A viagem de intra-jornada em si não é gravada.
-    const ordenado = [...itens].sort((a, b) => minutos(a.partida) - minutos(b.partida));
-    let turnoAtual = Number(ordenado[0]?.turno) || 1;
-    for (const b of ordenado) {
-      if (b._intraJorn) { turnoAtual += 1; continue; }
-      const { _grupo, _intraJorn, ...rest } = b;
-      rows.push({ ...rest, tipo_servico: "TU", turno: String(turnoAtual) });
+  // Grupo TU: ordena por horário e incrementa o turno a cada intervalo
+  // de intra-jornada. A viagem de intra-jornada em si não é gravada.
+  //
+  // O TU SEMPRE começa no turno 1: antes a contagem partia do turno do
+  // arquivo, e um bloco "11.2" com intra virava T2+T3 — sem T1 o TU ficava
+  // "incompleto" e saía da jornada e do custo. Se o mesmo serviço tiver
+  // mais de um bloco TU (ex.: "11.1" e "11.2"), os blocos seguem na ordem
+  // do turno do arquivo e a numeração continua de onde o anterior parou.
+  //
+  // Ordem por horário com virada de meia-noite (ajustarVirada, mesma regra
+  // da jornada): pelo relógio, 00:30 vinha antes de 23:00 e o turno saía
+  // dividido no lugar errado.
+  for (const blocos of tuPorServico.values()) {
+    blocos.sort((a, b) => (Number(a[0].turno) || 0) - (Number(b[0].turno) || 0));
+    let turnoAtual = 1;
+    for (const itens of blocos) {
+      const adj = ajustarVirada(itens.filter((b) => b.partida).map((b) => minutos(b.partida)));
+      const ordenado = [...itens].sort((a, b) => adj(minutos(a.partida)) - adj(minutos(b.partida)));
+      for (const b of ordenado) {
+        if (b._intraJorn) { turnoAtual += 1; continue; }
+        const { _grupo, _intraJorn, ...rest } = b;
+        rows.push({ ...rest, tipo_servico: "TU", turno: String(turnoAtual) });
+      }
+      turnoAtual += 1;
     }
   }
 
