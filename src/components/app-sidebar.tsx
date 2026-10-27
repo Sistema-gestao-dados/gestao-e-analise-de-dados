@@ -46,6 +46,7 @@ export const groups: { label: string; items: Item[] }[] = [
       { title: "Registrar Reprogramação", url: "/historico-registrar", icon: FilePlus2, perm: "historico_reprogramacao" },
       { title: "Resumo de Reprogramações", url: "/historico-resumo", icon: TrendingUp, perm: "historico_reprogramacao" },
       { title: "Controle de Vigência", url: "/historico-vigencia", icon: CalendarClock, perm: "historico_reprogramacao" },
+      { title: "Conferência Histórico × Versões", url: "/historico-conferencia", icon: SearchCheck, perm: "historico_reprogramacao" },
       { title: "Relatório PDF", url: "/historico-relatorio", icon: FileText, perm: "historico_reprogramacao" },
       { title: "Importação Reprogramação", url: "/importacao-historico", icon: FileUp, perm: "importacao_historico_reprogramacao" },
     ],

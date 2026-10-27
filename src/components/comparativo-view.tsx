@@ -41,6 +41,8 @@ import { buildEmpresaOverrideMap, resolveEmpresaViagem, resolveGrupoViagem, reso
 import { PDF_BLUE, PDF_BLUE_LIGHT, PDF_LINE_BLUE, XLSX_BLUE, XLSX_BLUE_LIGHT, XLSX_LINE_BLUE } from "@/lib/report-style";
 import { custoServico, fmtMoeda } from "@/lib/custo";
 import { useSalarioMotorista } from "@/components/salario-motorista";
+import { LancarHistoricoDialog } from "@/components/lancar-historico-dialog";
+import type { LinhaLancamento } from "@/lib/historico-lancamento";
 
 function parseHHMM(s: string | null): number | null {
   if (!s) return null;
@@ -872,7 +874,10 @@ export function ComparativoView() {
   // mesma regra: grupo sem NENHUM dado na Proposta 2 repete o pai).
   const chavesRepetidas = agruparPorGrupo ? gruposRepetidos : linhasRepetidas;
 
-  const merged = useMemo(() => {
+  // Todas as linhas (sem o filtro "só diferenças") — `merged` filtra em cima
+  // disso; "Lançar no Histórico" usa a lista inteira (linha sem diferença =
+  // "Sem alteração").
+  const mergedTodos = useMemo(() => {
     const map = new Map<string, { linha: string; order: string; a: AggRow | null; p: AggRow | null }>();
     for (const r of atualRows) {
       map.set(r.groupKey, { linha: r.groupLabel, order: r.groupOrder, a: r, p: null });
@@ -895,7 +900,7 @@ export function ComparativoView() {
       if (cur) cur.p = paiRow;
       else map.set(chave, { linha: paiRow.groupLabel, order: paiRow.groupOrder, a: null, p: paiRow });
     }
-    let arr = Array.from(map.values()).sort((a, b) => {
+    const arr = Array.from(map.values()).sort((a, b) => {
       if (ordenarPor === "unidade") {
         const unidadeMap = agruparPorGrupo ? unidadePorGrupo : unidadePorLinha;
         const ua = unidadeMap.get(a.linha) ?? "";
@@ -912,13 +917,43 @@ export function ComparativoView() {
       if (a.order !== b.order) return a.order.localeCompare(b.order, "pt-BR", { numeric: true, sensitivity: "base" });
       return a.linha.localeCompare(b.linha);
     });
-    if (onlyDiff) {
-      arr = arr.filter(({ a, p }) =>
-        METRICS.some((m) => (a?.[m.key] as number ?? 0) !== (p?.[m.key] as number ?? 0)),
-      );
-    }
     return arr;
-  }, [atualRows, propostaRows, onlyDiff, ordenarPor, unidadePorLinha, unidadePorGrupo, categoriaPorGrupo, agruparPorGrupo, chavesRepetidas, paiRows, applied, grupoMap, linhaMap]);
+  }, [atualRows, propostaRows, ordenarPor, unidadePorLinha, unidadePorGrupo, categoriaPorGrupo, agruparPorGrupo, chavesRepetidas, paiRows, applied, grupoMap, linhaMap]);
+
+  const merged = useMemo(() => {
+    if (!onlyDiff) return mergedTodos;
+    return mergedTodos.filter(({ a, p }) =>
+      METRICS.some((m) => (a?.[m.key] as number ?? 0) !== (p?.[m.key] as number ?? 0)),
+    );
+  }, [mergedTodos, onlyDiff]);
+
+  // Linhas pro "Lançar no Histórico": números Atual × Proposta + dia tipo e
+  // "Projeto / Versão" que a Proposta tem em cada linha (o mais frequente).
+  const linhasLancamento = useMemo((): LinhaLancamento[] => {
+    if (!applied || agruparPorGrupo) return [];
+    const porLinha = new Map<string, { dia: Map<string, number>; versao: Map<string, number> }>();
+    for (const v of propostaFiltradoBase) {
+      const x = porLinha.get(v.linha) ?? { dia: new Map(), versao: new Map() };
+      if (v.tipo_operacao) x.dia.set(v.tipo_operacao, (x.dia.get(v.tipo_operacao) ?? 0) + 1);
+      if (v.versao_programacao) x.versao.set(v.versao_programacao, (x.versao.get(v.versao_programacao) ?? 0) + 1);
+      porLinha.set(v.linha, x);
+    }
+    const maisFrequente = (m?: Map<string, number>) => (m && m.size ? [...m].sort((a, b) => b[1] - a[1])[0][0] : "");
+    return mergedTodos.map((r) => {
+      const x = porLinha.get(r.linha);
+      const diaTipo = maisFrequente(x?.dia) || (applied.p.dia !== "__all" ? applied.p.dia : atualDiaDaLinha(r.linha) ?? "");
+      const g = diaTipo ? grupoDaLinha(r.linha, diaTipo) : "";
+      return {
+        linha: r.linha, a: r.a, p: r.p,
+        custoA: custoPorLinha.atual.get(r.linha) ?? 0,
+        custoP: custoPorLinha.proposta.get(r.linha) ?? 0,
+        diaTipo,
+        versaoTexto: maisFrequente(x?.versao) || (applied.p.versao !== "__all" ? applied.p.versao : ""),
+        grupo: g && !g.startsWith("__sem_grupo__") ? g : null,
+        repetida: chavesRepetidas.has(r.linha),
+      };
+    });
+  }, [applied, agruparPorGrupo, mergedTodos, propostaFiltradoBase, custoPorLinha, chavesRepetidas, grupoMap, linhaMap]);
 
   const totals = useMemo(() => {
     const base = { a: {} as Record<string, number>, p: {} as Record<string, number> };
@@ -1423,6 +1458,10 @@ export function ComparativoView() {
               <SelectItem value="unidade">Ordenar por Unidade</SelectItem>
             </SelectContent>
           </Select>
+          <LancarHistoricoDialog
+            linhas={linhasLancamento}
+            motivoDesabilitado={!applied ? "Consulte o comparativo primeiro" : agruparPorGrupo ? "Desligue \"Agrupar por Grupo de Linha\" — o lançamento é por linha (dá pra juntar por grupo dentro da janela)" : null}
+          />
           <PdfPreviewDialog
             build={buildPDF}
             filename={`relatorio_comparativo_${new Date().toISOString().slice(0, 10)}.pdf`}

@@ -82,3 +82,37 @@ export function buildGrupoParaLinhas(multi: ParametroMulti[]): Map<string, Set<s
   }
   return m;
 }
+
+/** Número da versão a partir do texto "Projeto / Versão" das viagens
+ *  (o Histórico só guarda o número). Formatos vistos nos arquivos:
+ *  "532M S Versao 42" -> 42, "15 U V210 2 QUINZ" -> 210, "VER 213",
+ *  "0101AUV228 2QUINZ" -> 228, "U213 2QZ" -> 213, "MB22 757MU 120826V32"
+ *  -> 32, "U 100D 423M SEX 296" -> 296. Ordem: número depois de
+ *  VERSAO/VER/V; senão letra do dia colada (U/S/D + número); senão o último
+ *  número solto. Quinzena ("2 QUINZ"/"2QZ") e datas de 8 dígitos não
+ *  contam. null = não achou número. */
+export function numeroVersao(texto: string | null | undefined): number | null {
+  let s = (texto ?? "").toUpperCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  s = s.replace(/\b\d\s*(QUINZ\w*|QZ)\b/g, " ").replace(/\d{8}/g, " ");
+  const comV = [...s.matchAll(/(?:VERSAO|VER|V)\s*\.?\s*(\d+)(?![A-Z0-9])/g)];
+  if (comV.length) return Number(comV[comV.length - 1][1]);
+  const colado = [...s.matchAll(/(?<![A-Z0-9])[USD](\d+)(?![A-Z0-9])/g)];
+  if (colado.length) return Number(colado[colado.length - 1][1]);
+  const soltos = [...s.matchAll(/(?<![A-Z0-9])(\d+)(?![A-Z0-9])/g)];
+  return soltos.length ? Number(soltos[soltos.length - 1][1]) : null;
+}
+
+export type DiaTipoBase = "Dias úteis" | "Sábado" | "Domingo";
+
+/** Dia tipo "base" de um texto livre — o Histórico tem vocabulário próprio
+ *  (DU, Útil, SAB...), diferente de `viagens.tipo_operacao`. null = não
+ *  reconheceu (ex.: "Feriado X" sem dia pai conhecido). */
+export function diaTipoBase(texto: string | null | undefined): DiaTipoBase | null {
+  const s = (texto ?? "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "");
+  if (!s) return null;
+  // "SEG A SEX", "SEX" etc. são dia útil — não confundir "S"/"SEX" com Sábado.
+  if (/^(du|u)$/.test(s) || /^(seg|ter|qua|qui|sex)/.test(s) || /\buteis?\b|\butil\b/.test(s)) return "Dias úteis";
+  if (/^(s|sab)$/.test(s) || /^sab/.test(s)) return "Sábado";
+  if (/^(d|dom)$/.test(s) || /^dom/.test(s)) return "Domingo";
+  return null;
+}
