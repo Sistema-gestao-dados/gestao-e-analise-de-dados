@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import * as XLSX from "xlsx";
-import { fetchHistorico, buildGrupoParaLinhas, numeroVersao, diaTipoBase, type Historico, type DiaTipoBase } from "@/lib/historico";
+import { fetchHistorico, buildGrupoParaLinhas, numeroVersao, diaTipoBase, chaveLinha, type Historico, type DiaTipoBase } from "@/lib/historico";
 import { fetchMulti } from "@/lib/data";
 import { fetchAllViagens } from "@/lib/viagens";
 import { fetchProjetosAtivos } from "@/lib/projeto-ativo";
@@ -99,14 +99,15 @@ function ConferenciaPage() {
     const m = new Map<string, Set<string>>();
     for (const linhas of buildGrupoParaLinhas(multiQ.data ?? []).values()) {
       for (const l of linhas) {
-        const k = norm(l);
+        const k = chaveLinha(l);
         if (!m.has(k)) m.set(k, new Set());
-        for (const o of linhas) m.get(k)!.add(norm(o));
+        for (const o of linhas) m.get(k)!.add(chaveLinha(o));
       }
     }
     return m;
   }, [multiQ.data]);
-  const mesmaLinhaOuGrupo = (a: string, b: string) => norm(a) === norm(b) || !!irmas.get(norm(a))?.has(norm(b));
+  // "1" = "01" (chaveLinha): o Histórico pode ter a linha sem o zero.
+  const mesmaLinhaOuGrupo = (a: string, b: string) => chaveLinha(a) === chaveLinha(b) || !!irmas.get(chaveLinha(a))?.has(chaveLinha(b));
 
   const heranca = useMemo(() => new Map((herancaQ.data ?? []).map((r) => [r.tipo_dia, r.tipo_dia_pai])), [herancaQ.data]);
   // Dia base de um dia tipo das viagens: base direto, senão dia pai
@@ -149,7 +150,7 @@ function ConferenciaPage() {
       const cands = porNumero.get(numero) ?? [];
       const doGrupo = cands.filter((h) => mesmaLinhaOuGrupo(c.linha, h.linha));
       const compat = doGrupo.filter((h) => diaCompativel(h, c.dia, diaBase));
-      const diretos = compat.filter((h) => norm(h.linha) === norm(c.linha));
+      const diretos = compat.filter((h) => chaveLinha(h.linha) === chaveLinha(c.linha));
       if (diretos.length) out.push({ ...base, situacao: "direto", registro: maisRecente(diretos) });
       else if (compat.length) out.push({ ...base, situacao: "grupo", registro: maisRecente(compat) });
       else if (doGrupo.length) out.push({ ...base, situacao: "outro_dia", registro: maisRecente(doGrupo) });

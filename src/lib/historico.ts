@@ -116,3 +116,117 @@ export function diaTipoBase(texto: string | null | undefined): DiaTipoBase | nul
   if (/^(d|dom)$/.test(s) || /^dom/.test(s)) return "Domingo";
   return null;
 }
+
+/** Chave de comparação de código de linha: sem zero à esquerda no número
+ *  do início ("01" = "1", "08A" = "8A") e sem diferença de maiúscula. Só
+ *  pra COMPARAR — o código gravado/exibido segue o Cadastro de Linhas
+ *  (ver linhaDoCadastro). O CSV aberto no Excel perde o zero ("01" -> 1). */
+export function chaveLinha(linha: string | null | undefined): string {
+  return (linha ?? "").trim().toUpperCase().replace(/^0+(?=\d)/, "");
+}
+
+/** Código da linha como está no Cadastro de Linhas ("1" -> "01" se o
+ *  cadastro tem "01"). Sem correspondência única, devolve o próprio texto. */
+export function buildLinhaDoCadastro(codigos: string[]): (linha: string) => string {
+  const porChave = new Map<string, string | null>();
+  for (const c of codigos) {
+    const k = chaveLinha(c);
+    porChave.set(k, porChave.has(k) && porChave.get(k) !== c ? null : c);
+  }
+  return (linha) => {
+    const l = (linha ?? "").trim();
+    if (codigos.includes(l)) return l;
+    return porChave.get(chaveLinha(l)) ?? l;
+  };
+}
+
+export const MESES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+
+export type FiltrosHistorico = {
+  linha: string[];
+  empresa: string;
+  grupo: string;
+  diaTipo: string[];
+  versao: string;
+  referencia: string;
+  alteracao: string;
+  anoVig: string;
+  mesVig: string;
+  anoEnc: string;
+  mesEnc: string;
+  /** Período: vigência começando entre as datas (inclusive). */
+  vigDe: string;
+  vigAte: string;
+  /** "vigente" = já começou e sem fim (ou fim no futuro); "encerrado" = fim já passou; "sem_fim" = sem encerramento. */
+  situacao: string;
+  ativo: string;
+};
+
+export const FILTROS_HISTORICO_VAZIOS: FiltrosHistorico = {
+  linha: [], empresa: "__all", grupo: "__all", diaTipo: [], versao: "", referencia: "", alteracao: "",
+  anoVig: "__all", mesVig: "__all", anoEnc: "__all", mesEnc: "__all", vigDe: "", vigAte: "", situacao: "__all", ativo: "__all",
+};
+
+/** Aplica os filtros do Histórico (Consultar e Relatório PDF usam os
+ *  mesmos). Linha comparada por chaveLinha ("1" = "01"); Empresa e Grupo de
+ *  Linha resolvidos pelo cadastro. */
+export function filtrarHistorico(
+  historico: Historico[],
+  f: FiltrosHistorico,
+  ctx: { empresaDaLinha: (linha: string) => string | null | undefined; grupoParaLinhas: Map<string, Set<string>> },
+): Historico[] {
+  const hoje = new Date().toISOString().slice(0, 10);
+  const linhasSel = new Set(f.linha.map(chaveLinha));
+  const diasSel = new Set(f.diaTipo);
+  const grupoSel = f.grupo !== "__all" ? new Set(Array.from(ctx.grupoParaLinhas.get(f.grupo) ?? []).map(chaveLinha)) : null;
+  const ref = f.referencia.trim().toLowerCase();
+  const alt = f.alteracao.trim().toLowerCase();
+  const versao = f.versao.trim();
+  return historico.filter((h) => {
+    if (linhasSel.size && !linhasSel.has(chaveLinha(h.linha))) return false;
+    if (diasSel.size && !diasSel.has(h.dia_tipo ?? "")) return false;
+    if (grupoSel && !grupoSel.has(chaveLinha(h.linha))) return false;
+    if (f.empresa !== "__all" && ctx.empresaDaLinha(h.linha) !== f.empresa) return false;
+    if (versao && String(h.versao ?? "") !== versao) return false;
+    if (ref && !(h.referencia ?? "").toLowerCase().includes(ref)) return false;
+    if (alt && !(h.alteracao ?? "").toLowerCase().includes(alt)) return false;
+    if (f.anoVig !== "__all" && h.vigencia?.slice(0, 4) !== f.anoVig) return false;
+    if (f.mesVig !== "__all" && h.vigencia?.slice(5, 7) !== f.mesVig) return false;
+    if (f.anoEnc !== "__all" && h.encerramento?.slice(0, 4) !== f.anoEnc) return false;
+    if (f.mesEnc !== "__all" && h.encerramento?.slice(5, 7) !== f.mesEnc) return false;
+    if (f.vigDe && (!h.vigencia || h.vigencia < f.vigDe)) return false;
+    if (f.vigAte && (!h.vigencia || h.vigencia > f.vigAte)) return false;
+    if (f.ativo === "S" && h.ativo === false) return false;
+    if (f.ativo === "N" && h.ativo !== false) return false;
+    if (f.situacao !== "__all") {
+      const comecou = !!h.vigencia && h.vigencia <= hoje;
+      const encerrado = !!h.encerramento && h.encerramento < hoje;
+      if (f.situacao === "vigente" && !(comecou && !encerrado)) return false;
+      if (f.situacao === "encerrado" && !encerrado) return false;
+      if (f.situacao === "futuro" && !(h.vigencia && h.vigencia > hoje)) return false;
+      if (f.situacao === "sem_fim" && h.encerramento) return false;
+    }
+    return true;
+  });
+}
+
+/** Texto curto dos filtros ativos (cabeçalho do PDF). */
+export function resumoFiltrosHistorico(f: FiltrosHistorico): string[] {
+  const out: string[] = [];
+  const mes = (m: string) => MESES[Number(m) - 1] ?? m;
+  const data = (d: string) => d.split("-").reverse().join("/");
+  if (f.linha.length) out.push(`Linha: ${f.linha.join(", ")}`);
+  if (f.empresa !== "__all") out.push(`Empresa: ${f.empresa}`);
+  if (f.grupo !== "__all") out.push(`Grupo de Linha: ${f.grupo}`);
+  if (f.diaTipo.length) out.push(`Dia tipo: ${f.diaTipo.join(", ")}`);
+  if (f.versao.trim()) out.push(`Versão: ${f.versao.trim()}`);
+  if (f.referencia.trim()) out.push(`Referência contém: ${f.referencia.trim()}`);
+  if (f.alteracao.trim()) out.push(`Alteração contém: ${f.alteracao.trim()}`);
+  if (f.anoVig !== "__all" || f.mesVig !== "__all") out.push(`Vigência: ${[f.mesVig !== "__all" ? mes(f.mesVig) : "", f.anoVig !== "__all" ? f.anoVig : ""].filter(Boolean).join(" de ")}`);
+  if (f.anoEnc !== "__all" || f.mesEnc !== "__all") out.push(`Encerramento: ${[f.mesEnc !== "__all" ? mes(f.mesEnc) : "", f.anoEnc !== "__all" ? f.anoEnc : ""].filter(Boolean).join(" de ")}`);
+  if (f.vigDe || f.vigAte) out.push(`Vigência entre ${f.vigDe ? data(f.vigDe) : "…"} e ${f.vigAte ? data(f.vigAte) : "…"}`);
+  const sit: Record<string, string> = { vigente: "Vigente", encerrado: "Encerrado", futuro: "Começa no futuro", sem_fim: "Sem encerramento" };
+  if (f.situacao !== "__all") out.push(`Situação: ${sit[f.situacao] ?? f.situacao}`);
+  if (f.ativo !== "__all") out.push(`Ativo: ${f.ativo === "S" ? "Sim" : "Não"}`);
+  return out.length ? out : ["Nenhum filtro aplicado"];
+}

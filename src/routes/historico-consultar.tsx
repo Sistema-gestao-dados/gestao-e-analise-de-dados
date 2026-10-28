@@ -1,7 +1,11 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { fetchHistorico, updateHistorico, deleteHistorico, deleteHistoricoBulk, buildGrupoParaLinhas, type Historico } from "@/lib/historico";
+import {
+  fetchHistorico, updateHistorico, deleteHistorico, deleteHistoricoBulk, buildGrupoParaLinhas, buildLinhaDoCadastro,
+  filtrarHistorico, FILTROS_HISTORICO_VAZIOS, type FiltrosHistorico, type Historico,
+} from "@/lib/historico";
+import { HistoricoFiltros } from "@/components/historico-filtros";
 import { fetchLinhas, fetchMulti } from "@/lib/data";
 import { logAudit } from "@/lib/audit";
 import { useAuditView } from "@/lib/use-audit-view";
@@ -27,7 +31,6 @@ function fmtDate(d?: string | null) {
   return m ? `${m[3]}/${m[2]}/${m[1]}` : d;
 }
 
-const emptyFiltros = { ano: "__all", mes: "__all", dia_tipo: "__all", linha: "__all", empresa: "__all", grupo: "__all", vigencia: "", ativo: "__all", referencia: "" };
 
 function ConsultarPage() {
   useAuditView("historico_reprogramacao");
@@ -44,35 +47,16 @@ function ConsultarPage() {
   const empresaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l.empresa])), [linhas]);
   const grupoParaLinhas = useMemo(() => buildGrupoParaLinhas(multi), [multi]);
 
-  const [filtros, setFiltros] = useState(emptyFiltros);
+  // "1" gravado no Histórico = "01" do cadastro (CSV aberto no Excel perde o zero).
+  const linhaDoCadastro = useMemo(() => buildLinhaDoCadastro(linhas.map((l) => l.linha)), [linhas]);
+  const [filtros, setFiltros] = useState<FiltrosHistorico>(FILTROS_HISTORICO_VAZIOS);
+  const empresas = useMemo(() => Array.from(new Set(linhas.map((l) => l.empresa).filter(Boolean) as string[])).sort(), [linhas]);
+  const grupos = useMemo(() => Array.from(grupoParaLinhas.keys()).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })), [grupoParaLinhas]);
 
-  const opts = useMemo(() => ({
-    linha: Array.from(new Set(historico.map((h) => h.linha))).sort(),
-    diaTipo: Array.from(new Set(historico.map((h) => h.dia_tipo).filter(Boolean) as string[])).sort(),
-    empresa: Array.from(new Set(linhas.map((l) => l.empresa).filter(Boolean) as string[])).sort(),
-    grupo: Array.from(grupoParaLinhas.keys()).sort(),
-    ano: Array.from(new Set(historico.map((h) => h.vigencia?.slice(0, 4)).filter(Boolean) as string[])).sort().reverse(),
-  }), [historico, linhas, grupoParaLinhas]);
-
-  const filtered = useMemo(() => {
-    return historico.filter((h) => {
-      if (filtros.linha !== "__all" && h.linha !== filtros.linha) return false;
-      if (filtros.dia_tipo !== "__all" && h.dia_tipo !== filtros.dia_tipo) return false;
-      if (filtros.vigencia && h.vigencia !== filtros.vigencia) return false;
-      if (filtros.referencia && !(h.referencia ?? "").toLowerCase().includes(filtros.referencia.toLowerCase())) return false;
-      if (filtros.ativo === "S" && !h.ativo) return false;
-      if (filtros.ativo === "N" && h.ativo) return false;
-      if (filtros.empresa !== "__all" && empresaMap.get(h.linha) !== filtros.empresa) return false;
-      if (filtros.grupo !== "__all" && !grupoParaLinhas.get(filtros.grupo)?.has(h.linha)) return false;
-      if (filtros.ano !== "__all") {
-        if (!h.vigencia || !h.vigencia.startsWith(filtros.ano)) return false;
-      }
-      if (filtros.mes !== "__all") {
-        if (!h.vigencia || h.vigencia.slice(5, 7) !== filtros.mes) return false;
-      }
-      return true;
-    });
-  }, [historico, filtros, empresaMap, grupoParaLinhas]);
+  const filtered = useMemo(
+    () => filtrarHistorico(historico, filtros, { empresaDaLinha: (l) => empresaMap.get(linhaDoCadastro(l)), grupoParaLinhas }),
+    [historico, filtros, empresaMap, grupoParaLinhas, linhaDoCadastro],
+  );
 
   const [pageSize, setPageSize] = usePersistentState("historico.pageSize", 50);
   const [page, setPage] = useState(0);
@@ -176,24 +160,17 @@ function ConsultarPage() {
       <Card className="shadow-[var(--shadow-card)]">
         <CardHeader className="flex flex-row items-center justify-between pb-3">
           <CardTitle className="text-base flex items-center gap-2"><Filter className="h-4 w-4" /> Filtros</CardTitle>
-          <Button variant="ghost" size="sm" onClick={() => setFiltros(emptyFiltros)}>Limpar</Button>
+          <Button variant="ghost" size="sm" onClick={() => setFiltros(FILTROS_HISTORICO_VAZIOS)}>Limpar</Button>
         </CardHeader>
-        <CardContent className="grid grid-cols-2 md:grid-cols-4 gap-2">
-          <FiltroSelect label="Linha" value={filtros.linha} onChange={(v) => setFiltros((f) => ({ ...f, linha: v }))} options={opts.linha} />
-          <FiltroSelect label="Empresa" value={filtros.empresa} onChange={(v) => setFiltros((f) => ({ ...f, empresa: v }))} options={opts.empresa} />
-          <FiltroSelect label="Grupo de Linha" value={filtros.grupo} onChange={(v) => setFiltros((f) => ({ ...f, grupo: v }))} options={opts.grupo} />
-          <FiltroSelect label="Dia Tipo" value={filtros.dia_tipo} onChange={(v) => setFiltros((f) => ({ ...f, dia_tipo: v }))} options={opts.diaTipo} />
-          <FiltroSelect label="Ano" value={filtros.ano} onChange={(v) => setFiltros((f) => ({ ...f, ano: v }))} options={opts.ano} />
-          <FiltroSelect label="Mês" value={filtros.mes} onChange={(v) => setFiltros((f) => ({ ...f, mes: v }))} options={["01","02","03","04","05","06","07","08","09","10","11","12"]} />
-          <FiltroSelect label="Ativo" value={filtros.ativo} onChange={(v) => setFiltros((f) => ({ ...f, ativo: v }))} options={["S", "N"]} />
-          <div>
-            <label className="text-xs text-muted-foreground">Vigência exata</label>
-            <Input type="date" value={filtros.vigencia} onChange={(e) => setFiltros((f) => ({ ...f, vigencia: e.target.value }))} />
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground">Referência</label>
-            <Input placeholder="Buscar..." value={filtros.referencia} onChange={(e) => setFiltros((f) => ({ ...f, referencia: e.target.value }))} />
-          </div>
+        <CardContent>
+          <HistoricoFiltros
+            historico={historico}
+            filtros={filtros}
+            onChange={setFiltros}
+            empresas={empresas}
+            grupos={grupos}
+            linhaDoCadastro={linhaDoCadastro}
+          />
         </CardContent>
       </Card>
 
@@ -247,7 +224,7 @@ function ConsultarPage() {
                         <TableCell>
                           <Checkbox checked={selecionados.has(h.id)} onCheckedChange={() => toggleUm(h.id)} aria-label="Selecionar linha" />
                         </TableCell>
-                        <TableCell className="font-medium">{h.linha}</TableCell>
+                        <TableCell className="font-medium">{linhaDoCadastro(h.linha)}</TableCell>
                         <TableCell>
                           {isEditing ? <Input className="w-20" type="number" value={editRow.versao ?? ""} onChange={(e) => setEditRow((r) => ({ ...r, versao: e.target.value ? Number(e.target.value) : null }))} /> : (h.versao ?? "—")}
                         </TableCell>
@@ -363,17 +340,3 @@ function ConsultarPage() {
   );
 }
 
-function FiltroSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: string[] }) {
-  return (
-    <div>
-      <label className="text-xs text-muted-foreground">{label}</label>
-      <Select value={value} onValueChange={onChange}>
-        <SelectTrigger><SelectValue /></SelectTrigger>
-        <SelectContent>
-          <SelectItem value="__all">Todos</SelectItem>
-          {options.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-}

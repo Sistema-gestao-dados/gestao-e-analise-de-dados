@@ -2,7 +2,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { insertHistorico, ensureDiaTipo, fetchHistorico, type Historico, type HistoricoInput } from "@/lib/historico";
+import { insertHistorico, ensureDiaTipo, fetchHistorico, buildLinhaDoCadastro, chaveLinha, type Historico, type HistoricoInput } from "@/lib/historico";
+import { fetchLinhas } from "@/lib/data";
 import { logAudit } from "@/lib/audit";
 import { useAuditView } from "@/lib/use-audit-view";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -181,13 +182,21 @@ function ImportacaoHistoricoPage() {
       // (não havia checagem nenhuma). Compara com o que já está no banco E
       // com as linhas anteriores do próprio arquivo.
       const chave = (h: HistoricoInput) =>
-        [h.linha, h.dia_tipo, h.versao, h.vigencia, h.encerramento, h.referencia, h.alteracao]
+        [chaveLinha(h.linha), h.dia_tipo, h.versao, h.vigencia, h.encerramento, h.referencia, h.alteracao]
           .map((x) => String(x ?? "").trim().toLowerCase()).join("|");
       const existentes = new Set((await fetchHistorico()).map((h) => chave(h)));
 
+      // Código da linha como no Cadastro de Linhas: o CSV salvo pelo Excel
+      // perde o zero à esquerda ("01" vira 1) e o Histórico ficava com "1",
+      // sem casar com o cadastro (Empresa, Grupo de Linha, Conferência).
+      const linhaDoCadastro = buildLinhaDoCadastro((await fetchLinhas()).map((l) => l.linha));
+      let corrigidas = 0;
+
       const payloads: HistoricoInput[] = [];
       for (const r of data) {
-        const linha = r[iLinha]?.trim();
+        const bruta = r[iLinha]?.trim();
+        const linha = bruta ? linhaDoCadastro(bruta) : bruta;
+        if (linha && linha !== bruta) corrigidas++;
         if (!linha) { falhas++; continue; }
         const diaTipo = iDiaTipo !== -1 ? r[iDiaTipo]?.trim() || null : null;
         const payload: HistoricoInput = {
@@ -227,6 +236,7 @@ function ImportacaoHistoricoPage() {
         }
       }
       if (duplicadas) addLog(`${duplicadas} registro(s) já existiam e foram ignorados.`);
+      if (corrigidas) addLog(`${corrigidas} código(s) de linha ajustado(s) pro formato do Cadastro de Linhas (ex.: 1 -> 01).`);
 
       for (const dt of diaTiposNovos) await ensureDiaTipo(dt);
 

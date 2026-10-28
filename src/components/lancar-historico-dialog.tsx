@@ -8,7 +8,7 @@ import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { supabase } from "@/integrations/supabase/client";
-import { fetchHistorico, fetchHistoricoDiaTipos, ensureDiaTipo, numeroVersao, diaTipoBase, type HistoricoInput } from "@/lib/historico";
+import { fetchHistorico, fetchHistoricoDiaTipos, ensureDiaTipo, numeroVersao, diaTipoBase, chaveLinha, type HistoricoInput } from "@/lib/historico";
 import {
   montarRegistros, textoFinal, OPCOES_PADRAO, type LinhaLancamento, type OpcoesTexto,
 } from "@/lib/historico-lancamento";
@@ -71,7 +71,7 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
     if (versao == null) return false;
     const base = diaTipoBase(dia);
     return (historicoQ.data ?? []).some((h) =>
-      norm(h.linha) === norm(linha) && h.versao === versao
+      chaveLinha(h.linha) === chaveLinha(linha) && h.versao === versao
       && (base && diaTipoBase(h.dia_tipo) ? diaTipoBase(h.dia_tipo) === base : norm(h.dia_tipo) === norm(dia)));
   };
 

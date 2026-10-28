@@ -1,14 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { fetchHistorico, buildGrupoParaLinhas, type Historico } from "@/lib/historico";
+import {
+  fetchHistorico, buildGrupoParaLinhas, buildLinhaDoCadastro, filtrarHistorico, resumoFiltrosHistorico,
+  FILTROS_HISTORICO_VAZIOS, type FiltrosHistorico, type Historico,
+} from "@/lib/historico";
+import { HistoricoFiltros } from "@/components/historico-filtros";
 import { fetchLinhas, fetchMulti } from "@/lib/data";
 import { logAudit } from "@/lib/audit";
 import { useAuditView } from "@/lib/use-audit-view";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { FileDown, Filter, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
@@ -36,40 +38,20 @@ function RelatorioPage() {
 
   const empresaMap = useMemo(() => new Map(linhas.map((l) => [l.linha, l.empresa])), [linhas]);
   const grupoParaLinhas = useMemo(() => buildGrupoParaLinhas(multi), [multi]);
+  // "1" gravado no Histórico = "01" do cadastro (CSV aberto no Excel perde o zero).
+  const linhaDoCadastro = useMemo(() => buildLinhaDoCadastro(linhas.map((l) => l.linha)), [linhas]);
 
-  const [filtros, setFiltros] = useState({ linha: "__all", empresa: "__all", grupo: "__all", dia_tipo: "__all", ano: "__all", ativo: "__all" });
+  const [filtros, setFiltros] = useState<FiltrosHistorico>(FILTROS_HISTORICO_VAZIOS);
 
-  const opts = useMemo(() => ({
-    linha: Array.from(new Set(historico.map((h) => h.linha))).sort(),
-    empresa: Array.from(new Set(linhas.map((l) => l.empresa).filter(Boolean) as string[])).sort(),
-    grupo: Array.from(grupoParaLinhas.keys()).sort(),
-    diaTipo: Array.from(new Set(historico.map((h) => h.dia_tipo).filter(Boolean) as string[])).sort(),
-    ano: Array.from(new Set(historico.map((h) => h.vigencia?.slice(0, 4)).filter(Boolean) as string[])).sort().reverse(),
-  }), [historico, linhas, grupoParaLinhas]);
+  const empresas = useMemo(() => Array.from(new Set(linhas.map((l) => l.empresa).filter(Boolean) as string[])).sort(), [linhas]);
+  const grupos = useMemo(() => Array.from(grupoParaLinhas.keys()).sort((a, b) => a.localeCompare(b, "pt-BR", { numeric: true })), [grupoParaLinhas]);
 
-  const filtered = useMemo(() => {
-    return historico.filter((h) => {
-      if (filtros.linha !== "__all" && h.linha !== filtros.linha) return false;
-      if (filtros.dia_tipo !== "__all" && h.dia_tipo !== filtros.dia_tipo) return false;
-      if (filtros.ativo === "S" && !h.ativo) return false;
-      if (filtros.ativo === "N" && h.ativo) return false;
-      if (filtros.empresa !== "__all" && empresaMap.get(h.linha) !== filtros.empresa) return false;
-      if (filtros.grupo !== "__all" && !grupoParaLinhas.get(filtros.grupo)?.has(h.linha)) return false;
-      if (filtros.ano !== "__all" && !h.vigencia?.startsWith(filtros.ano)) return false;
-      return true;
-    });
-  }, [historico, filtros, empresaMap, grupoParaLinhas]);
+  const filtered = useMemo(
+    () => filtrarHistorico(historico, filtros, { empresaDaLinha: (l) => empresaMap.get(linhaDoCadastro(l)), grupoParaLinhas }),
+    [historico, filtros, empresaMap, grupoParaLinhas, linhaDoCadastro],
+  );
 
-  function resumoFiltros(): string[] {
-    const out: string[] = [];
-    if (filtros.linha !== "__all") out.push(`Linha: ${filtros.linha}`);
-    if (filtros.empresa !== "__all") out.push(`Empresa: ${filtros.empresa}`);
-    if (filtros.grupo !== "__all") out.push(`Grupo: ${filtros.grupo}`);
-    if (filtros.dia_tipo !== "__all") out.push(`Dia tipo: ${filtros.dia_tipo}`);
-    if (filtros.ano !== "__all") out.push(`Ano: ${filtros.ano}`);
-    if (filtros.ativo !== "__all") out.push(`Ativo: ${filtros.ativo === "S" ? "Sim" : "Não"}`);
-    return out.length ? out : ["Nenhum filtro aplicado"];
-  }
+  const resumoFiltros = () => resumoFiltrosHistorico(filtros);
 
   async function gerarPDF() {
     if (filtered.length === 0) { toast.error("Nenhum registro para exportar"); return; }
@@ -121,7 +103,7 @@ function RelatorioPage() {
         startY,
         margin: { left: margin, right: margin },
         head: [["Linha", "Versão", "Dia tipo", "Referência", "Data solic.", "Vigência", "Encerramento", "Alteração"]],
-        body: filtered.map((h) => [h.linha, h.versao ?? "—", h.dia_tipo ?? "—", h.referencia ?? "—", fmtDate(h.data_solicitacao), fmtDate(h.vigencia), fmtDate(h.encerramento), cleanText(h.alteracao)]),
+        body: filtered.map((h) => [linhaDoCadastro(h.linha), h.versao ?? "—", h.dia_tipo ?? "—", h.referencia ?? "—", fmtDate(h.data_solicitacao), fmtDate(h.vigencia), fmtDate(h.encerramento), cleanText(h.alteracao)]),
         styles: { fontSize: 9, cellPadding: 6, valign: "top", lineColor: [226, 232, 240], lineWidth: 0.5, overflow: "linebreak" },
         headStyles: { fillColor: [30, 41, 59], textColor: 255, fontStyle: "bold", halign: "left", overflow: "linebreak", cellPadding: { top: 6, right: 4, bottom: 6, left: 6 } },
         alternateRowStyles: { fillColor: [248, 250, 252] },
@@ -155,14 +137,22 @@ function RelatorioPage() {
       </div>
 
       <Card className="shadow-[var(--shadow-card)]">
-        <CardHeader className="pb-3"><CardTitle className="text-base flex items-center gap-2"><Filter className="h-4 w-4" /> Filtros</CardTitle></CardHeader>
-        <CardContent className="grid grid-cols-2 md:grid-cols-6 gap-2">
-          <FiltroSelect label="Linha" value={filtros.linha} onChange={(v) => setFiltros((f) => ({ ...f, linha: v }))} options={opts.linha} />
-          <FiltroSelect label="Empresa" value={filtros.empresa} onChange={(v) => setFiltros((f) => ({ ...f, empresa: v }))} options={opts.empresa} />
-          <FiltroSelect label="Grupo" value={filtros.grupo} onChange={(v) => setFiltros((f) => ({ ...f, grupo: v }))} options={opts.grupo} />
-          <FiltroSelect label="Dia Tipo" value={filtros.dia_tipo} onChange={(v) => setFiltros((f) => ({ ...f, dia_tipo: v }))} options={opts.diaTipo} />
-          <FiltroSelect label="Ano" value={filtros.ano} onChange={(v) => setFiltros((f) => ({ ...f, ano: v }))} options={opts.ano} />
-          <FiltroSelect label="Ativo" value={filtros.ativo} onChange={(v) => setFiltros((f) => ({ ...f, ativo: v }))} options={["S", "N"]} />
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <CardTitle className="text-base flex items-center gap-2"><Filter className="h-4 w-4" /> Filtros</CardTitle>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-muted-foreground">{filtered.length.toLocaleString("pt-BR")} registro(s)</span>
+            <Button variant="ghost" size="sm" onClick={() => setFiltros(FILTROS_HISTORICO_VAZIOS)}>Limpar</Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <HistoricoFiltros
+            historico={historico}
+            filtros={filtros}
+            onChange={setFiltros}
+            empresas={empresas}
+            grupos={grupos}
+            linhaDoCadastro={linhaDoCadastro}
+          />
         </CardContent>
       </Card>
 
@@ -175,7 +165,7 @@ function RelatorioPage() {
             <TableBody>
               {filtered.slice(0, 200).map((h: Historico) => (
                 <TableRow key={h.id}>
-                  <TableCell className="font-medium">{h.linha}</TableCell>
+                  <TableCell className="font-medium">{linhaDoCadastro(h.linha)}</TableCell>
                   <TableCell>{h.versao ?? "—"}</TableCell>
                   <TableCell>{h.dia_tipo ?? "—"}</TableCell>
                   <TableCell>{h.referencia ?? "—"}</TableCell>
@@ -194,14 +184,3 @@ function RelatorioPage() {
   );
 }
 
-function FiltroSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: string[] }) {
-  return (
-    <div>
-      <label className="text-xs text-muted-foreground">{label}</label>
-      <Select value={value} onValueChange={onChange}>
-        <SelectTrigger><SelectValue /></SelectTrigger>
-        <SelectContent><SelectItem value="__all">Todos</SelectItem>{options.map((o) => <SelectItem key={o} value={o}>{o}</SelectItem>)}</SelectContent>
-      </Select>
-    </div>
-  );
-}
