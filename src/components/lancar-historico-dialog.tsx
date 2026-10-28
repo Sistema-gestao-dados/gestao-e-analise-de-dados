@@ -45,6 +45,8 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
   const opcoes = useMemo(() => ({ ...OPCOES_PADRAO, ...opcoesSalvas }), [opcoesSalvas]);
   const [modo, setModo] = usePersistentState<"linha" | "grupo">("lancarHistorico.modo", "linha");
   const [vigencia, setVigencia] = useState("");
+  // Fim da vigência (encerramento) — opcional; vazio = vigente sem data de fim.
+  const [encerramento, setEncerramento] = useState("");
   const [dataSolicitacao, setDataSolicitacao] = useState("");
   const [referencia, setReferencia] = useState("");
   const [descricao, setDescricao] = useState("");
@@ -121,6 +123,7 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
 
   async function salvar() {
     if (!vigencia) { toast.error("Informe a Vigência."); return; }
+    if (encerramento && encerramento < vigencia) { toast.error("O fim da vigência não pode ser antes do início."); return; }
     if (!selecionadas.length) { toast.error("Marque pelo menos uma linha."); return; }
     const semDia = selecionadas.filter((x) => !x.diaTipo.trim());
     if (semDia.length) { toast.error(`Escolha o Dia tipo — falta em: ${semDia.map((x) => x.linha).join(", ")}`); return; }
@@ -138,14 +141,14 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
         referencia: referencia.trim() || null,
         data_solicitacao: dataSolicitacao || null,
         vigencia,
-        encerramento: null,
+        encerramento: encerramento || null,
         alteracao: textoFinal(descricao, x.texto),
         ativo: true,
       }));
       const { error } = await supabase.from("historico_reprogramacao").insert(payload);
       if (error) throw error;
       for (const d of new Set(payload.map((p) => p.dia_tipo).filter(Boolean) as string[])) await ensureDiaTipo(d);
-      void logAudit({ action: "create", entity: "historico_reprogramacao", details: { origem: "comparativo", registros: payload.length, vigencia, referencia } });
+      void logAudit({ action: "create", entity: "historico_reprogramacao", details: { origem: "comparativo", registros: payload.length, vigencia, encerramento: encerramento || null, referencia } });
       qc.invalidateQueries({ queryKey: ["historico-reprogramacao"] });
       qc.invalidateQueries({ queryKey: ["historico-dia-tipos"] });
       toast.success(`${payload.length} registro(s) lançado(s) no Histórico.`);
@@ -190,8 +193,12 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
 
           <div className="grid gap-3 md:grid-cols-4">
             <div className="flex flex-col gap-1">
-              <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Vigência *</label>
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Vigência (início) *</label>
               <Input type="date" value={vigencia} onChange={(e) => setVigencia(e.target.value)} className="h-8 text-xs" />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Fim da vigência</label>
+              <Input type="date" value={encerramento} min={vigencia || undefined} onChange={(e) => setEncerramento(e.target.value)} className="h-8 text-xs" title="Opcional — vazio = sem data de fim" />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Data de solicitação</label>
@@ -224,7 +231,7 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
                 <Input value={diaGeralNovo} onChange={(e) => setDiaGeralNovo(e.target.value)} placeholder="Nome do novo dia tipo" className="h-8 text-xs" autoFocus />
               )}
             </div>
-            <div className="flex flex-col gap-1 md:col-span-3">
+            <div className="flex flex-col gap-1 md:col-span-2">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Descrição geral (vai no início de todas)</label>
               <Input value={descricao} onChange={(e) => setDescricao(e.target.value)} placeholder="Ex.: Programação de férias julho de 2026." className="h-8 text-xs" />
             </div>
