@@ -24,7 +24,7 @@ import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { History, Loader2, RotateCcw } from "lucide-react";
 
-type Edicao = Partial<{ selecionado: boolean; linha: string; diaTipo: string; versao: string; texto: string }>;
+type Edicao = Partial<{ selecionado: boolean; linha: string; diaTipo: string; versao: string; texto: string; ativo: boolean }>;
 
 const norm = (s: string | null | undefined) => (s ?? "").trim().toUpperCase();
 const DIA_NOVO = "__novo__";
@@ -47,6 +47,8 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
   const [vigencia, setVigencia] = useState("");
   // Fim da vigência (encerramento) — opcional; vazio = vigente sem data de fim.
   const [encerramento, setEncerramento] = useState("");
+  // Ativo (S/N) do registro — vale pra todas as linhas, cada uma pode trocar.
+  const [ativoGeral, setAtivoGeral] = useState(true);
   const [dataSolicitacao, setDataSolicitacao] = useState("");
   const [referencia, setReferencia] = useState("");
   const [descricao, setDescricao] = useState("");
@@ -89,6 +91,7 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
       selecionado: e.selecionado ?? padraoSel,
       texto: e.texto ?? r.texto,
       textoEditado: e.texto != null,
+      ativo: e.ativo ?? ativoGeral,
     };
   });
   const selecionadas = linhasTela.filter((x) => x.selecionado);
@@ -143,7 +146,7 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
         vigencia,
         encerramento: encerramento || null,
         alteracao: textoFinal(descricao, x.texto),
-        ativo: true,
+        ativo: x.ativo,
       }));
       const { error } = await supabase.from("historico_reprogramacao").insert(payload);
       if (error) throw error;
@@ -231,7 +234,17 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
                 <Input value={diaGeralNovo} onChange={(e) => setDiaGeralNovo(e.target.value)} placeholder="Nome do novo dia tipo" className="h-8 text-xs" autoFocus />
               )}
             </div>
-            <div className="flex flex-col gap-1 md:col-span-2">
+            <div className="flex flex-col gap-1">
+              <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Ativo</label>
+              <Select value={ativoGeral ? "S" : "N"} onValueChange={(v) => setAtivoGeral(v === "S")}>
+                <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="S">Sim</SelectItem>
+                  <SelectItem value="N">Não</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex flex-col gap-1">
               <label className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Descrição geral (vai no início de todas)</label>
               <Input value={descricao} onChange={(e) => setDescricao(e.target.value)} placeholder="Ex.: Programação de férias julho de 2026." className="h-8 text-xs" />
             </div>
@@ -291,6 +304,10 @@ export function LancarHistoricoDialog({ linhas, motivoDesabilitado }: {
                 <div className="flex flex-col gap-1">
                   <span className="text-[10px] text-muted-foreground" title={x.r.versaoTexto}>Nº versão</span>
                   <Input value={x.versao} onChange={(e) => editar(x.r.chave, { versao: e.target.value })} className="h-7 text-xs" inputMode="numeric" />
+                  <label className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer">
+                    <Checkbox checked={x.ativo} onCheckedChange={(v) => editar(x.r.chave, { ativo: !!v })} className="h-3 w-3" />
+                    Ativo
+                  </label>
                 </div>
                 <div className="flex flex-col gap-1">
                   <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
